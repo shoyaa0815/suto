@@ -1,13 +1,30 @@
 import inspect
+import unicodedata
 
 import aiohttp
 
-from db import get_history, save_message
 from harness import TOOLS, TOOL_GUIDANCE, TOOL_SCHEMAS
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_MODEL = "qwen3.5:9b"
 MAX_TOOL_ROUNDS = 6
+
+# The system prompt tells the model to answer with 0-9 digits only. That rule
+# holds most of the time but is still only a request, and the failure it
+# prevents is silent: transcribing 2569 into another numeral system, the model
+# has produced ๒๕๖๗ — a different number, in a reply that reads as confident as
+# any other. Rewriting digits back is exact and costs nothing, so the guarantee
+# comes from here rather than from the model following instructions.
+#
+# Every numeral system is covered, not just Thai: asked the same question nine
+# times the model reached for Bengali (256৯), Arabic-Indic (20۲6), and a mix of
+# Burmese and Khmer within one year (၂០၂۶). Which script it picks is not
+# predictable, so listing them one at a time would keep missing new ones.
+def _to_ascii_digits(text: str) -> str:
+    return "".join(
+        str(unicodedata.digit(ch)) if ch.isdigit() and not ch.isascii() else ch
+        for ch in text
+    )
 
 # SYSTEM_PROMPT has two layers:
 #   1. This base template: identity, answer style, and rules that apply
@@ -24,6 +41,9 @@ _BASE_PROMPT = """You are a concise, accurate assistant in a Discord chat.
 Answer style:
 - Be direct. No greetings, no filler, no restating the question.
 - Keep answers as short as fully answering the question allows.
+- Write all numbers with the digits 0-9, whatever language you are answering
+  in. Never use Thai, Arabic-Indic, or any other numeral set — transcribing
+  digits between numeral systems is where their values get corrupted.
 
 Tool use:
 {tool_guidance}
@@ -39,7 +59,9 @@ Reply in the same language the user wrote in."""
 SYSTEM_PROMPT = _BASE_PROMPT.format(tool_guidance=TOOL_GUIDANCE)
 
 
-async def _chat(session: aiohttp.ClientSession, messages: list) -> dict:
+async def _chat(
+    session: aiohttp.ClientSession, messages: list, think: bool = False
+) -> dict:
     async with session.post(
         OLLAMA_URL,
         json={
@@ -47,31 +69,46 @@ async def _chat(session: aiohttp.ClientSession, messages: list) -> dict:
             "messages": messages,
             "tools": TOOL_SCHEMAS,
             "stream": False,
+            "think": think,
         },
     ) as response:
         response.raise_for_status()
         return await response.json()
 
 
-async def ask_local_ai(channel_id: str, prompt: str) -> str:
+# Each call starts from a clean slate: system prompt + this one prompt.
+# Nothing from an earlier message is fed back in. This is deliberate — the
+# bot runs automation tasks, where the same input has to produce the same
+# result regardless of what was asked before it.
+#
+# The context that DOES matter is `messages` below: it accumulates the
+# assistant's tool calls and their results across the tool-calling rounds,
+# so the model remembers what it already looked up while working on this
+# one task. It's thrown away once the task is answered.
+#
+# think=False turns off the model's reasoning pass. Ollama enables it by
+# default on any model that declares the "thinking" capability (qwen3.5 does),
+# and on this workload it cost ~20x the wall time — a plain question spent
+# ~2000 tokens reasoning before ~150 tokens of answer — without being more
+# accurate, since the tool-calling loop already supplies the reasoning
+# structure. Pass think=True for a task that genuinely needs multi-step
+# reasoning before acting.
+async def ask_local_ai(prompt: str, think: bool = False) -> str:
     timeout = aiohttp.ClientTimeout(total=120)
-    messages = (
-        [{"role": "system", "content": SYSTEM_PROMPT}]
-        + get_history(channel_id)
-        + [{"role": "user", "content": prompt}]
-    )
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": prompt},
+    ]
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             for _ in range(MAX_TOOL_ROUNDS):
-                data = await _chat(session, messages)
+                data = await _chat(session, messages, think)
                 message = data.get("message", {})
                 tool_calls = message.get("tool_calls")
 
                 if not tool_calls:
-                    answer = message.get("content", "").strip() or "no response from ai"
-                    save_message(channel_id, "user", prompt)
-                    save_message(channel_id, "assistant", answer)
-                    return answer
+                    answer = _to_ascii_digits(message.get("content", "").strip())
+                    return answer or "no response from ai"
 
                 messages.append(message)
                 for call in tool_calls:

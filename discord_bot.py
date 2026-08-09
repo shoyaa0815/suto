@@ -1,8 +1,7 @@
 import discord
 from discord import app_commands
 
-from ai import ask_local_ai, SYSTEM_PROMPT
-from db import clear_history, get_history, init_db
+from ai import ask_local_ai
 from file_reader import SUPPORTED_EXTENSIONS, extract_text
 
 intents = discord.Intents.default()
@@ -10,40 +9,11 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
-init_db()
-
 
 @client.event
 async def on_ready():
     await tree.sync()
     print(f"bot is online now: {client.user}")
-
-
-@tree.command(name="clear", description="Clear this channel's conversation memory with the AI")
-async def clear(interaction: discord.Interaction):
-    clear_history(str(interaction.channel_id))
-    await interaction.response.send_message("conversation memory cleared", ephemeral=True)
-
-
-def _estimate_tokens(text: str) -> int:
-    return len(text) // 4
-
-
-@tree.command(name="context", description="Show estimated token usage of the current conversation context")
-async def context(interaction: discord.Interaction):
-    history = get_history(str(interaction.channel_id))
-    history_text = "\n\n".join(f"[{m['role']}] {m['content']}" for m in history)
-
-    system_tokens = _estimate_tokens(SYSTEM_PROMPT)
-    history_tokens = _estimate_tokens(history_text)
-
-    await interaction.response.send_message(
-        "**Estimated token usage** (~chars/4, not exact)\n"
-        f"- System prompt: {system_tokens} tokens\n"
-        f"- History ({len(history)} messages): {history_tokens} tokens\n"
-        f"- Total: {system_tokens + history_tokens} tokens",
-        ephemeral=True,
-    )
 
 
 @client.event
@@ -65,7 +35,7 @@ async def on_message(message: discord.Message):
         prompt += f"\n\n[attached file: {attachment.filename}]\n{text}"
 
     async with message.channel.typing():
-        answer = await ask_local_ai(str(message.channel.id), prompt)
+        answer = await ask_local_ai(prompt)
 
     for i in range(0, len(answer), 2000):
         await message.channel.send(answer[i:i + 2000])

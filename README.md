@@ -30,6 +30,5 @@ python main.py
 - `main.py` — entry point
 - `discord_bot.py` — Discord client, used as a test client to talk to the bot
 - `ai.py` — talks to Ollama, runs the tool-calling loop
-- `db.py` — SQLite chat history
 - `file_reader.py` — extracts text from attachments (pdf, docx, xlsx, etc.)
 - `harness/` — tools the AI can call (each tool = handler + schema + prompt)
