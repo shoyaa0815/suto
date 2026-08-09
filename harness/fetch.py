@@ -5,6 +5,11 @@ import aiohttp
 
 FETCH_MAX_CHARS = 4000
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+}
+
 # PROMPT is this tool's slice of the AI's system prompt: when to call
 # fetch_url and how to use its result. See the comment in datetime_tool.py
 # for why this lives next to the tool instead of in ai.py.
@@ -65,7 +70,7 @@ async def fetch_url(url: str) -> str:
     timeout = aiohttp.ClientTimeout(total=15)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url) as response:
+            async with session.get(url, headers=HEADERS) as response:
                 response.raise_for_status()
                 html = await response.text()
     except Exception as e:

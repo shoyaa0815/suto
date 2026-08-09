@@ -5,6 +5,11 @@ import aiohttp
 
 SEARXNG_URL = "http://localhost:8080/search"
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+}
+
 # how long a search result is reused for the same query, and the minimum
 # gap enforced between actual requests sent to SearXNG. Both exist to avoid
 # hammering upstream search engines (e.g. Wikidata) into rate-limiting us.
@@ -68,7 +73,7 @@ async def search_web(query: str) -> str:
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(
-                SEARXNG_URL, params={"q": query, "format": "json"}
+                SEARXNG_URL, params={"q": query, "format": "json"}, headers=HEADERS
             ) as response:
                 response.raise_for_status()
                 data = await response.json()

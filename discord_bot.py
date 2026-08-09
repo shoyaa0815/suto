@@ -1,8 +1,8 @@
 import discord
 from discord import app_commands
 
-from ai import ask_local_ai
-from db import clear_history, init_db
+from ai import ask_local_ai, SYSTEM_PROMPT
+from db import clear_history, get_history, init_db
 from file_reader import SUPPORTED_EXTENSIONS, extract_text
 
 intents = discord.Intents.default()
@@ -23,6 +23,27 @@ async def on_ready():
 async def clear(interaction: discord.Interaction):
     clear_history(str(interaction.channel_id))
     await interaction.response.send_message("conversation memory cleared", ephemeral=True)
+
+
+def _estimate_tokens(text: str) -> int:
+    return len(text) // 4
+
+
+@tree.command(name="context", description="Show estimated token usage of the current conversation context")
+async def context(interaction: discord.Interaction):
+    history = get_history(str(interaction.channel_id))
+    history_text = "\n\n".join(f"[{m['role']}] {m['content']}" for m in history)
+
+    system_tokens = _estimate_tokens(SYSTEM_PROMPT)
+    history_tokens = _estimate_tokens(history_text)
+
+    await interaction.response.send_message(
+        "**Estimated token usage** (~chars/4, not exact)\n"
+        f"- System prompt: {system_tokens} tokens\n"
+        f"- History ({len(history)} messages): {history_tokens} tokens\n"
+        f"- Total: {system_tokens + history_tokens} tokens",
+        ephemeral=True,
+    )
 
 
 @client.event
