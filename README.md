@@ -32,14 +32,6 @@ python main.py discord
 python main.py line
 ```
 
-`discord` is the default if no client is named.
-
-### LINE
-
-LINE pushes events to a webhook, so unlike Discord it needs to be reachable from the internet over HTTPS. Point the channel's webhook URL at `https://your-host/callback` — during development, a tunnel (ngrok, Cloudflare Tunnel) in front of `LINE_PORT` works.
-
-LINE expects an HTTP 200 within about 2 seconds, which is less time than an answer takes, so the webhook replies immediately and sends the answer afterwards with the event's reply token.
-
 ## Structure
 
 - `main.py` — entry point, starts the client named on the command line
