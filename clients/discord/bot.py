@@ -1,8 +1,13 @@
+import os
+
 import discord
 from discord import app_commands
 
 from ai import ask_local_ai
 from file_reader import SUPPORTED_EXTENSIONS, extract_text
+
+# Discord's own limit on one message. Longer answers are split across several.
+MAX_MESSAGE_CHARS = 2000
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -37,5 +42,12 @@ async def on_message(message: discord.Message):
     async with message.channel.typing():
         answer = await ask_local_ai(prompt)
 
-    for i in range(0, len(answer), 2000):
-        await message.channel.send(answer[i:i + 2000])
+    for i in range(0, len(answer), MAX_MESSAGE_CHARS):
+        await message.channel.send(answer[i:i + MAX_MESSAGE_CHARS])
+
+
+def run():
+    token = os.environ.get("DISCORD_TOKEN")
+    if not token:
+        raise SystemExit("DISCORD_TOKEN is not set (put it in .env)")
+    client.run(token)

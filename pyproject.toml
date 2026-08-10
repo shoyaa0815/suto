@@ -1,7 +1,7 @@
 [project]
 name = "suto"
 version = "0.1.0"
-description = "Discord automation bot powered by a local Ollama model, focused on building out its tool-calling harness"
+description = "Automation bot powered by a local Ollama model, focused on building out its tool-calling harness"
 requires-python = ">=3.11"
 dependencies = [
     "discord.py>=2.7.1",
