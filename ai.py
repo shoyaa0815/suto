@@ -9,6 +9,15 @@ OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_MODEL = "qwen3.5:9b"
 MAX_TOOL_ROUNDS = 6
 
+# Ollama's default temperature leaves both the answer and, more importantly,
+# the decision to call a tool at all up to sampling — the same question can
+# get search_web called on one attempt and skipped (answered from stale
+# training memory) on the next. This bot answers questions, so a repeatable,
+# tool-grounded answer matters more than variety; a low temperature is what
+# makes "call search_web when the rules say to" actually reliable instead of
+# a coin flip.
+TEMPERATURE = 0.2
+
 # The system prompt tells the model to answer with 0-9 digits only. That rule
 # holds most of the time but is still only a request, and the failure it
 # prevents is silent: transcribing 2569 into another numeral system, the model
@@ -70,6 +79,7 @@ async def _chat(
             "tools": TOOL_SCHEMAS,
             "stream": False,
             "think": think,
+            "options": {"temperature": TEMPERATURE},
         },
     ) as response:
         response.raise_for_status()
@@ -78,8 +88,8 @@ async def _chat(
 
 # Each call starts from a clean slate: system prompt + this one prompt.
 # Nothing from an earlier message is fed back in. This is deliberate — the
-# bot runs automation tasks, where the same input has to produce the same
-# result regardless of what was asked before it.
+# bot answers one-off questions, where the same question has to get the
+# same quality of answer regardless of what was asked before it.
 #
 # The context that DOES matter is `messages` below: it accumulates the
 # assistant's tool calls and their results across the tool-calling rounds,

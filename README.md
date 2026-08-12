@@ -1,6 +1,6 @@
 # suto
 
-Automation bot powered by a local Ollama model, focused on building out its tool-calling harness. The chat clients are ways to talk to it while it is being built.
+A chat bot powered by a local Ollama model, focused on building out its tool-calling harness so a local LLM can answer questions well — not just from its own training data, but by calling tools (search, fetch, ...) when that gets a better answer. The chat clients are ways to talk to it while it is being built.
 
 ## Prerequisites
 
