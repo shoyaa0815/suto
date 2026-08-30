@@ -3,7 +3,7 @@ import time
 
 import discord
 
-from ai import ask_local_ai
+from ai import ask_local_ai, set_debug_logs
 from language import choose_reply_language
 from modes import DEFAULT_MODE, get_mode_policy
 from tools.file_reader import SUPPORTED_EXTENSIONS
@@ -90,6 +90,7 @@ def run(mode: str):
     # this, but keeping the boundary safe also protects direct callers.
     get_mode_policy(mode)
     active_mode = mode
+    set_debug_logs(True)
 
     token = os.environ.get("DISCORD_TOKEN")
     if not token:

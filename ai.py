@@ -3,6 +3,8 @@ import inspect
 import os
 import time
 import unicodedata
+from collections.abc import Callable
+from dataclasses import dataclass, field
 
 import aiohttp
 
@@ -15,6 +17,10 @@ OLLAMA_MODEL = "qwen3.5:9b"
 MAX_TOOL_ROUNDS = 6
 MAX_LANGUAGE_CORRECTIONS = 2
 OLLAMA_TIMEOUT_SECONDS = int(os.environ.get("OLLAMA_TIMEOUT_SECONDS", "300"))
+PROGRESS_INTERVAL_SECONDS = float(
+    os.environ.get("PROGRESS_INTERVAL_SECONDS", "10")
+)
+DEBUG_LOGS = os.environ.get("SUTO_DEBUG", "").lower() in {"1", "true", "yes"}
 ATTACHMENT_TOOL_NAMES = {
     "read_attached_file",
     "search_attachment",
@@ -29,6 +35,114 @@ ATTACHMENT_TOOL_NAMES = {
 # makes "call search_web when the rules say to" actually reliable instead of
 # a coin flip.
 TEMPERATURE = 0.2
+
+
+ProgressCallback = Callable[[dict], object]
+
+
+@dataclass
+class _RequestProgress:
+    callback: ProgressCallback | None
+    started: float
+    prompt_tokens: int = 0
+    output_tokens: int = 0
+    activity: str = "starting"
+    detail: str = "starting request"
+    round_number: int | None = None
+    activity_started: float = field(default_factory=time.perf_counter)
+    _heartbeat_task: asyncio.Task | None = field(default=None, init=False)
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.output_tokens
+
+    def record_usage(self, data: dict) -> None:
+        self.prompt_tokens += int(data.get("prompt_eval_count") or 0)
+        self.output_tokens += int(data.get("eval_count") or 0)
+
+    async def emit(
+        self,
+        activity: str | None = None,
+        detail: str | None = None,
+        round_number: int | None = None,
+        heartbeat: bool = False,
+    ) -> None:
+        if not heartbeat and (activity is not None or detail is not None):
+            self.activity_started = time.perf_counter()
+        if activity is not None:
+            self.activity = activity
+        if detail is not None:
+            self.detail = detail
+        if round_number is not None:
+            self.round_number = round_number
+        if self.callback is None:
+            return
+
+        update = {
+            "activity": self.activity,
+            "detail": self.detail,
+            "elapsed_seconds": time.perf_counter() - self.started,
+            "activity_elapsed_seconds": (
+                time.perf_counter() - self.activity_started
+            ),
+            "round": self.round_number,
+            "max_rounds": MAX_TOOL_ROUNDS,
+            "prompt_tokens": self.prompt_tokens,
+            "output_tokens": self.output_tokens,
+            "total_tokens": self.total_tokens,
+            "heartbeat": heartbeat,
+        }
+        try:
+            result = self.callback(update)
+            if inspect.isawaitable(result):
+                await result
+        except Exception as error:
+            # Progress is optional UI. A broken renderer must not break the AI.
+            print(f"[progress] callback failed: {error!r}")
+
+    async def _heartbeat(self) -> None:
+        while True:
+            await asyncio.sleep(PROGRESS_INTERVAL_SECONDS)
+            await self.emit(heartbeat=True)
+
+    def start(self) -> None:
+        if self.callback is not None and PROGRESS_INTERVAL_SECONDS > 0:
+            self._heartbeat_task = asyncio.create_task(self._heartbeat())
+
+    async def stop(self) -> None:
+        if self._heartbeat_task is None:
+            return
+        self._heartbeat_task.cancel()
+        try:
+            await self._heartbeat_task
+        except asyncio.CancelledError:
+            pass
+
+
+def _tool_detail(name: str, args: dict) -> str:
+    """Describe a tool call without dumping every argument to the user."""
+    visible = []
+    for key in ("query", "url", "attachment_id", "detail"):
+        if key not in args:
+            continue
+        value = str(args[key]).replace("\n", " ")
+        if len(value) > 80:
+            value = value[:77] + "..."
+        visible.append(f"{key}={value}")
+    suffix = f" ({', '.join(visible)})" if visible else ""
+    return f"{name}{suffix}"
+
+
+def _debug(message: str) -> None:
+    if DEBUG_LOGS:
+        print(message)
+
+
+def set_debug_logs(enabled: bool) -> None:
+    """Enable or disable internal timing logs for the current process."""
+    global DEBUG_LOGS
+    DEBUG_LOGS = enabled
+
 
 # The system prompt tells the model to answer with 0-9 digits only. That rule
 # holds most of the time but is still only a request, and the failure it
@@ -127,7 +241,7 @@ async def _chat(
         response.raise_for_status()
         data = await response.json()
     elapsed_ms = round((time.perf_counter() - started) * 1000)
-    print(
+    _debug(
         f"[timing] event=ollama_chat ms={elapsed_ms} "
         f"prompt_tokens={data.get('prompt_eval_count', 'unknown')} "
         f"output_tokens={data.get('eval_count', 'unknown')} "
@@ -140,6 +254,7 @@ async def _correct_reply_language(
     session: aiohttp.ClientSession,
     answer: str,
     reply_language: ReplyLanguage,
+    progress: _RequestProgress | None = None,
 ) -> str:
     """Rewrite an answer in the required language without exposing tools."""
     messages = [
@@ -158,6 +273,8 @@ async def _correct_reply_language(
         {"role": "user", "content": answer},
     ]
     data = await _chat(session, messages, [], think=False)
+    if progress is not None:
+        progress.record_usage(data)
     corrected = data.get("message", {}).get("content", "").strip()
     return corrected or answer
 
@@ -166,6 +283,7 @@ async def _enforce_reply_language(
     session: aiohttp.ClientSession,
     answer: str,
     reply_language: ReplyLanguage,
+    progress: _RequestProgress | None = None,
 ) -> str:
     """Validate the generated answer and correct it when language is wrong."""
     for round_number in range(1, MAX_LANGUAGE_CORRECTIONS + 1):
@@ -173,9 +291,19 @@ async def _enforce_reply_language(
         if detected_code is None or detected_code == reply_language.code:
             break
         started = time.perf_counter()
-        answer = await _correct_reply_language(session, answer, reply_language)
+        if progress is not None:
+            await progress.emit(
+                "language",
+                f"correcting reply language to {reply_language.name}",
+            )
+        answer = await _correct_reply_language(
+            session,
+            answer,
+            reply_language,
+            progress,
+        )
         elapsed_ms = round((time.perf_counter() - started) * 1000)
-        print(
+        _debug(
             f"[timing] event=language_correction ms={elapsed_ms} "
             f"round={round_number} from={detected_code} "
             f"to={reply_language.code}"
@@ -206,8 +334,11 @@ async def ask_local_ai(
     mode: str = DEFAULT_MODE,
     attachments: dict[str, tuple[str, bytes]] | None = None,
     reply_language: ReplyLanguage | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> str:
     request_started = time.perf_counter()
+    progress = _RequestProgress(progress_callback, request_started)
+    outcome = "completed"
     policy = get_mode_policy(mode)
     reply_language = reply_language or choose_reply_language(prompt)
     attachments = attachments or {}
@@ -234,6 +365,8 @@ async def ask_local_ai(
         {"role": "user", "content": prompt},
     ]
     try:
+        progress.start()
+        await progress.emit("starting", f"starting {mode} request")
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async def complete_document_part(
                 system_prompt: str,
@@ -250,6 +383,7 @@ async def ask_local_ai(
                     think=False,
                     max_output_tokens=max_output_tokens,
                 )
+                progress.record_usage(data)
                 return data.get("message", {}).get("content", "").strip()
 
             runtime_handlers = build_attachment_tools(
@@ -257,19 +391,27 @@ async def ask_local_ai(
                 complete_document_part,
             )
             tools, _, _ = get_tools(allowed_tools, runtime_handlers)
-            for _ in range(MAX_TOOL_ROUNDS):
+            for round_number in range(1, MAX_TOOL_ROUNDS + 1):
+                await progress.emit(
+                    "model",
+                    f"waiting for AI (loop {round_number}/{MAX_TOOL_ROUNDS})",
+                    round_number,
+                )
                 data = await _chat(session, messages, tool_schemas, think)
+                progress.record_usage(data)
                 message = data.get("message", {})
                 tool_calls = message.get("tool_calls")
 
                 if not tool_calls:
                     answer = message.get("content", "").strip()
                     if not answer:
+                        outcome = "AI returned an empty response"
                         return "no response from ai"
                     answer = await _enforce_reply_language(
                         session,
                         answer,
                         reply_language,
+                        progress,
                     )
                     return _to_ascii_digits(answer)
 
@@ -277,9 +419,16 @@ async def ask_local_ai(
                 for call in tool_calls:
                     name = call["function"]["name"]
                     args = call["function"].get("arguments") or {}
+                    tool_detail = _tool_detail(name, args)
+                    await progress.emit(
+                        "tool",
+                        f"running {tool_detail}",
+                        round_number,
+                    )
                     if name in tools:
                         func = tools[name]
                         tool_started = time.perf_counter()
+                        tool_outcome = "finished"
                         try:
                             result = (
                                 await func(**args)
@@ -287,33 +436,48 @@ async def ask_local_ai(
                                 else func(**args)
                             )
                         except (asyncio.TimeoutError, TimeoutError):
+                            tool_outcome = "timed out"
                             result = f"tool timed out: {name}"
                         except Exception as error:
-                            print(f"[tool] name={name} error={error!r}")
+                            tool_outcome = "failed"
+                            _debug(f"[tool] name={name} error={error!r}")
                             result = f"tool failed: {name}: {error}"
                         elapsed_ms = round(
                             (time.perf_counter() - tool_started) * 1000
                         )
-                        print(f"[timing] event=tool ms={elapsed_ms} name={name}")
+                        _debug(f"[timing] event=tool ms={elapsed_ms} name={name}")
                     else:
+                        elapsed_ms = 0
+                        tool_outcome = "blocked"
                         result = f"tool is not allowed in {mode} mode: {name}"
                     messages.append({"role": "tool", "content": str(result)})
+                    await progress.emit(
+                        "tool_done",
+                        f"{tool_outcome} {tool_detail} in {elapsed_ms / 1000:.1f}s",
+                        round_number,
+                    )
 
+            outcome = f"stopped after {MAX_TOOL_ROUNDS} tool loops"
             return "no response from ai"
     except aiohttp.ClientConnectorError as e:
-        print(f"[ai] connection failed: {e!r}")
+        outcome = "AI server connection failed"
+        _debug(f"[ai] connection failed: {e!r}")
         return "can't connect check ai server"
     except (asyncio.TimeoutError, TimeoutError) as e:
-        print(f"[ai] timeout after {OLLAMA_TIMEOUT_SECONDS}s: {e!r}")
+        outcome = f"timed out after {OLLAMA_TIMEOUT_SECONDS}s"
+        _debug(f"[ai] timeout after {OLLAMA_TIMEOUT_SECONDS}s: {e!r}")
         if reply_language.code == "th":
             return "AI ใช้เวลาประมวลผลนานเกินไป กรุณาลองใหม่อีกครั้ง"
         return "AI processing timed out. Please try again."
     except Exception as e:
-        print(f"[ai] {type(e).__name__}: {e!r}")
+        outcome = f"failed: {type(e).__name__}"
+        _debug(f"[ai] {type(e).__name__}: {e!r}")
         return f"error: {e}"
     finally:
+        await progress.stop()
+        await progress.emit("finished", outcome)
         elapsed_ms = round((time.perf_counter() - request_started) * 1000)
-        print(
+        _debug(
             f"[timing] event=request ms={elapsed_ms} mode={mode} "
             f"attachments={len(attachments)}"
         )

@@ -30,19 +30,29 @@ LINE_PORT=8000
 One client per process — pick which one:
 
 ```bash
-venv/bin/python main.py personal discord
-venv/bin/python main.py private discord
-venv/bin/python main.py personal line
-venv/bin/python main.py private line
+venv/bin/python main.py chat cli
+venv/bin/python main.py agent cli
+venv/bin/python main.py chat discord
+venv/bin/python main.py agent discord
+venv/bin/python main.py chat line
+venv/bin/python main.py agent line
 ```
 
 The Discord client is implemented. The LINE client module is currently only a
 stub, so its commands are reserved for when that client is completed.
 
+The CLI prints live user-facing request progress, including the current AI/tool
+step, tool loop number, total and current-step elapsed time, and tokens
+accumulated after each Ollama response. A heartbeat is printed every 10 seconds
+by default; set `PROGRESS_INTERVAL_SECONDS` to change it. The Discord process
+prints developer timing/debug logs in its terminal instead of user-facing
+progress. Set `SUTO_DEBUG=1` to enable those raw logs for other clients too.
+
 ## Structure
 
 - `main.py` — entry point, starts the client named on the command line
 - `clients/` — one subpackage per way of talking to the bot
+  - `clients/cli/` — interactive terminal client
   - `clients/discord/` — Discord client
   - `clients/line/` — LINE client (webhook server)
 - `ai.py` — talks to Ollama, runs the tool-calling loop
@@ -53,13 +63,13 @@ Clients only turn incoming messages into a prompt and send the answer back. What
 
 ## Workspaces
 
-Choose one tool policy when starting a client. The selected policy applies to
+Choose one mode when starting a client. The selected mode applies to
 the entire process and cannot be changed from Discord or another chat app:
 
-- `personal` — web search, URL fetching, current date/time, and attached-file
+- `chat` — web search, URL fetching, current date/time, and attached-file
   reading/search/summarization are available.
-- `private` — internet tools are unavailable; answers use only the current
-  message and request-scoped attached files.
+- `agent` — reserved for the automation agent. It can chat, but action tools
+  are not implemented or exposed yet.
 
 Tool access is enforced twice: Ollama only receives schemas allowed by the
 active workspace, and the Python execution loop rejects any disallowed tool

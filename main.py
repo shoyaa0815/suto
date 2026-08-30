@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 from modes import MODE_POLICIES
 
-CLIENTS = ("discord", "line")
+CLIENTS = ("cli", "discord", "line")
 
 
 def _parse_args(args: list[str]) -> tuple[str, str]:
@@ -28,7 +28,9 @@ def main():
 
     # Imported here rather than at module level so that starting one client
     # never requires the other one's dependencies or credentials to be present.
-    if name == "discord":
+    if name == "cli":
+        from clients.cli import run
+    elif name == "discord":
         from clients.discord import run
     else:
         from clients.line import run

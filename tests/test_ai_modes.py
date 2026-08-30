@@ -12,25 +12,25 @@ class _FakeClientSession:
         return False
 
 
-async def test_private_mode_does_not_expose_tool_schemas(monkeypatch):
+async def test_agent_mode_does_not_expose_tool_schemas(monkeypatch):
     observed = {}
 
     async def fake_chat(session, messages, tool_schemas, think=False):
         observed["schemas"] = tool_schemas
         observed["system_prompt"] = messages[0]["content"]
-        return {"message": {"content": "private answer"}}
+        return {"message": {"content": "agent answer"}}
 
     monkeypatch.setattr(ai.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai, "_chat", fake_chat)
 
-    answer = await ai.ask_local_ai("What is the answer?", mode="private")
+    answer = await ai.ask_local_ai("What is the answer?", mode="agent")
 
-    assert answer == "private answer"
+    assert answer == "agent answer"
     assert observed["schemas"] == []
     assert "No tools are available" in observed["system_prompt"]
 
 
-async def test_personal_mode_exposes_web_tool_schemas(monkeypatch):
+async def test_chat_mode_exposes_web_tool_schemas(monkeypatch):
     observed_names = []
 
     async def fake_chat(session, messages, tool_schemas, think=False):
@@ -40,10 +40,84 @@ async def test_personal_mode_exposes_web_tool_schemas(monkeypatch):
     monkeypatch.setattr(ai.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai, "_chat", fake_chat)
 
-    await ai.ask_local_ai("question", mode="personal")
+    await ai.ask_local_ai("question", mode="chat")
 
     assert "search_web" in observed_names
     assert "fetch_url" in observed_names
+
+
+async def test_progress_reports_model_usage_and_completion(monkeypatch):
+    updates = []
+
+    async def fake_chat(session, messages, tool_schemas, think=False):
+        return {
+            "message": {"content": "answer"},
+            "prompt_eval_count": 120,
+            "eval_count": 30,
+        }
+
+    monkeypatch.setattr(ai.aiohttp, "ClientSession", _FakeClientSession)
+    monkeypatch.setattr(ai, "_chat", fake_chat)
+
+    answer = await ai.ask_local_ai(
+        "question",
+        mode="agent",
+        progress_callback=updates.append,
+    )
+
+    assert answer == "answer"
+    assert any(update["activity"] == "model" for update in updates)
+    assert updates[-1]["activity"] == "finished"
+    assert updates[-1]["prompt_tokens"] == 120
+    assert updates[-1]["output_tokens"] == 30
+    assert updates[-1]["total_tokens"] == 150
+
+
+async def test_progress_reports_tool_and_loop(monkeypatch):
+    calls = 0
+    updates = []
+
+    async def fake_chat(session, messages, tool_schemas, think=False):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "get_current_datetime",
+                                "arguments": {},
+                            }
+                        }
+                    ],
+                },
+                "prompt_eval_count": 100,
+                "eval_count": 10,
+            }
+        return {
+            "message": {"content": "done"},
+            "prompt_eval_count": 140,
+            "eval_count": 20,
+        }
+
+    monkeypatch.setattr(ai.aiohttp, "ClientSession", _FakeClientSession)
+    monkeypatch.setattr(ai, "_chat", fake_chat)
+
+    answer = await ai.ask_local_ai(
+        "current time",
+        mode="chat",
+        progress_callback=updates.append,
+    )
+
+    assert answer == "done"
+    tool_update = next(update for update in updates if update["activity"] == "tool")
+    assert tool_update["round"] == 1
+    assert "get_current_datetime" in tool_update["detail"]
+    assert any(update["activity"] == "tool_done" for update in updates)
+    assert updates[-1]["total_tokens"] == 270
 
 
 async def test_disallowed_tool_call_is_not_executed(monkeypatch):
@@ -62,7 +136,7 @@ async def test_disallowed_tool_call_is_not_executed(monkeypatch):
                         {
                             "function": {
                                 "name": "search_web",
-                                "arguments": {"query": "private secrets"},
+                                "arguments": {"query": "agent request"},
                             }
                         }
                     ],
@@ -79,10 +153,10 @@ async def test_disallowed_tool_call_is_not_executed(monkeypatch):
     monkeypatch.setattr(ai.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai, "_chat", fake_chat)
 
-    answer = await ai.ask_local_ai("question", mode="private")
+    answer = await ai.ask_local_ai("question", mode="agent")
 
     assert answer == "blocked"
-    assert tool_results == ["tool is not allowed in private mode: search_web"]
+    assert tool_results == ["tool is not allowed in agent mode: search_web"]
 
 
 async def test_attached_file_tool_is_scoped_to_current_request(monkeypatch):
@@ -123,14 +197,14 @@ async def test_attached_file_tool_is_scoped_to_current_request(monkeypatch):
 
     answer = await ai.ask_local_ai(
         "read attachment 1",
-        mode="private",
-        attachments={"1": ("notes.txt", b"private contents")},
+        mode="chat",
+        attachments={"1": ("notes.txt", b"chat contents")},
     )
 
     assert answer == "file answer"
     assert "read_attached_file" in observed["schema_names"]
     assert observed["tool_results"] == [
-        "[attached file: notes.txt]\nprivate contents"
+        "[attached file: notes.txt]\nchat contents"
     ]
 
 
@@ -146,7 +220,7 @@ async def test_attachment_language_does_not_change_reply_language(monkeypatch):
 
     await ai.ask_local_ai(
         "สรุปไฟล์นี้",
-        mode="private",
+        mode="chat",
         attachments={"1": ("english.txt", b"English document contents")},
     )
 
@@ -174,7 +248,7 @@ async def test_wrong_language_answer_is_rewritten_without_tools(monkeypatch):
     monkeypatch.setattr(ai.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai, "_chat", fake_chat)
 
-    answer = await ai.ask_local_ai("สรุปเอกสารนี้", mode="private")
+    answer = await ai.ask_local_ai("สรุปเอกสารนี้", mode="agent")
 
     assert answer == "นี่คือสรุปภาษาไทยของเอกสาร"
     assert "entirely in Thai" in observed["correction_system_prompt"]
@@ -193,7 +267,7 @@ async def test_correct_language_answer_is_not_rewritten(monkeypatch):
     monkeypatch.setattr(ai.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai, "_chat", fake_chat)
 
-    answer = await ai.ask_local_ai("ตอบคำถามนี้", mode="private")
+    answer = await ai.ask_local_ai("ตอบคำถามนี้", mode="agent")
 
     assert answer == "คำตอบเป็นภาษาไทยอยู่แล้ว"
     assert calls == 1
@@ -245,7 +319,7 @@ async def test_summary_tool_uses_chunk_completion_without_tools(monkeypatch):
 
     answer = await ai.ask_local_ai(
         "สรุปไฟล์นี้",
-        mode="private",
+        mode="chat",
         attachments={"1": ("notes.txt", b"document facts")},
     )
 

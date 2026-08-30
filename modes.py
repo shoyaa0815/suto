@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 
-DEFAULT_MODE = "personal"
+DEFAULT_MODE = "chat"
 
 
 @dataclass(frozen=True)
@@ -13,13 +13,12 @@ class ModePolicy:
 
 
 MODE_POLICIES = {
-    "personal": ModePolicy(
-        name="personal",
-        description="General assistant with internet access",
+    "chat": ModePolicy(
+        name="chat",
+        description="Chat assistant with the currently available tools",
         prompt=(
-            "You are in the personal workspace. You may use the tools made "
-            "available to you, including web tools, when their guidance says "
-            "they are needed."
+            "You are in chat mode. You may use the tools made available to "
+            "you when their guidance says they are needed."
         ),
         allowed_tools=frozenset(
             {
@@ -32,25 +31,17 @@ MODE_POLICIES = {
             }
         ),
     ),
-    "private": ModePolicy(
-        name="private",
-        description="Private workspace with no internet access",
+    "agent": ModePolicy(
+        name="agent",
+        description="Reserved agent mode with no action tools yet",
         prompt=(
-            "You are in the private workspace. Internet access is "
-            "disabled. Never claim that you searched the web or accessed a "
-            "private knowledge base. Answer only from the user's message and "
-            "attached-file content. If the supplied information is not enough, "
-            "say what information is missing."
+            "You are in agent mode, which is currently a placeholder. No "
+            "action tools are available yet. You may answer from the user's "
+            "message, but never claim that you searched, read files, or took "
+            "an action. If an action is requested, say that agent actions are "
+            "not implemented yet."
         ),
-        # Attached files stay request-scoped and never grant filesystem access.
-        # Private document search can be added separately when a store exists.
-        allowed_tools=frozenset(
-            {
-                "read_attached_file",
-                "search_attachment",
-                "summarize_attachment",
-            }
-        ),
+        allowed_tools=frozenset(),
     ),
 }
 
