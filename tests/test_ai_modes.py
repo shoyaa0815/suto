@@ -1,3 +1,7 @@
+import asyncio
+
+import pytest
+
 import ai
 
 
@@ -51,26 +55,80 @@ async def test_progress_reports_model_usage_and_completion(monkeypatch):
 
     async def fake_chat(session, messages, tool_schemas, think=False):
         return {
-            "message": {"content": "answer"},
+            "message": {"content": "This is a complete answer."},
             "prompt_eval_count": 120,
             "eval_count": 30,
         }
 
     monkeypatch.setattr(ai.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai, "_chat", fake_chat)
+    monkeypatch.setattr(ai, "detect_language_code", lambda text: "en")
 
     answer = await ai.ask_local_ai(
         "question",
         mode="agent",
+        reply_language=ai.ReplyLanguage("en", "English", "test"),
         progress_callback=updates.append,
     )
 
-    assert answer == "answer"
+    assert answer == "This is a complete answer."
     assert any(update["activity"] == "model" for update in updates)
     assert updates[-1]["activity"] == "finished"
     assert updates[-1]["prompt_tokens"] == 120
     assert updates[-1]["output_tokens"] == 30
     assert updates[-1]["total_tokens"] == 150
+
+
+async def test_structured_execution_result_contains_usage(monkeypatch):
+    async def fake_chat(session, messages, tool_schemas, think=False):
+        return {
+            "message": {"content": "This is the result."},
+            "prompt_eval_count": 50,
+            "eval_count": 10,
+        }
+
+    monkeypatch.setattr(ai.aiohttp, "ClientSession", _FakeClientSession)
+    monkeypatch.setattr(ai, "_chat", fake_chat)
+    monkeypatch.setattr(ai, "detect_language_code", lambda text: "en")
+
+    result = await ai.execute_local_ai(
+        "question",
+        mode="agent",
+        reply_language=ai.ReplyLanguage("en", "English", "test"),
+    )
+
+    assert result.status == "completed"
+    assert result.text == "This is the result."
+    assert result.prompt_tokens == 50
+    assert result.output_tokens == 10
+
+
+async def test_cancelled_execution_reports_cancelled_progress(monkeypatch):
+    started = asyncio.Event()
+    updates = []
+
+    async def fake_chat(session, messages, tool_schemas, think=False):
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(ai.aiohttp, "ClientSession", _FakeClientSession)
+    monkeypatch.setattr(ai, "_chat", fake_chat)
+
+    task = asyncio.create_task(
+        ai.execute_local_ai(
+            "long task",
+            mode="agent",
+            progress_callback=updates.append,
+        )
+    )
+    await asyncio.wait_for(started.wait(), timeout=1)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert updates[-1]["activity"] == "finished"
+    assert updates[-1]["detail"] == "cancelled"
 
 
 async def test_progress_reports_tool_and_loop(monkeypatch):

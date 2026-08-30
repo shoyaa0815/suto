@@ -40,6 +40,16 @@ TEMPERATURE = 0.2
 ProgressCallback = Callable[[dict], object]
 
 
+@dataclass(frozen=True)
+class AIExecutionResult:
+    text: str
+    status: str
+    error: str | None
+    prompt_tokens: int
+    output_tokens: int
+    elapsed_seconds: float
+
+
 @dataclass
 class _RequestProgress:
     callback: ProgressCallback | None
@@ -328,17 +338,32 @@ async def _enforce_reply_language(
 # accurate, since the tool-calling loop already supplies the reasoning
 # structure. Pass think=True for a task that genuinely needs multi-step
 # reasoning before acting.
-async def ask_local_ai(
+async def execute_local_ai(
     prompt: str,
     think: bool = False,
     mode: str = DEFAULT_MODE,
     attachments: dict[str, tuple[str, bytes]] | None = None,
     reply_language: ReplyLanguage | None = None,
     progress_callback: ProgressCallback | None = None,
-) -> str:
+) -> AIExecutionResult:
     request_started = time.perf_counter()
     progress = _RequestProgress(progress_callback, request_started)
     outcome = "completed"
+
+    def build_result(
+        text: str,
+        status: str = "completed",
+        error: str | None = None,
+    ) -> AIExecutionResult:
+        return AIExecutionResult(
+            text=text,
+            status=status,
+            error=error,
+            prompt_tokens=progress.prompt_tokens,
+            output_tokens=progress.output_tokens,
+            elapsed_seconds=time.perf_counter() - request_started,
+        )
+
     policy = get_mode_policy(mode)
     reply_language = reply_language or choose_reply_language(prompt)
     attachments = attachments or {}
@@ -406,14 +431,18 @@ async def ask_local_ai(
                     answer = message.get("content", "").strip()
                     if not answer:
                         outcome = "AI returned an empty response"
-                        return "no response from ai"
+                        return build_result(
+                            "no response from ai",
+                            status="failed",
+                            error=outcome,
+                        )
                     answer = await _enforce_reply_language(
                         session,
                         answer,
                         reply_language,
                         progress,
                     )
-                    return _to_ascii_digits(answer)
+                    return build_result(_to_ascii_digits(answer))
 
                 messages.append(message)
                 for call in tool_calls:
@@ -458,21 +487,38 @@ async def ask_local_ai(
                     )
 
             outcome = f"stopped after {MAX_TOOL_ROUNDS} tool loops"
-            return "no response from ai"
+            return build_result(
+                "no response from ai",
+                status="failed",
+                error=outcome,
+            )
+    except asyncio.CancelledError:
+        outcome = "cancelled"
+        raise
     except aiohttp.ClientConnectorError as e:
         outcome = "AI server connection failed"
         _debug(f"[ai] connection failed: {e!r}")
-        return "can't connect check ai server"
+        return build_result(
+            "can't connect check ai server",
+            status="failed",
+            error=outcome,
+        )
     except (asyncio.TimeoutError, TimeoutError) as e:
         outcome = f"timed out after {OLLAMA_TIMEOUT_SECONDS}s"
         _debug(f"[ai] timeout after {OLLAMA_TIMEOUT_SECONDS}s: {e!r}")
         if reply_language.code == "th":
-            return "AI ใช้เวลาประมวลผลนานเกินไป กรุณาลองใหม่อีกครั้ง"
-        return "AI processing timed out. Please try again."
+            text = "AI ใช้เวลาประมวลผลนานเกินไป กรุณาลองใหม่อีกครั้ง"
+        else:
+            text = "AI processing timed out. Please try again."
+        return build_result(text, status="timed_out", error=outcome)
     except Exception as e:
         outcome = f"failed: {type(e).__name__}"
         _debug(f"[ai] {type(e).__name__}: {e!r}")
-        return f"error: {e}"
+        return build_result(
+            f"error: {e}",
+            status="failed",
+            error=outcome,
+        )
     finally:
         await progress.stop()
         await progress.emit("finished", outcome)
@@ -481,3 +527,23 @@ async def ask_local_ai(
             f"[timing] event=request ms={elapsed_ms} mode={mode} "
             f"attachments={len(attachments)}"
         )
+
+
+async def ask_local_ai(
+    prompt: str,
+    think: bool = False,
+    mode: str = DEFAULT_MODE,
+    attachments: dict[str, tuple[str, bytes]] | None = None,
+    reply_language: ReplyLanguage | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> str:
+    """Compatibility wrapper for chat clients that only need answer text."""
+    result = await execute_local_ai(
+        prompt,
+        think=think,
+        mode=mode,
+        attachments=attachments,
+        reply_language=reply_language,
+        progress_callback=progress_callback,
+    )
+    return result.text

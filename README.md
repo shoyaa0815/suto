@@ -54,6 +54,26 @@ by default; set `PROGRESS_INTERVAL_SECONDS` to change it. The Discord process
 prints developer timing/debug logs in its terminal instead of user-facing
 progress. Set `SUTO_DEBUG=1` to enable those raw logs for other interfaces too.
 
+### Automation jobs
+
+The CLI includes a persistent single-worker automation queue:
+
+```text
+/run <task>         create a background automation job
+/jobs               list recent jobs
+/status <job_id>    show progress, result, errors, and token usage
+/cancel <job_id>    cancel a queued or running job
+```
+
+Jobs and progress events are stored in `data/suto.db` by default. Set
+`SUTO_DB_PATH` to use another database file. Queued jobs survive restarts; a job
+left in `running` state by an interrupted process is marked failed on the next
+start to avoid repeating future actions silently.
+
+Automation jobs currently run in `agent` mode without action tools. This phase
+provides durable job state, execution results, cancellation, and recovery before
+filesystem, command, or scheduling capabilities are added.
+
 ## Harness structure
 
 - `main.py` — entry point, selects a mode and starts a client
@@ -62,6 +82,7 @@ progress. Set `SUTO_DEBUG=1` to enable those raw logs for other interfaces too.
   - `clients/discord/` — Discord client
   - `clients/line/` — LINE client (webhook server)
 - `ai.py` — shared AI runtime, tool loop, progress, and token accounting
+- `automation/` — persistent job store, runner, and single background worker
 - `modes.py` — capability policies for interactive chat and automation
 - `tools/` — tools the AI can call (each tool = handler + schema + prompt),
   including request-scoped document reading, summarization, and retrieval
