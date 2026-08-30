@@ -4,7 +4,7 @@ from docx import Document
 from openpyxl import load_workbook
 from pypdf import PdfReader
 
-MAX_CHARS = 8000
+MAX_CHARS = 80000
 
 SUPPORTED_EXTENSIONS = {"pdf", "docx", "xlsx", "txt", "md", "csv", "py", "js", "json"}
 

@@ -28,9 +28,14 @@ LINE_PORT=8000
 One client per process — pick which one:
 
 ```bash
-python main.py discord
-python main.py line
+python3 main.py personal discord
+python3 main.py private discord
+python3 main.py personal line
+python3 main.py private line
 ```
+
+The Discord client is implemented. The LINE client module is currently only a
+stub, so its commands are reserved for when that client is completed.
 
 ## Structure
 
@@ -43,3 +48,17 @@ python main.py line
 - `harness/` — tools the AI can call (each tool = handler + schema + prompt)
 
 Clients only turn incoming messages into a prompt and send the answer back. What the bot can actually do lives in `ai.py` and `harness/`, shared by all of them.
+
+## Workspaces
+
+Choose one tool policy when starting a client. The selected policy applies to
+the entire process and cannot be changed from Discord or another chat app:
+
+- `personal` — web search, URL fetching, and current date/time are available.
+- `private` — internet tools are unavailable; answers use only the current
+  message and attached-file content. Private document search can be added to
+  this policy after a private document store is configured.
+
+Tool access is enforced twice: Ollama only receives schemas allowed by the
+active workspace, and the Python execution loop rejects any disallowed tool
+call. Restart the process with a different first argument to change modes.

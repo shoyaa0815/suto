@@ -3,7 +3,8 @@ import unicodedata
 
 import aiohttp
 
-from harness import TOOLS, TOOL_GUIDANCE, TOOL_SCHEMAS
+from harness import get_tools
+from modes import DEFAULT_MODE, get_mode_policy
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_MODEL = "qwen3.5:9b"
@@ -45,7 +46,10 @@ def _to_ascii_digits(text: str) -> str:
 # The two are stitched together below so adding/removing a tool in
 # harness/ automatically updates what the AI is told, without touching
 # this file.
-_BASE_PROMPT = """You are a concise, accurate assistant in a Discord chat.
+_BASE_PROMPT = """You are a concise, accurate assistant in a chat.
+
+Active workspace policy:
+{mode_prompt}
 
 Answer style:
 - Be direct. No greetings, no filler, no restating the question.
@@ -65,22 +69,36 @@ Tool use:
 
 Reply in the same language the user wrote in."""
 
-SYSTEM_PROMPT = _BASE_PROMPT.format(tool_guidance=TOOL_GUIDANCE)
+
+def _build_system_prompt(mode_prompt: str, tool_guidance: str) -> str:
+    guidance = tool_guidance or "- No tools are available in this workspace."
+    return _BASE_PROMPT.format(
+        mode_prompt=mode_prompt,
+        tool_guidance=guidance,
+    )
 
 
 async def _chat(
-    session: aiohttp.ClientSession, messages: list, think: bool = False
+    session: aiohttp.ClientSession,
+    messages: list,
+    tool_schemas: list,
+    think: bool = False,
 ) -> dict:
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": messages,
+        "stream": False,
+        "think": think,
+        "options": {"temperature": TEMPERATURE},
+    }
+    # Ollama treats tools as optional. Omitting the field entirely is the most
+    # compatible representation of a workspace where no tools are allowed.
+    if tool_schemas:
+        payload["tools"] = tool_schemas
+
     async with session.post(
         OLLAMA_URL,
-        json={
-            "model": OLLAMA_MODEL,
-            "messages": messages,
-            "tools": TOOL_SCHEMAS,
-            "stream": False,
-            "think": think,
-            "options": {"temperature": TEMPERATURE},
-        },
+        json=payload,
     ) as response:
         response.raise_for_status()
         return await response.json()
@@ -103,16 +121,25 @@ async def _chat(
 # accurate, since the tool-calling loop already supplies the reasoning
 # structure. Pass think=True for a task that genuinely needs multi-step
 # reasoning before acting.
-async def ask_local_ai(prompt: str, think: bool = False) -> str:
+async def ask_local_ai(
+    prompt: str,
+    think: bool = False,
+    mode: str = DEFAULT_MODE,
+) -> str:
+    policy = get_mode_policy(mode)
+    tools, tool_schemas, tool_guidance = get_tools(policy.allowed_tools)
     timeout = aiohttp.ClientTimeout(total=120)
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "system",
+            "content": _build_system_prompt(policy.prompt, tool_guidance),
+        },
         {"role": "user", "content": prompt},
     ]
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             for _ in range(MAX_TOOL_ROUNDS):
-                data = await _chat(session, messages, think)
+                data = await _chat(session, messages, tool_schemas, think)
                 message = data.get("message", {})
                 tool_calls = message.get("tool_calls")
 
@@ -124,15 +151,15 @@ async def ask_local_ai(prompt: str, think: bool = False) -> str:
                 for call in tool_calls:
                     name = call["function"]["name"]
                     args = call["function"].get("arguments") or {}
-                    if name in TOOLS:
-                        func = TOOLS[name]
+                    if name in tools:
+                        func = tools[name]
                         result = (
                             await func(**args)
                             if inspect.iscoroutinefunction(func)
                             else func(**args)
                         )
                     else:
-                        result = f"unknown tool: {name}"
+                        result = f"tool is not allowed in {mode} mode: {name}"
                     messages.append({"role": "tool", "content": str(result)})
 
             return "no response from ai"
