@@ -1,11 +1,17 @@
 # suto
 
-A chat bot powered by a local Ollama model, focused on building out its tool-calling system so a local LLM can answer questions well — not just from its own training data, but by calling tools (search, fetch, file reading, ...) when that gets a better answer. The chat clients are ways to talk to it while it is being built.
+Suto is a local-first AI harness for building automation agents. It provides a
+shared runtime for tool-calling, mode-based permissions, request progress, and
+token accounting.
+
+The current `chat` mode is the interactive interface for exercising the harness
+with web, date/time, and attached-document tools. The `agent` mode reserves the
+automation execution path; action tools, persistent jobs, and scheduling are
+intentionally not implemented yet.
 
 ## Prerequisites
 
 - Python 3.12 or newer
-- [Ollama](https://ollama.com) running locally at `localhost:11434` with the `qwen3.5:9b` model pulled
 - [SearXNG](https://docs.searxng.org) running locally at `localhost:8080` (used by the `search_web` tool)
 
 ## Setup
@@ -27,7 +33,7 @@ LINE_PORT=8000
 
 ## Run
 
-One client per process — pick which one:
+Start one interface per process:
 
 ```bash
 venv/bin/python main.py chat cli
@@ -43,34 +49,39 @@ stub, so its commands are reserved for when that client is completed.
 
 The CLI prints live user-facing request progress, including the current AI/tool
 step, tool loop number, total and current-step elapsed time, and tokens
-accumulated after each Ollama response. A heartbeat is printed every 10 seconds
+accumulated after each model response. A heartbeat is printed every 10 seconds
 by default; set `PROGRESS_INTERVAL_SECONDS` to change it. The Discord process
 prints developer timing/debug logs in its terminal instead of user-facing
-progress. Set `SUTO_DEBUG=1` to enable those raw logs for other clients too.
+progress. Set `SUTO_DEBUG=1` to enable those raw logs for other interfaces too.
 
-## Structure
+## Harness structure
 
-- `main.py` — entry point, starts the client named on the command line
-- `clients/` — one subpackage per way of talking to the bot
+- `main.py` — entry point, selects a mode and starts a client
+- `clients/` — input/output adapters around the shared AI harness
   - `clients/cli/` — interactive terminal client
   - `clients/discord/` — Discord client
   - `clients/line/` — LINE client (webhook server)
-- `ai.py` — talks to Ollama, runs the tool-calling loop
+- `ai.py` — shared AI runtime, tool loop, progress, and token accounting
+- `modes.py` — capability policies for interactive chat and automation
 - `tools/` — tools the AI can call (each tool = handler + schema + prompt),
   including request-scoped document reading, summarization, and retrieval
+- `progress.py` — client-independent formatting for live process status
 
-Clients only turn incoming messages into a prompt and send the answer back. What the bot can actually do lives in `ai.py` and `tools/`, shared by all of them.
+Interfaces only translate incoming messages into harness requests and deliver
+the result. Automation behavior, permissions, tools, and execution remain in
+the shared runtime.
 
-## Workspaces
+## Modes
 
 Choose one mode when starting a client. The selected mode applies to
 the entire process and cannot be changed from Discord or another chat app:
 
-- `chat` — web search, URL fetching, current date/time, and attached-file
-  reading/search/summarization are available.
-- `agent` — reserved for the automation agent. It can chat, but action tools
-  are not implemented or exposed yet.
+- `chat` — interactive harness mode for testing and using the current web,
+  date/time, and attached-file tools.
+- `agent` — automation harness placeholder. It can answer from the current
+  prompt, but action tools, persistent jobs, and scheduling are not implemented
+  or exposed yet.
 
-Tool access is enforced twice: Ollama only receives schemas allowed by the
-active workspace, and the Python execution loop rejects any disallowed tool
+Tool access is enforced twice: the model only receives schemas allowed by the
+selected mode, and the Python execution loop rejects any disallowed tool
 call. Restart the process with a different first argument to change modes.
