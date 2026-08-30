@@ -22,7 +22,14 @@ MODE_POLICIES = {
             "they are needed."
         ),
         allowed_tools=frozenset(
-            {"get_current_datetime", "search_web", "fetch_url"}
+            {
+                "get_current_datetime",
+                "search_web",
+                "fetch_url",
+                "read_attached_file",
+                "search_attachment",
+                "summarize_attachment",
+            }
         ),
     ),
     "private": ModePolicy(
@@ -35,10 +42,15 @@ MODE_POLICIES = {
             "attached-file content. If the supplied information is not enough, "
             "say what information is missing."
         ),
-        # Document tools will be added here when the private document store is
-        # implemented. Keeping this empty is safer than exposing web tools as a
-        # temporary substitute.
-        allowed_tools=frozenset(),
+        # Attached files stay request-scoped and never grant filesystem access.
+        # Private document search can be added separately when a store exists.
+        allowed_tools=frozenset(
+            {
+                "read_attached_file",
+                "search_attachment",
+                "summarize_attachment",
+            }
+        ),
     ),
 }
 

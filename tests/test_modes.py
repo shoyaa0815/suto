@@ -1,7 +1,7 @@
 import pytest
 
-from harness import get_tools
 from modes import MODE_POLICIES, get_mode_policy
+from tools import get_tools
 
 
 def test_personal_mode_has_web_tools():
@@ -18,14 +18,19 @@ def test_private_mode_has_no_web_tools():
     assert "fetch_url" not in policy.allowed_tools
 
 
-def test_registry_only_returns_tools_allowed_by_mode():
+def test_private_mode_registry_only_returns_attachment_tools():
     policy = get_mode_policy("private")
 
     tools, schemas, guidance = get_tools(policy.allowed_tools)
 
-    assert tools == {}
-    assert schemas == []
-    assert guidance == ""
+    expected = {
+        "read_attached_file",
+        "search_attachment",
+        "summarize_attachment",
+    }
+    assert set(tools) == expected
+    assert {schema["function"]["name"] for schema in schemas} == expected
+    assert "read_attached_file" in guidance
 
 
 def test_unknown_mode_is_rejected():

@@ -4,5 +4,5 @@
 # back in whatever shape its platform wants.
 #
 # Nothing in here holds logic about *what* the bot can do — that lives in ai.py
-# and harness/, shared by every client. Adding a client should never mean
+# and tools/, shared by every client. Adding a client should never mean
 # touching them.

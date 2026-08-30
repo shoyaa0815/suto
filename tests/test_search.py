@@ -1,6 +1,6 @@
 import pytest
 
-from harness import search
+from tools import search
 
 
 @pytest.fixture(autouse=True)
