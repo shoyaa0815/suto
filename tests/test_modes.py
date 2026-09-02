@@ -1,6 +1,6 @@
 import pytest
 
-from modes import MODE_POLICIES, get_mode_policy
+from core.modes import MODE_POLICIES, get_mode_policy
 from tools import get_tools
 
 
@@ -13,15 +13,21 @@ def test_chat_mode_has_current_tools():
     assert "read_attached_file" in policy.allowed_tools
 
 
-def test_agent_mode_has_no_tools():
+def test_agent_mode_has_restricted_workspace_tools():
     policy = get_mode_policy("agent")
 
-    assert policy.allowed_tools == frozenset()
+    expected = {
+        "list_workspace_files",
+        "read_workspace_file",
+        "search_workspace",
+        "apply_workspace_patch",
+    }
+    assert policy.allowed_tools == expected
 
     tools, schemas, guidance = get_tools(policy.allowed_tools)
-    assert tools == {}
-    assert schemas == []
-    assert guidance == ""
+    assert set(tools) == expected
+    assert {schema["function"]["name"] for schema in schemas} == expected
+    assert "write permission" in guidance
 
 
 def test_unknown_mode_is_rejected():

@@ -2,7 +2,7 @@ import sys
 
 from dotenv import load_dotenv
 
-from modes import MODE_POLICIES
+from core.modes import MODE_POLICIES
 
 CLIENTS = ("cli", "discord", "line")
 

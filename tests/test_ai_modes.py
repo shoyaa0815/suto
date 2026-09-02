@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 import ai
+from automation.context import ExecutionContext
 
 
 class _FakeClientSession:
@@ -14,6 +15,22 @@ class _FakeClientSession:
 
     async def __aexit__(self, exc_type, exc, traceback):
         return False
+
+
+def test_write_tool_audit_redacts_file_content():
+    arguments = ai._audit_tool_arguments(
+        "apply_workspace_patch",
+        {
+            "path": "notes.txt",
+            "content": "private content",
+            "expected_sha256": "before",
+        },
+    )
+
+    assert "content" not in arguments
+    assert arguments["content_size"] == len(b"private content")
+    assert len(arguments["content_sha256"]) == 64
+    assert arguments["path"] == "notes.txt"
 
 
 async def test_agent_mode_does_not_expose_tool_schemas(monkeypatch):
@@ -176,6 +193,69 @@ async def test_progress_reports_tool_and_loop(monkeypatch):
     assert "get_current_datetime" in tool_update["detail"]
     assert any(update["activity"] == "tool_done" for update in updates)
     assert updates[-1]["total_tokens"] == 270
+
+
+async def test_agent_job_exposes_workspace_tools_and_audits_calls(
+    monkeypatch,
+    tmp_path,
+):
+    calls = 0
+    observed = {}
+    tool_events = []
+    (tmp_path / "notes.txt").write_text("workspace facts", encoding="utf-8")
+
+    async def fake_chat(session, messages, tool_schemas, think=False):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            observed["schemas"] = {
+                schema["function"]["name"] for schema in tool_schemas
+            }
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "read_workspace_file",
+                                "arguments": {"path": "notes.txt"},
+                            }
+                        }
+                    ],
+                }
+            }
+        observed["tool_results"] = [
+            message["content"]
+            for message in messages
+            if message["role"] == "tool"
+        ]
+        return {"message": {"content": "These are the workspace facts."}}
+
+    monkeypatch.setattr(ai.aiohttp, "ClientSession", _FakeClientSession)
+    monkeypatch.setattr(ai, "_chat", fake_chat)
+
+    result = await ai.execute_local_ai(
+        "inspect workspace",
+        mode="agent",
+        reply_language=ai.ReplyLanguage("en", "English", "test"),
+        execution_context=ExecutionContext("job_test", tmp_path),
+        tool_event_callback=tool_events.append,
+    )
+
+    assert result.status == "completed"
+    assert observed["schemas"] == {
+        "list_workspace_files",
+        "read_workspace_file",
+        "search_workspace",
+    }
+    assert observed["tool_results"][0].startswith(
+        "[workspace file: notes.txt; sha256: "
+    )
+    assert observed["tool_results"][0].endswith("\nworkspace facts")
+    assert tool_events[0]["tool_name"] == "read_workspace_file"
+    assert tool_events[0]["status"] == "finished"
+    assert tool_events[0]["result_size"] > 0
 
 
 async def test_disallowed_tool_call_is_not_executed(monkeypatch):

@@ -1,5 +1,5 @@
-from clients.cli.bot import _print_help
-from progress import format_elapsed, print_progress
+from clients.cli.bot import _parse_run, _print_help
+from clients.cli.progress import format_elapsed, print_progress
 
 
 def test_format_elapsed_uses_minutes_and_seconds():
@@ -13,6 +13,37 @@ def test_print_help_lists_exit_commands(capsys):
     assert "/help" in output
     assert "/exit" in output
     assert "/quit" in output
+
+
+def test_parse_run_accepts_workspace(tmp_path):
+    task, workspace, allow_write = _parse_run(
+        f'--workspace "{tmp_path}" "inspect this project"'
+    )
+
+    assert task == "inspect this project"
+    assert workspace == tmp_path.resolve()
+    assert allow_write is False
+
+
+def test_parse_run_accepts_write_permission_and_workspace(tmp_path):
+    task, workspace, allow_write = _parse_run(
+        f'--allow-write --workspace "{tmp_path}" "update docs"'
+    )
+
+    assert task == "update docs"
+    assert workspace == tmp_path.resolve()
+    assert allow_write is True
+
+
+def test_parse_run_rejects_missing_workspace(tmp_path):
+    missing = tmp_path / "missing"
+
+    try:
+        _parse_run(f"--workspace {missing} inspect")
+    except ValueError as error:
+        assert "not a directory" in str(error)
+    else:
+        raise AssertionError("missing workspace was accepted")
 
 
 def test_print_progress_shows_activity_time_and_tokens(capsys):

@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import inspect
 import os
 import time
@@ -8,9 +9,10 @@ from dataclasses import dataclass, field
 
 import aiohttp
 
-from language import ReplyLanguage, choose_reply_language, detect_language_code
-from modes import DEFAULT_MODE, get_mode_policy
-from tools import build_attachment_tools, get_tools
+from automation.context import ALL_WORKSPACE_TOOLS, ExecutionContext
+from core.language import ReplyLanguage, choose_reply_language, detect_language_code
+from core.modes import DEFAULT_MODE, get_mode_policy
+from tools import build_attachment_tools, build_workspace_tools, get_tools
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_MODEL = "qwen3.5:9b"
@@ -38,6 +40,8 @@ TEMPERATURE = 0.2
 
 
 ProgressCallback = Callable[[dict], object]
+ToolEventCallback = Callable[[dict], object]
+ChangeEventCallback = Callable[[dict], object]
 
 
 @dataclass(frozen=True)
@@ -132,7 +136,7 @@ class _RequestProgress:
 def _tool_detail(name: str, args: dict) -> str:
     """Describe a tool call without dumping every argument to the user."""
     visible = []
-    for key in ("query", "url", "attachment_id", "detail"):
+    for key in ("query", "url", "path", "attachment_id", "detail"):
         if key not in args:
             continue
         value = str(args[key]).replace("\n", " ")
@@ -141,6 +145,17 @@ def _tool_detail(name: str, args: dict) -> str:
         visible.append(f"{key}={value}")
     suffix = f" ({', '.join(visible)})" if visible else ""
     return f"{name}{suffix}"
+
+
+def _audit_tool_arguments(name: str, args: dict) -> dict:
+    """Keep tool audits useful without storing entire file contents."""
+    audited = dict(args)
+    if name == "apply_workspace_patch" and "content" in audited:
+        content = str(audited.pop("content"))
+        encoded = content.encode("utf-8")
+        audited["content_size"] = len(encoded)
+        audited["content_sha256"] = hashlib.sha256(encoded).hexdigest()
+    return audited
 
 
 def _debug(message: str) -> None:
@@ -152,6 +167,20 @@ def set_debug_logs(enabled: bool) -> None:
     """Enable or disable internal timing logs for the current process."""
     global DEBUG_LOGS
     DEBUG_LOGS = enabled
+
+
+async def _emit_tool_event(
+    callback: ToolEventCallback | None,
+    event: dict,
+) -> None:
+    if callback is None:
+        return
+    try:
+        result = callback(event)
+        if inspect.isawaitable(result):
+            await result
+    except Exception as error:
+        _debug(f"[tool_audit] callback failed: {error!r}")
 
 
 # The system prompt tells the model to answer with 0-9 digits only. That rule
@@ -345,6 +374,9 @@ async def execute_local_ai(
     attachments: dict[str, tuple[str, bytes]] | None = None,
     reply_language: ReplyLanguage | None = None,
     progress_callback: ProgressCallback | None = None,
+    execution_context: ExecutionContext | None = None,
+    tool_event_callback: ToolEventCallback | None = None,
+    change_event_callback: ChangeEventCallback | None = None,
 ) -> AIExecutionResult:
     request_started = time.perf_counter()
     progress = _RequestProgress(progress_callback, request_started)
@@ -371,6 +403,15 @@ async def execute_local_ai(
     if not attachments:
         # Attachment tools are useful only when this request has attachments.
         allowed_tools = allowed_tools - ATTACHMENT_TOOL_NAMES
+    if execution_context is None:
+        allowed_tools = allowed_tools - ALL_WORKSPACE_TOOLS
+    else:
+        allowed_workspace_tools = (
+            ALL_WORKSPACE_TOOLS & execution_context.allowed_tools
+        )
+        allowed_tools = (
+            allowed_tools - ALL_WORKSPACE_TOOLS
+        ) | allowed_workspace_tools
 
     _, tool_schemas, tool_guidance = get_tools(allowed_tools)
     timeout = aiohttp.ClientTimeout(
@@ -415,6 +456,13 @@ async def execute_local_ai(
                 attachments,
                 complete_document_part,
             )
+            if execution_context is not None:
+                runtime_handlers.update(
+                    build_workspace_tools(
+                        execution_context,
+                        change_event_callback,
+                    )
+                )
             tools, _, _ = get_tools(allowed_tools, runtime_handlers)
             for round_number in range(1, MAX_TOOL_ROUNDS + 1):
                 await progress.emit(
@@ -458,6 +506,7 @@ async def execute_local_ai(
                         func = tools[name]
                         tool_started = time.perf_counter()
                         tool_outcome = "finished"
+                        tool_error = None
                         try:
                             result = (
                                 await func(**args)
@@ -466,9 +515,11 @@ async def execute_local_ai(
                             )
                         except (asyncio.TimeoutError, TimeoutError):
                             tool_outcome = "timed out"
+                            tool_error = f"tool timed out: {name}"
                             result = f"tool timed out: {name}"
                         except Exception as error:
                             tool_outcome = "failed"
+                            tool_error = f"{type(error).__name__}: {error}"
                             _debug(f"[tool] name={name} error={error!r}")
                             result = f"tool failed: {name}: {error}"
                         elapsed_ms = round(
@@ -478,7 +529,24 @@ async def execute_local_ai(
                     else:
                         elapsed_ms = 0
                         tool_outcome = "blocked"
+                        tool_error = f"tool is not allowed in {mode} mode: {name}"
                         result = f"tool is not allowed in {mode} mode: {name}"
+                    await _emit_tool_event(
+                        tool_event_callback,
+                        {
+                            "job_id": (
+                                execution_context.job_id
+                                if execution_context is not None
+                                else None
+                            ),
+                            "tool_name": name,
+                            "arguments": _audit_tool_arguments(name, args),
+                            "status": tool_outcome,
+                            "elapsed_seconds": elapsed_ms / 1000,
+                            "result_size": len(str(result).encode("utf-8")),
+                            "error": tool_error,
+                        },
+                    )
                     messages.append({"role": "tool", "content": str(result)})
                     await progress.emit(
                         "tool_done",

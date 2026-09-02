@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 from .models import Job, JobStatus
 from .runner import JobRunner
@@ -25,12 +26,16 @@ class AutomationWorker:
         prompt: str,
         source: str = "cli",
         source_ref: str | None = None,
+        workspace: str | Path = ".",
+        allow_write: bool = False,
     ) -> Job:
         job = self.store.create_job(
             prompt,
             mode="agent",
             source=source,
             source_ref=source_ref,
+            workspace=str(workspace),
+            allow_write=allow_write,
         )
         self._wake.set()
         return job

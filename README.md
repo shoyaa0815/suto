@@ -4,10 +4,11 @@ Suto is a local-first AI harness for building automation agents. It provides a
 shared runtime for tool-calling, mode-based permissions, request progress, and
 token accounting.
 
-The current `chat` mode is the interactive interface for exercising the harness
-with web, date/time, and attached-document tools. The `agent` mode reserves the
-automation execution path; action tools, persistent jobs, and scheduling are
-intentionally not implemented yet.
+The current `chat` mode is the interactive shell for exercising the harness
+with web, date/time, and attached-document tools. The `agent` mode provides the
+automation execution path with persistent jobs and restricted workspace tools.
+Jobs are read-only by default and may receive explicit file-write permission.
+Command execution and scheduling are intentionally not implemented yet.
 
 ## Prerequisites
 
@@ -21,47 +22,31 @@ python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 ```
 
-Create a `.env` file with the credentials for whichever client you run:
-
-```
-DISCORD_TOKEN=your_token_here
-
-LINE_CHANNEL_SECRET=your_secret_here
-LINE_CHANNEL_ACCESS_TOKEN=your_token_here
-LINE_PORT=8000
-```
-
 ## Run
 
-Start one interface per process:
+Start the interactive shell in chat or automation mode:
 
 ```bash
 venv/bin/python main.py chat cli
 venv/bin/python main.py agent cli
-venv/bin/python main.py chat discord
-venv/bin/python main.py agent discord
-venv/bin/python main.py chat line
-venv/bin/python main.py agent line
 ```
-
-The Discord client is implemented. The LINE client module is currently only a
-stub, so its commands are reserved for when that client is completed.
 
 The CLI prints live user-facing request progress, including the current AI/tool
 step, tool loop number, total and current-step elapsed time, and tokens
 accumulated after each model response. A heartbeat is printed every 10 seconds
-by default; set `PROGRESS_INTERVAL_SECONDS` to change it. The Discord process
-prints developer timing/debug logs in its terminal instead of user-facing
-progress. Set `SUTO_DEBUG=1` to enable those raw logs for other interfaces too.
+by default; set `PROGRESS_INTERVAL_SECONDS` to change it. Set `SUTO_DEBUG=1` to
+enable raw developer timing logs.
 
 ### Automation jobs
 
 The CLI includes a persistent single-worker automation queue:
 
 ```text
-/run <task>         create a background automation job
+/run [--workspace <path>] [--allow-write] <task>
+                    create a background automation job
 /jobs               list recent jobs
 /status <job_id>    show progress, result, errors, and token usage
+/changes <job_id>   show the files and unified diffs changed by a job
 /cancel <job_id>    cancel a queued or running job
 ```
 
@@ -70,38 +55,43 @@ Jobs and progress events are stored in `data/suto.db` by default. Set
 left in `running` state by an interrupted process is marked failed on the next
 start to avoid repeating future actions silently.
 
-Automation jobs currently run in `agent` mode without action tools. This phase
-provides durable job state, execution results, cancellation, and recovery before
-filesystem, command, or scheduling capabilities are added.
+Automation jobs run in `agent` mode and may list, search, and read files only
+inside the workspace assigned at submission. The default workspace is the
+current directory. Add `--allow-write` to let that one job create or replace
+text files. Existing files must be read first and are changed only when their
+SHA-256 still matches, preventing stale writes. Writes use an atomic replace;
+file deletion and command execution are unavailable.
+
+Resolved paths and symlinks are checked to prevent access outside the
+workspace. Every tool call records its arguments, status, elapsed time, result
+size, and error. File content is omitted from tool-call arguments. Successful
+writes additionally record the path, before/after hashes, and unified diff for
+`/changes`.
 
 ## Harness structure
 
-- `main.py` — entry point, selects a mode and starts a client
-- `clients/` — input/output adapters around the shared AI harness
-  - `clients/cli/` — interactive terminal client
-  - `clients/discord/` — Discord client
-  - `clients/line/` — LINE client (webhook server)
+- `main.py` — entry point that selects a harness mode
+- `clients/cli/` — interactive terminal shell
 - `ai.py` — shared AI runtime, tool loop, progress, and token accounting
-- `automation/` — persistent job store, runner, and single background worker
-- `modes.py` — capability policies for interactive chat and automation
+- `automation/` — execution context, job store, runner, and background worker
+- `core/modes.py` — capability policies for interactive chat and automation
 - `tools/` — tools the AI can call (each tool = handler + schema + prompt),
-  including request-scoped document reading, summarization, and retrieval
-- `progress.py` — client-independent formatting for live process status
+  including request-scoped documents and restricted workspace access
+- `clients/cli/progress.py` — formatting for live CLI process status
 
-Interfaces only translate incoming messages into harness requests and deliver
-the result. Automation behavior, permissions, tools, and execution remain in
-the shared runtime.
+Automation behavior, permissions, tools, and execution remain in the shared
+runtime rather than the terminal shell.
 
 ## Modes
 
-Choose one mode when starting a client. The selected mode applies to
-the entire process and cannot be changed from Discord or another chat app:
+Choose one mode when starting the harness. The selected mode applies to the
+entire process:
 
 - `chat` — interactive harness mode for testing and using the current web,
   date/time, and attached-file tools.
-- `agent` — automation harness placeholder. It can answer from the current
-  prompt, but action tools, persistent jobs, and scheduling are not implemented
-  or exposed yet.
+- `agent` — persistent automation jobs with workspace listing, searching, and
+  file reading. File writes require `--allow-write`; commands and scheduling
+  remain unavailable.
 
 Tool access is enforced twice: the model only receives schemas allowed by the
 selected mode, and the Python execution loop rejects any disallowed tool

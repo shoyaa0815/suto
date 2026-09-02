@@ -1,14 +1,16 @@
 import asyncio
 import os
+import shlex
 import sys
+from pathlib import Path
 
 from ai import ask_local_ai
 from automation.runner import JobRunner
 from automation.store import JobStore
 from automation.worker import AutomationWorker
-from language import choose_reply_language
-from modes import get_mode_policy
-from progress import format_elapsed, print_progress
+from clients.cli.progress import format_elapsed, print_progress
+from core.language import choose_reply_language
+from core.modes import get_mode_policy
 
 EXIT_COMMANDS = frozenset({"/exit", "/quit"})
 
@@ -16,9 +18,13 @@ EXIT_COMMANDS = frozenset({"/exit", "/quit"})
 def _print_help() -> None:
     print("Commands:")
     print("  /help  show available commands")
-    print("  /run <task>  create an automation job")
+    print(
+        "  /run [--workspace <path>] [--allow-write] <task>  "
+        "create an automation job"
+    )
     print("  /jobs  list recent automation jobs")
     print("  /status <job_id>  show job status and result")
+    print("  /changes <job_id>  show files changed by a job")
     print("  /cancel <job_id>  cancel a queued or running job")
     print("  /exit  exit suto")
     print("  /quit  exit suto")
@@ -74,6 +80,9 @@ def _print_job_status(store: JobStore, job_id: str) -> None:
 
     print(f"Job: {job.id}")
     print(f"Status: {job.status.value}")
+    print(f"Workspace: {job.workspace}")
+    permission = "read/write" if job.allow_write else "read-only"
+    print(f"Workspace access: {permission}")
     print(f"Tokens: {job.total_tokens:,}")
     event = store.latest_event(job.id)
     if event is not None:
@@ -82,10 +91,63 @@ def _print_job_status(store: JobStore, job_id: str) -> None:
             f"({format_elapsed(event.elapsed_seconds)}, "
             f"tokens {event.total_tokens:,})"
         )
+    tool_event = store.latest_tool_event(job.id)
+    if tool_event is not None:
+        print(
+            f"Last tool: {tool_event.tool_name} ({tool_event.status}, "
+            f"{tool_event.elapsed_seconds:.1f}s, "
+            f"result {tool_event.result_size} bytes)"
+        )
+        if tool_event.error:
+            print(f"Tool error: {tool_event.error}")
     if job.result:
         print(f"Result:\n{job.result}")
     if job.error:
         print(f"Error: {job.error}")
+
+
+def _print_changes(store: JobStore, job_id: str) -> None:
+    if store.get_job(job_id) is None:
+        print(f"Job not found: {job_id}")
+        return
+    changes = store.list_change_events(job_id)
+    if not changes:
+        print(f"No file changes recorded for {job_id}.")
+        return
+    for index, change in enumerate(changes, start=1):
+        before = change.before_sha256 or "new file"
+        print(f"Change {index}: {change.path}")
+        print(f"SHA256: {before} -> {change.after_sha256}")
+        print(change.diff)
+
+
+def _parse_run(argument: str) -> tuple[str, Path, bool]:
+    try:
+        parts = shlex.split(argument)
+    except ValueError as error:
+        raise ValueError(f"invalid /run arguments: {error}") from error
+    if not parts:
+        raise ValueError(
+            "usage: /run [--workspace <path>] [--allow-write] <task>"
+        )
+
+    workspace = Path.cwd()
+    allow_write = False
+    while parts and parts[0].startswith("--"):
+        flag = parts.pop(0)
+        if flag == "--allow-write":
+            allow_write = True
+        elif flag == "--workspace":
+            if not parts:
+                raise ValueError("--workspace requires a path")
+            workspace = Path(parts.pop(0)).expanduser().resolve()
+        else:
+            raise ValueError(f"unknown /run option: {flag}")
+    if not parts:
+        raise ValueError("/run requires a task")
+    if not workspace.is_dir():
+        raise ValueError(f"workspace is not a directory: {workspace}")
+    return " ".join(parts), workspace, allow_write
 
 
 async def _chat_loop(mode: str) -> None:
@@ -120,10 +182,16 @@ async def _chat_loop(mode: str) -> None:
                 print("bye")
                 return
             if command == "/run":
-                if not argument:
-                    print("usage: /run <task>")
+                try:
+                    task, workspace, allow_write = _parse_run(argument)
+                except ValueError as error:
+                    print(error)
                     continue
-                job = worker.submit(argument)
+                job = worker.submit(
+                    task,
+                    workspace=workspace,
+                    allow_write=allow_write,
+                )
                 print(f"Created job {job.id}")
                 continue
             if command == "/jobs":
@@ -134,6 +202,12 @@ async def _chat_loop(mode: str) -> None:
                     print("usage: /status <job_id>")
                     continue
                 _print_job_status(store, argument)
+                continue
+            if command == "/changes":
+                if not argument:
+                    print("usage: /changes <job_id>")
+                    continue
+                _print_changes(store, argument)
                 continue
             if command == "/cancel":
                 if not argument:

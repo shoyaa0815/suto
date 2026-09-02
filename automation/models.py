@@ -18,6 +18,8 @@ class Job:
     status: JobStatus
     source: str
     source_ref: str | None
+    workspace: str
+    allow_write: bool
     result: str | None
     error: str | None
     prompt_tokens: int
@@ -39,4 +41,28 @@ class JobEvent:
     detail: str
     elapsed_seconds: float
     total_tokens: int
+    created_at: str
+
+
+@dataclass(frozen=True)
+class ToolEvent:
+    id: int
+    job_id: str
+    tool_name: str
+    arguments: str
+    status: str
+    elapsed_seconds: float
+    result_size: int
+    error: str | None
+    created_at: str
+
+
+@dataclass(frozen=True)
+class ChangeEvent:
+    id: int
+    job_id: str
+    path: str
+    diff: str
+    before_sha256: str | None
+    after_sha256: str
     created_at: str

@@ -23,8 +23,18 @@ from .file_reader import SUMMARY_SCHEMA as FILE_SUMMARY_SCHEMA
 from .search import search_web
 from .search import PROMPT as SEARCH_PROMPT
 from .search import SCHEMA as SEARCH_SCHEMA
+from .workspace import build_workspace_tools
+from .workspace import PATCH_SCHEMA as WORKSPACE_PATCH_SCHEMA
+from .workspace import LIST_SCHEMA as WORKSPACE_LIST_SCHEMA
+from .workspace import PROMPT as WORKSPACE_PROMPT
+from .workspace import READ_SCHEMA as WORKSPACE_READ_SCHEMA
+from .workspace import SEARCH_SCHEMA as WORKSPACE_SEARCH_SCHEMA
 
 _EMPTY_ATTACHMENT_TOOLS = build_attachment_tools({})
+
+
+def _workspace_unavailable(**kwargs) -> str:
+    return "workspace tools are unavailable outside an automation job"
 
 ALL_TOOLS = {
     "get_current_datetime": get_current_datetime,
@@ -34,6 +44,10 @@ ALL_TOOLS = {
     "read_attached_file": _EMPTY_ATTACHMENT_TOOLS["read_attached_file"],
     "search_attachment": _EMPTY_ATTACHMENT_TOOLS["search_attachment"],
     "summarize_attachment": _EMPTY_ATTACHMENT_TOOLS["summarize_attachment"],
+    "list_workspace_files": _workspace_unavailable,
+    "read_workspace_file": _workspace_unavailable,
+    "search_workspace": _workspace_unavailable,
+    "apply_workspace_patch": _workspace_unavailable,
 }
 
 ALL_TOOL_SCHEMAS = {
@@ -45,6 +59,10 @@ ALL_TOOL_SCHEMAS = {
         FILE_READER_SCHEMA,
         FILE_SEARCH_SCHEMA,
         FILE_SUMMARY_SCHEMA,
+        WORKSPACE_LIST_SCHEMA,
+        WORKSPACE_READ_SCHEMA,
+        WORKSPACE_SEARCH_SCHEMA,
+        WORKSPACE_PATCH_SCHEMA,
     ]
 }
 
@@ -55,6 +73,10 @@ ALL_TOOL_GUIDANCE = {
     "read_attached_file": FILE_READER_PROMPT,
     "search_attachment": FILE_READER_PROMPT,
     "summarize_attachment": FILE_READER_PROMPT,
+    "list_workspace_files": WORKSPACE_PROMPT,
+    "read_workspace_file": WORKSPACE_PROMPT,
+    "search_workspace": WORKSPACE_PROMPT,
+    "apply_workspace_patch": WORKSPACE_PROMPT,
 }
 
 

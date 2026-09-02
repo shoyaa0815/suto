@@ -4,8 +4,8 @@ import time
 import discord
 
 from ai import ask_local_ai, set_debug_logs
-from language import choose_reply_language
-from modes import DEFAULT_MODE, get_mode_policy
+from core.language import choose_reply_language
+from core.modes import DEFAULT_MODE, get_mode_policy
 from tools.file_reader import SUPPORTED_EXTENSIONS
 
 # Discord's own limit on one message. Longer answers are split across several.

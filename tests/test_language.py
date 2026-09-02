@@ -1,6 +1,6 @@
 import pytest
 
-from language import choose_reply_language, detect_language_code
+from core.language import choose_reply_language, detect_language_code
 
 
 def test_explicit_language_request_has_highest_priority():

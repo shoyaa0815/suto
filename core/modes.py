@@ -33,15 +33,21 @@ MODE_POLICIES = {
     ),
     "agent": ModePolicy(
         name="agent",
-        description="Reserved agent mode with no action tools yet",
+        description="Automation agent with restricted workspace access",
         prompt=(
-            "You are in agent mode, which is currently a placeholder. No "
-            "action tools are available yet. You may answer from the user's "
-            "message, but never claim that you searched, read files, or took "
-            "an action. If an action is requested, say that agent actions are "
-            "not implemented yet."
+            "You are in automation agent mode. Restricted workspace tools may "
+            "be available for a job. You may modify files only when that job "
+            "explicitly grants write permission. You cannot run commands. Never "
+            "claim to have taken an unavailable action."
         ),
-        allowed_tools=frozenset(),
+        allowed_tools=frozenset(
+            {
+                "list_workspace_files",
+                "read_workspace_file",
+                "search_workspace",
+                "apply_workspace_patch",
+            }
+        ),
     ),
 }
 
