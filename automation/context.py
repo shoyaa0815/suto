@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.settings import env_float, env_int
+
 
 READ_ONLY_WORKSPACE_TOOLS = frozenset(
     {
@@ -21,11 +23,19 @@ class ExecutionLimitExceeded(RuntimeError):
 
 @dataclass(frozen=True)
 class ExecutionLimits:
-    max_elapsed_seconds: float = 900
-    max_tokens: int = 100_000
-    max_tool_calls: int = 40
-    max_changed_files: int = 10
-    repeated_tool_call_limit: int = 3
+    max_elapsed_seconds: float = env_float(
+        "MAX_JOB_SECONDS",
+        900,
+        minimum=1,
+    )
+    max_tokens: int = env_int("MAX_JOB_TOKENS", 100_000, minimum=1)
+    max_tool_calls: int = env_int("MAX_TOOL_CALLS", 40, minimum=1)
+    max_changed_files: int = env_int("MAX_CHANGED_FILES", 10, minimum=1)
+    repeated_tool_call_limit: int = env_int(
+        "REPEATED_TOOL_CALL_LIMIT",
+        3,
+        minimum=2,
+    )
 
 
 @dataclass(frozen=True)

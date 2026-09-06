@@ -23,6 +23,18 @@ python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 ```
 
+Copy `.env.example` to `.env` to override the local model or runtime limits.
+All settings are optional; omitted values keep the documented defaults:
+
+```bash
+cp .env.example .env
+```
+
+Common settings include `OLLAMA_URL`, `OLLAMA_MODEL`, `MAX_JOB_SECONDS`,
+`MAX_JOB_TOKENS`, `MAX_TOOL_CALLS`, and `MAX_CHANGED_FILES`. Invalid numeric
+values fail at startup with the setting name and expected range. Restart Suto
+after changing `.env` because settings are loaded when the process starts.
+
 ## Run
 
 Start the interactive shell in chat or automation mode:
@@ -100,12 +112,13 @@ the assigned workspace, with a scrubbed environment, timeout, and output limit.
 Every execution records its arguments, status, exit code, elapsed time, stdout,
 and stderr for `/commands`. `compileall` additionally requires `--allow-write`.
 
-Each automation job is also limited to 15 minutes, 100,000 accumulated model
-tokens, 40 tool calls, and 10 distinct changed files. A third identical tool
-call is treated as a loop. Jobs that hit one of these limits enter the
-`blocked` state with a persistent reason. If a job changes files, it must run a
-successful `pytest`, `compileall`, or `ruff` verification after the latest
-change before it can be marked completed.
+By default, each automation job is limited to 15 minutes, 100,000 accumulated
+model tokens, 40 tool calls, and 10 distinct changed files. A third identical
+tool call is treated as a loop. These defaults can be overridden in `.env`.
+Jobs that hit one of the limits enter the `blocked` state with a persistent
+reason. If a job changes files, it must run a successful `pytest`, `compileall`,
+or `ruff` verification after the latest change before it can be marked
+completed.
 
 Transient AI connection failures and timeouts are retried up to 3 times with
 1, 2, and 4 second backoff. Retries are allowed only when the failed attempt
