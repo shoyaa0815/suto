@@ -16,6 +16,8 @@ PROMPT = """- For every automation job that needs more than one action, call
   evidence-based result. Mark it failed only when the action actually failed.
 - Call revise_plan when new information changes the approach. The revised plan
   replaces the current plan, so include every remaining step in the new plan.
+- A resumed job includes its durable checkpoint in the user prompt. Continue
+  pending steps and do not recreate or repeat completed plan steps.
 - Planning tools record durable job state. Do not claim a plan or step update
   unless the corresponding tool call succeeded."""
 

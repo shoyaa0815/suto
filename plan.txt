@@ -4,8 +4,8 @@ SUTO AUTOMATION ROADMAP
 สถานะรวม
 ========
 ตอนนี้ทำถึง Phase 4 แล้ว
-Phase 0-3 ทำเสร็จแล้ว และ Phase 4 ทำส่วน plan, verify และ guardrails แล้ว
-งานถัดไปที่แนะนำ: Phase 4 - Retry and Safe Resume
+Phase 0-4 ทำเสร็จแล้ว
+งานถัดไปที่แนะนำ: Phase 5 - Approval and Change Control
 
 สัญลักษณ์สถานะ
 ===============
@@ -102,7 +102,7 @@ Definition of done:
 agent แก้ไฟล์แล้วรัน test เพื่อตรวจงานได้ โดยต้องได้รับสิทธิ์จาก user
 
 
-Phase 4 - Plan, Verify and Recovery                      [IN PROGRESS] <- NEXT
+Phase 4 - Plan, Verify and Recovery                      [DONE]
 ============================================================
 เป้าหมาย: ทำงานหลายขั้นได้เสถียร ไม่วนลูปและรู้ว่างานสำเร็จจริง
 
@@ -124,15 +124,18 @@ Phase 4 - Plan, Verify and Recovery                      [IN PROGRESS] <- NEXT
 - ตรวจจับ tool call เดิมซ้ำ 3 ครั้ง
 - สถานะ blocked พร้อมเหตุผลถาวร
 
-ยังเหลือ:
-- retry เฉพาะ transient error พร้อม backoff
-- resume จาก checkpoint ที่ปลอดภัยหลัง worker ถูกขัดจังหวะ
+เพิ่มเติมที่ทำแล้ว:
+- retry transient AI error สูงสุด 3 ครั้ง พร้อม backoff 1, 2 และ 4 วินาที
+- ไม่ retry อัตโนมัติหลังมีการแก้ไฟล์หรือรัน command
+- งานที่ worker ถูกขัดจังหวะเปลี่ยนเป็น interrupted แทน failed
+- /resume ตรวจ hash ของไฟล์ checkpoint ก่อนทำต่อ
+- completed step ไม่สามารถถูกเปิดกลับมาทำซ้ำโดยไม่ revise plan
 
 Definition of done:
 job แบบหลายขั้นหยุดอย่างมีเหตุผล ตรวจผลได้ และไม่ claim success ถ้า verify ไม่ผ่าน
 
 
-Phase 5 - Approval and Change Control                    [PENDING]
+Phase 5 - Approval and Change Control                    [PENDING] <- NEXT
 ============================================================
 เป้าหมาย: ให้งานที่เสี่ยงต้องรอ user อนุมัติก่อนดำเนินการ
 
@@ -221,11 +224,10 @@ Phase นี้ไม่ควรเริ่มก่อน Phase 3-6 เสถ
 
 ลำดับที่ควรทำต่อ
 ================
-1. ทำ Phase 4 Retry and Safe Resume ให้เสร็จ
-2. ทำ Phase 5 Approval and Change Control
-3. ทำ Phase 6 Scheduler and Triggers
-4. ทำ Phase 7-8
-5. พิจารณา Phase 9 เมื่อจำเป็นจริง
+1. ทำ Phase 5 Approval and Change Control
+2. ทำ Phase 6 Scheduler and Triggers
+3. ทำ Phase 7-8
+4. พิจารณา Phase 9 เมื่อจำเป็นจริง
 
 กติกาหลักของทุก Phase
 ======================

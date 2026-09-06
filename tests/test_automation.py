@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import sqlite3
 
 from ai import AIExecutionResult
@@ -146,15 +147,30 @@ def test_job_store_rejects_second_plan_without_revision(tmp_path):
         raise AssertionError("an existing plan was silently replaced")
 
 
-def test_store_recovers_interrupted_jobs_as_failed(tmp_path):
+def test_completed_plan_step_cannot_be_reopened(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    job = store.create_job("update project")
+    store.claim_next_job()
+    store.create_plan(job.id, ["Inspect project"])
+    store.update_step(job.id, 1, StepStatus.COMPLETED, "done")
+
+    try:
+        store.update_step(job.id, 1, StepStatus.IN_PROGRESS)
+    except ValueError as error:
+        assert "cannot be reopened" in str(error)
+    else:
+        raise AssertionError("a completed checkpoint step was reopened")
+
+
+def test_store_recovers_interrupted_jobs_for_safe_resume(tmp_path):
     store = JobStore(tmp_path / "suto.db")
     job = store.create_job("long task")
     store.claim_next_job()
 
     assert store.recover_interrupted_jobs() == 1
     recovered = store.get_job(job.id)
-    assert recovered.status == JobStatus.FAILED
-    assert recovered.error == "worker stopped before job completed"
+    assert recovered.status == JobStatus.INTERRUPTED
+    assert "safe resume is available" in recovered.error
 
 
 def test_store_migrates_legacy_jobs_with_workspace_default(tmp_path):
@@ -186,6 +202,8 @@ def test_store_migrates_legacy_jobs_with_workspace_default(tmp_path):
     assert job.workspace == "."
     assert job.allow_write is False
     assert job.allow_command is False
+    assert job.attempt_count == 0
+    assert job.retry_count == 0
 
 
 async def test_worker_runs_job_and_records_progress(tmp_path):
@@ -358,6 +376,155 @@ async def test_runner_blocks_unverified_workspace_changes(tmp_path):
     assert "not followed by a successful" in blocked.error
 
 
+async def test_runner_retries_transient_failure_without_workspace_changes(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    job = store.create_job("inspect project", workspace=str(tmp_path))
+    claimed = store.claim_next_job()
+    prompts = []
+
+    async def execute(prompt, **kwargs):
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            return AIExecutionResult(
+                "try again",
+                "timed_out",
+                "AI processing timed out",
+                10,
+                2,
+                1,
+            )
+        return AIExecutionResult("done", "completed", None, 5, 1, 1)
+
+    await JobRunner(store, execute=execute, retry_delays=(0,)).run(claimed)
+
+    completed = store.get_job(job.id)
+    assert completed.status == JobStatus.COMPLETED
+    assert completed.retry_count == 1
+    assert completed.total_tokens == 18
+    assert len(prompts) == 2
+    assert "Resume checkpoint from an earlier attempt" in prompts[1]
+
+
+async def test_runner_does_not_retry_after_workspace_change(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    job = store.create_job("change project", workspace=str(tmp_path), allow_write=True)
+    claimed = store.claim_next_job()
+    calls = 0
+
+    async def execute(prompt, change_event_callback, **kwargs):
+        nonlocal calls
+        calls += 1
+        change_event_callback(
+            {
+                "path": "app.py",
+                "diff": "changed",
+                "before_sha256": "before",
+                "after_sha256": "after",
+            }
+        )
+        return AIExecutionResult("timeout", "timed_out", "timeout", 1, 1, 1)
+
+    await JobRunner(store, execute=execute, retry_delays=(0,)).run(claimed)
+
+    failed = store.get_job(job.id)
+    assert failed.status == JobStatus.FAILED
+    assert failed.retry_count == 0
+    assert calls == 1
+
+
+async def test_interrupted_job_resumes_from_persisted_plan(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    target = tmp_path / "app.py"
+    target.write_text("checkpoint\n", encoding="utf-8")
+    digest = hashlib.sha256(target.read_bytes()).hexdigest()
+    job = store.create_job(
+        "finish update",
+        workspace=str(tmp_path),
+        allow_write=True,
+        allow_command=True,
+    )
+    store.claim_next_job()
+    store.create_plan(job.id, ["Inspect", "Verify"])
+    store.update_step(job.id, 1, StepStatus.COMPLETED, "inspection done")
+    store.update_step(job.id, 2, StepStatus.IN_PROGRESS)
+    store.add_change_event(
+        job.id,
+        {
+            "path": "app.py",
+            "diff": "changed",
+            "before_sha256": "before",
+            "after_sha256": digest,
+        },
+    )
+    store.recover_interrupted_jobs()
+
+    assert store.list_steps(job.id)[1].status == StepStatus.PENDING
+    assert store.resume_job(job.id)
+    resumed = store.claim_next_job()
+    observed = {}
+
+    async def execute(prompt, execution_context, **kwargs):
+        observed["prompt"] = prompt
+        execution_context.plan_store.update_step(
+            job.id,
+            2,
+            StepStatus.COMPLETED,
+            "verification passed",
+        )
+        execution_context.command_event_callback(
+            {
+                "command": ["pytest", "-q"],
+                "status": "completed",
+                "exit_code": 0,
+                "stdout": "1 passed",
+                "stderr": "",
+                "elapsed_seconds": 0.1,
+            }
+        )
+        return AIExecutionResult("done", "completed", None, 5, 1, 1)
+
+    await JobRunner(store, execute=execute).run(resumed)
+
+    completed = store.get_job(job.id)
+    assert completed.status == JobStatus.COMPLETED
+    assert completed.attempt_count == 2
+    assert "Step 1 [completed]: Inspect" in observed["prompt"]
+    assert "Step 2 [pending]: Verify" in observed["prompt"]
+
+
+async def test_resume_blocks_when_checkpoint_file_changed_externally(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    target = tmp_path / "app.py"
+    target.write_text("checkpoint\n", encoding="utf-8")
+    job = store.create_job("continue", workspace=str(tmp_path))
+    store.claim_next_job()
+    store.add_change_event(
+        job.id,
+        {
+            "path": "app.py",
+            "diff": "changed",
+            "before_sha256": "before",
+            "after_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+        },
+    )
+    store.recover_interrupted_jobs()
+    target.write_text("external change\n", encoding="utf-8")
+    store.resume_job(job.id)
+    resumed = store.claim_next_job()
+    called = False
+
+    async def execute(prompt, **kwargs):
+        nonlocal called
+        called = True
+
+    await JobRunner(store, execute=execute).run(resumed)
+
+    blocked = store.get_job(job.id)
+    assert blocked.status == JobStatus.BLOCKED
+    assert "changed after checkpoint" in blocked.error
+    assert called is False
+
+
 async def test_worker_cancels_running_job(tmp_path):
     store = JobStore(tmp_path / "suto.db")
     started = asyncio.Event()
@@ -393,6 +560,31 @@ async def test_worker_cancels_running_job(tmp_path):
     await worker_task
 
     assert store.get_job(job.id).status == JobStatus.CANCELLED
+
+
+async def test_worker_shutdown_marks_running_job_interrupted(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    started = asyncio.Event()
+
+    async def execute(prompt, **kwargs):
+        started.set()
+        await asyncio.Event().wait()
+
+    worker = AutomationWorker(
+        store,
+        JobRunner(store, execute=execute),
+        poll_interval=0.01,
+    )
+    worker_task = asyncio.create_task(worker.start())
+    job = worker.submit("wait for restart", workspace=tmp_path)
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    await worker.stop()
+    await worker_task
+
+    interrupted = store.get_job(job.id)
+    assert interrupted.status == JobStatus.INTERRUPTED
+    assert "safe resume is available" in interrupted.error
 
 
 async def test_runner_rejects_completed_result_with_unfinished_plan(tmp_path):

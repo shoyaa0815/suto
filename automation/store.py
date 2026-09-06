@@ -46,6 +46,8 @@ class JobStore:
                     workspace TEXT NOT NULL DEFAULT '.',
                     allow_write INTEGER NOT NULL DEFAULT 0,
                     allow_command INTEGER NOT NULL DEFAULT 0,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
                     result TEXT,
                     error TEXT,
                     prompt_tokens INTEGER NOT NULL DEFAULT 0,
@@ -153,6 +155,16 @@ class JobStore:
                     "ALTER TABLE jobs ADD COLUMN allow_command "
                     "INTEGER NOT NULL DEFAULT 0"
                 )
+            if "attempt_count" not in columns:
+                connection.execute(
+                    "ALTER TABLE jobs ADD COLUMN attempt_count "
+                    "INTEGER NOT NULL DEFAULT 0"
+                )
+            if "retry_count" not in columns:
+                connection.execute(
+                    "ALTER TABLE jobs ADD COLUMN retry_count "
+                    "INTEGER NOT NULL DEFAULT 0"
+                )
 
     @staticmethod
     def _to_job(row: sqlite3.Row | None) -> Job | None:
@@ -168,6 +180,8 @@ class JobStore:
             workspace=row["workspace"],
             allow_write=bool(row["allow_write"]),
             allow_command=bool(row["allow_command"]),
+            attempt_count=int(row["attempt_count"]),
+            retry_count=int(row["retry_count"]),
             result=row["result"],
             error=row["error"],
             prompt_tokens=row["prompt_tokens"],
@@ -326,7 +340,8 @@ class JobStore:
             connection.execute(
                 """
                 UPDATE jobs
-                SET status = ?, started_at = ?, finished_at = NULL, error = NULL
+                SET status = ?, started_at = ?, finished_at = NULL, error = NULL,
+                    attempt_count = attempt_count + 1
                 WHERE id = ? AND status = ?
                 """,
                 (
@@ -430,6 +445,14 @@ class JobStore:
         events = self.list_tool_events(job_id, limit=1)
         return events[0] if events else None
 
+    def tool_event_count(self, job_id: str) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM tool_events WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        return int(row["count"])
+
     def add_change_event(self, job_id: str, event: dict) -> None:
         with self._connect() as connection:
             connection.execute(
@@ -478,6 +501,33 @@ class JobStore:
                 (job_id,),
             ).fetchone()
         return int(row["count"])
+
+    def change_event_count(self, job_id: str) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM change_events WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        return int(row["count"])
+
+    def latest_changes_by_path(self, job_id: str) -> list[ChangeEvent]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT current.* FROM change_events AS current
+                INNER JOIN (
+                    SELECT path, MAX(id) AS latest_id
+                    FROM change_events WHERE job_id = ? GROUP BY path
+                ) AS latest ON current.id = latest.latest_id
+                ORDER BY current.path ASC
+                """,
+                (job_id,),
+            ).fetchall()
+        return [
+            event
+            for row in rows
+            if (event := self._to_change_event(row)) is not None
+        ]
 
     def has_changed_path(self, job_id: str, path: str) -> bool:
         with self._connect() as connection:
@@ -596,6 +646,19 @@ class JobStore:
                     ),
                 )
             cursor = connection.execute(
+                "SELECT status FROM job_steps WHERE job_id = ? AND position = ?",
+                (job_id, position),
+            ).fetchone()
+            if cursor is None:
+                raise ValueError(f"step not found: {position}")
+            if (
+                StepStatus(cursor["status"]) == StepStatus.COMPLETED
+                and step_status != StepStatus.COMPLETED
+            ):
+                raise ValueError(
+                    "a completed step cannot be reopened; revise the plan instead"
+                )
+            cursor = connection.execute(
                 """
                 UPDATE job_steps SET status = ?, result = ?, updated_at = ?
                 WHERE job_id = ? AND position = ?
@@ -681,6 +744,14 @@ class JobStore:
     def latest_command_event(self, job_id: str) -> CommandEvent | None:
         events = self.list_command_events(job_id, limit=1)
         return events[0] if events else None
+
+    def command_event_count(self, job_id: str) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM command_events WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        return int(row["count"])
 
     def has_successful_verification_after_last_change(self, job_id: str) -> bool:
         with self._connect() as connection:
@@ -797,6 +868,97 @@ class JobStore:
             )
         return cursor.rowcount == 1
 
+    def update_job_usage(
+        self,
+        job_id: str,
+        prompt_tokens: int,
+        output_tokens: int,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE jobs SET prompt_tokens = ?, output_tokens = ?
+                WHERE id = ? AND status = ?
+                """,
+                (prompt_tokens, output_tokens, job_id, JobStatus.RUNNING),
+            )
+
+    def record_retry(
+        self,
+        job_id: str,
+        reason: str,
+        delay_seconds: float,
+        prompt_tokens: int,
+        output_tokens: int,
+    ) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET retry_count = retry_count + 1,
+                    prompt_tokens = ?, output_tokens = ?
+                WHERE id = ? AND status = ?
+                """,
+                (prompt_tokens, output_tokens, job_id, JobStatus.RUNNING),
+            )
+        if cursor.rowcount == 1:
+            self.add_event(
+                job_id,
+                {
+                    "activity": "retry",
+                    "detail": (
+                        f"retrying after transient error in {delay_seconds:g}s: "
+                        f"{reason}"
+                    ),
+                    "elapsed_seconds": 0,
+                    "total_tokens": prompt_tokens + output_tokens,
+                },
+            )
+            return True
+        return False
+
+    def interrupt_job(self, job_id: str, reason: str) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs SET status = ?, error = ?, finished_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                (
+                    JobStatus.INTERRUPTED,
+                    reason,
+                    _now(),
+                    job_id,
+                    JobStatus.RUNNING,
+                ),
+            )
+            if cursor.rowcount == 1:
+                connection.execute(
+                    """
+                    UPDATE job_steps SET status = ?, updated_at = ?
+                    WHERE job_id = ? AND status = ?
+                    """,
+                    (
+                        StepStatus.PENDING,
+                        _now(),
+                        job_id,
+                        StepStatus.IN_PROGRESS,
+                    ),
+                )
+        return cursor.rowcount == 1
+
+    def resume_job(self, job_id: str) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET status = ?, error = NULL, started_at = NULL, finished_at = NULL
+                WHERE id = ? AND status = ?
+                """,
+                (JobStatus.QUEUED, job_id, JobStatus.INTERRUPTED),
+            )
+        return cursor.rowcount == 1
+
     def cancel_job(self, job_id: str) -> bool:
         with self._connect() as connection:
             cursor = connection.execute(
@@ -817,6 +979,14 @@ class JobStore:
 
     def recover_interrupted_jobs(self) -> int:
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            running_ids = [
+                row["id"]
+                for row in connection.execute(
+                    "SELECT id FROM jobs WHERE status = ?",
+                    (JobStatus.RUNNING,),
+                ).fetchall()
+            ]
             cursor = connection.execute(
                 """
                 UPDATE jobs
@@ -824,10 +994,24 @@ class JobStore:
                 WHERE status = ?
                 """,
                 (
-                    JobStatus.FAILED,
-                    "worker stopped before job completed",
+                    JobStatus.INTERRUPTED,
+                    "worker stopped before job completed; safe resume is available",
                     _now(),
                     JobStatus.RUNNING,
                 ),
             )
+            if running_ids:
+                placeholders = ",".join("?" for _ in running_ids)
+                connection.execute(
+                    f"""
+                    UPDATE job_steps SET status = ?, updated_at = ?
+                    WHERE job_id IN ({placeholders}) AND status = ?
+                    """,
+                    (
+                        StepStatus.PENDING,
+                        _now(),
+                        *running_ids,
+                        StepStatus.IN_PROGRESS,
+                    ),
+                )
         return cursor.rowcount

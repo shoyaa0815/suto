@@ -64,12 +64,15 @@ The CLI includes a persistent single-worker automation queue:
 /commands <job_id>  show commands executed by a job and their captured output
 /changes <job_id>   show the files and unified diffs changed by a job
 /cancel <job_id>    cancel a queued or running job
+/resume <job_id>    safely resume an interrupted job from its checkpoint
 ```
 
 Jobs and progress events are stored in `data/suto.db` by default. Set
-`SUTO_DB_PATH` to use another database file. Queued jobs survive restarts; a job
-left in `running` state by an interrupted process is marked failed on the next
-start to avoid repeating future actions silently.
+`SUTO_DB_PATH` to use another database file. Queued jobs survive restarts. A job
+left in `running` state by an interrupted process becomes `interrupted`;
+`/resume` first validates the hashes of files changed by the earlier attempt,
+preserves completed plan steps, and continues only when the checkpoint still
+matches the workspace.
 
 Automation jobs run in `agent` mode and may list, search, and read files only
 inside the workspace assigned at submission. The default workspace is the
@@ -103,6 +106,12 @@ call is treated as a loop. Jobs that hit one of these limits enter the
 `blocked` state with a persistent reason. If a job changes files, it must run a
 successful `pytest`, `compileall`, or `ruff` verification after the latest
 change before it can be marked completed.
+
+Transient AI connection failures and timeouts are retried up to 3 times with
+1, 2, and 4 second backoff. Retries are allowed only when the failed attempt
+did not change a file or run a command. Retry counts, cumulative token usage,
+and progress are persisted in SQLite. Completed checkpoint steps cannot be
+reopened accidentally.
 
 Command permission should be granted only to trusted workspaces: `pytest` runs
 the project's Python code, so an allowlist alone is not an operating-system

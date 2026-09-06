@@ -9,6 +9,7 @@ class JobStatus(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     BLOCKED = "blocked"
+    INTERRUPTED = "interrupted"
 
 
 class StepStatus(StrEnum):
@@ -29,6 +30,8 @@ class Job:
     workspace: str
     allow_write: bool
     allow_command: bool
+    attempt_count: int
+    retry_count: int
     result: str | None
     error: str | None
     prompt_tokens: int

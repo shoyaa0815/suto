@@ -22,6 +22,7 @@ def test_print_help_lists_exit_commands(capsys):
     assert "/exit" in output
     assert "/quit" in output
     assert "/plan" in output
+    assert "/resume" in output
 
 
 def test_agent_help_explains_conversational_tasks(capsys):

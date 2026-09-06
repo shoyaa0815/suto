@@ -52,6 +52,12 @@ class AutomationWorker:
         self._wake.set()
         return cancelled
 
+    def resume(self, job_id: str) -> bool:
+        resumed = self.store.resume_job(job_id)
+        if resumed:
+            self._wake.set()
+        return resumed
+
     async def start(self) -> None:
         self.store.recover_interrupted_jobs()
         while not self._stopping:

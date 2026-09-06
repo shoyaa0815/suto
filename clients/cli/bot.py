@@ -21,6 +21,7 @@ TERMINAL_JOB_STATUSES = frozenset(
         JobStatus.FAILED,
         JobStatus.CANCELLED,
         JobStatus.BLOCKED,
+        JobStatus.INTERRUPTED,
     }
 )
 
@@ -43,6 +44,7 @@ def _print_help(mode: str | None = None) -> None:
     print("  /commands <job_id>  show commands executed by a job")
     print("  /changes <job_id>  show files changed by a job")
     print("  /cancel <job_id>  cancel a queued or running job")
+    print("  /resume <job_id>  safely resume an interrupted job")
     print("  /exit  exit suto")
     print("  /quit  exit suto")
 
@@ -101,6 +103,7 @@ def _print_job_status(store: JobStore, job_id: str) -> None:
     permission = "read/write" if job.allow_write else "read-only"
     print(f"Workspace access: {permission}")
     print(f"Command execution: {'allowed' if job.allow_command else 'blocked'}")
+    print(f"Attempts: {job.attempt_count} (automatic retries: {job.retry_count})")
     print(f"Tokens: {job.total_tokens:,}")
     current_step = store.current_step(job.id)
     if current_step is not None:
@@ -269,6 +272,8 @@ def _print_automatic_job_result(job: Job) -> None:
         print(f"suto> Job {job.id} was cancelled.")
     elif job.status == JobStatus.BLOCKED:
         print(f"suto> Job {job.id} was blocked: {job.error or 'unknown reason'}")
+    elif job.status == JobStatus.INTERRUPTED:
+        print(f"suto> Job {job.id} was interrupted. Resume it with /resume {job.id}.")
     else:
         print(f"suto> Job {job.id} failed: {job.error or 'unknown error'}")
 
@@ -358,6 +363,15 @@ async def _chat_loop(mode: str) -> None:
                     print(f"Cancelled job {argument}")
                 else:
                     print(f"Job cannot be cancelled: {argument}")
+                continue
+            if command == "/resume":
+                if not argument:
+                    print("usage: /resume <job_id>")
+                    continue
+                if worker.resume(argument):
+                    print(f"Resumed job {argument}")
+                else:
+                    print(f"Job cannot be resumed: {argument}")
                 continue
 
             if prompt.startswith("/"):
