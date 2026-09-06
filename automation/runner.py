@@ -45,6 +45,7 @@ class JobRunner:
                 "clientconnectorerror",
                 "serverdisconnectederror",
                 "connection reset",
+                "providertransienterror",
             )
         )
 

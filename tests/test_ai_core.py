@@ -183,3 +183,38 @@ async def test_progress_reports_tool_and_loop(monkeypatch):
     assert any(update["activity"] == "tool_done" for update in updates)
     assert updates[-1]["total_tokens"] == 270
 
+
+async def test_tool_result_preserves_provider_tool_call_id(monkeypatch):
+    calls = 0
+
+    async def fake_chat(session, messages, tool_schemas, think=False):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_current_datetime",
+                                "arguments": {},
+                            },
+                        }
+                    ],
+                }
+            }
+
+        tool_message = next(
+            message for message in messages if message["role"] == "tool"
+        )
+        assert tool_message["tool_call_id"] == "call_123"
+        return {"message": {"role": "assistant", "content": "done"}}
+
+    monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
+    monkeypatch.setattr(ai.client, "chat", fake_chat)
+
+    assert await ai.ask_local_ai("current time", mode="chat") == "done"

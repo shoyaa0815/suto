@@ -137,9 +137,9 @@ async def execute_local_ai(
 
     _, tool_schemas, tool_guidance = get_tools(allowed_tools)
     timeout = aiohttp.ClientTimeout(
-        total=config.OLLAMA_TIMEOUT_SECONDS,
+        total=config.AI_TIMEOUT_SECONDS,
         connect=10,
-        sock_read=config.OLLAMA_TIMEOUT_SECONDS,
+        sock_read=config.AI_TIMEOUT_SECONDS,
     )
     messages = [
         {
@@ -332,7 +332,10 @@ async def execute_local_ai(
                             "error": tool_error,
                         },
                     )
-                    messages.append({"role": "tool", "content": str(result)})
+                    tool_message = {"role": "tool", "content": str(result)}
+                    if call.get("id"):
+                        tool_message["tool_call_id"] = call["id"]
+                    messages.append(tool_message)
                     await progress.emit(
                         "tool_done",
                         f"{tool_outcome} {detail} in {elapsed_ms / 1000:.1f}s",
@@ -359,9 +362,9 @@ async def execute_local_ai(
             error=outcome,
         )
     except (asyncio.TimeoutError, TimeoutError) as error:
-        outcome = f"timed out after {config.OLLAMA_TIMEOUT_SECONDS}s"
+        outcome = f"timed out after {config.AI_TIMEOUT_SECONDS}s"
         config.debug(
-            f"[ai] timeout after {config.OLLAMA_TIMEOUT_SECONDS}s: {error!r}"
+            f"[ai] timeout after {config.AI_TIMEOUT_SECONDS}s: {error!r}"
         )
         if reply_language.code == "th":
             text = "AI ใช้เวลาประมวลผลนานเกินไป กรุณาลองใหม่อีกครั้ง"

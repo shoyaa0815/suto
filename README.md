@@ -23,17 +23,60 @@ python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 ```
 
-Copy `.env.example` to `.env` to override the local model or runtime limits.
-All settings are optional; omitted values keep the documented defaults:
+Create a `.env` file in the project root for credentials, AI provider settings,
+and runtime limits. The file is ignored by Git and must not be committed. All
+settings are optional; omitted values use the defaults shown below. Restart
+Suto after changing `.env` because settings are loaded when the process starts.
 
-```bash
-cp .env.example .env
+Ollama is the default provider:
+
+```dotenv
+AI_PROVIDER=ollama
+AI_BASE_URL=http://localhost:11434
+AI_MODEL=qwen3.5:9b
+AI_API_KEY=
+AI_TIMEOUT_SECONDS=300
+AI_TEMPERATURE=0.2
 ```
 
-Common settings include `OLLAMA_URL`, `OLLAMA_MODEL`, `MAX_JOB_SECONDS`,
-`MAX_JOB_TOKENS`, `MAX_TOOL_CALLS`, and `MAX_CHANGED_FILES`. Invalid numeric
-values fail at startup with the setting name and expected range. Restart Suto
-after changing `.env` because settings are loaded when the process starts.
+To use OpenAI's Chat Completions API, set a supported model and keep the API key
+only in your local `.env` file:
+
+```dotenv
+AI_PROVIDER=openai
+AI_BASE_URL=https://api.openai.com/v1
+AI_MODEL=your-model
+AI_API_KEY=your-secret-key
+```
+
+For another service exposing an OpenAI-compatible Chat Completions endpoint,
+use `AI_PROVIDER=openai-compatible` and set its base URL, model, and API key if
+the service requires one. Suto appends `/chat/completions` automatically.
+Existing `OLLAMA_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT_SECONDS`, and
+`OLLAMA_TEMPERATURE` values remain accepted for backward compatibility.
+
+The remaining request, automation, storage, and diagnostic settings can be
+added to the same `.env` file:
+
+```dotenv
+MAX_TOOL_ROUNDS=6
+MAX_AGENT_TOOL_ROUNDS=20
+MAX_LANGUAGE_CORRECTIONS=2
+PROGRESS_INTERVAL_SECONDS=10
+
+MAX_JOB_SECONDS=900
+MAX_JOB_TOKENS=100000
+MAX_TOOL_CALLS=40
+MAX_CHANGED_FILES=10
+REPEATED_TOOL_CALL_LIMIT=3
+
+SUTO_DB_PATH=data/suto.db
+SUTO_DEBUG=0
+```
+
+Client credentials such as `DISCORD_TOKEN`, `LINE_CHANNEL_SECRET`, and
+`LINE_CHANNEL_ACCESS_TOKEN` belong in this same local `.env` file. Never put
+real credentials in README, source code, commits, or GitHub.
 
 ## Run
 
@@ -135,7 +178,7 @@ redirects, background processes, and network tools are not available.
 
 - `main.py` — entry point that selects a harness mode
 - `clients/cli/` — interactive terminal shell
-- `ai/` — shared AI runtime, Ollama client, prompts, progress, tool loop, and
+- `ai/` — shared AI runtime, provider adapters, prompts, progress, tool loop, and
   token accounting
 - `automation/` — execution context, job store, runner, and background worker
 - `core/modes.py` — capability policies for interactive chat and automation
