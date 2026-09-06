@@ -97,6 +97,13 @@ the assigned workspace, with a scrubbed environment, timeout, and output limit.
 Every execution records its arguments, status, exit code, elapsed time, stdout,
 and stderr for `/commands`. `compileall` additionally requires `--allow-write`.
 
+Each automation job is also limited to 15 minutes, 100,000 accumulated model
+tokens, 40 tool calls, and 10 distinct changed files. A third identical tool
+call is treated as a loop. Jobs that hit one of these limits enter the
+`blocked` state with a persistent reason. If a job changes files, it must run a
+successful `pytest`, `compileall`, or `ruff` verification after the latest
+change before it can be marked completed.
+
 Command permission should be granted only to trusted workspaces: `pytest` runs
 the project's Python code, so an allowlist alone is not an operating-system
 sandbox. Package installation, arbitrary Python scripts, shell pipelines,

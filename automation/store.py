@@ -470,6 +470,23 @@ class JobStore:
             if (event := self._to_change_event(row)) is not None
         ]
 
+    def changed_file_count(self, job_id: str) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(DISTINCT path) AS count "
+                "FROM change_events WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        return int(row["count"])
+
+    def has_changed_path(self, job_id: str, path: str) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM change_events WHERE job_id = ? AND path = ? LIMIT 1",
+                (job_id, path),
+            ).fetchone()
+        return row is not None
+
     def create_plan(self, job_id: str, descriptions: list[str]) -> list[JobStep]:
         """Create the first plan for a job without replacing an existing one."""
         return self._write_plan(job_id, descriptions, replace=False)
@@ -665,6 +682,40 @@ class JobStore:
         events = self.list_command_events(job_id, limit=1)
         return events[0] if events else None
 
+    def has_successful_verification_after_last_change(self, job_id: str) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT created_at FROM change_events "
+                "WHERE job_id = ? ORDER BY id DESC LIMIT 1",
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            return True
+        last_change_at = row["created_at"]
+        for event in self.list_command_events(job_id, limit=100):
+            if (
+                event.created_at < last_change_at
+                or event.status != "completed"
+                or event.exit_code != 0
+            ):
+                continue
+            try:
+                command = json.loads(event.command)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not command:
+                continue
+            if command[0] in {"pytest", "ruff"}:
+                return True
+            if (
+                command[0] in {"python", "python3"}
+                and len(command) >= 3
+                and command[1] == "-m"
+                and command[2] in {"pytest", "compileall"}
+            ):
+                return True
+        return False
+
     def complete_job(
         self,
         job_id: str,
@@ -710,6 +761,33 @@ class JobStore:
                 (
                     JobStatus.FAILED,
                     error,
+                    prompt_tokens,
+                    output_tokens,
+                    _now(),
+                    job_id,
+                    JobStatus.RUNNING,
+                ),
+            )
+        return cursor.rowcount == 1
+
+    def block_job(
+        self,
+        job_id: str,
+        reason: str,
+        prompt_tokens: int = 0,
+        output_tokens: int = 0,
+    ) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET status = ?, error = ?, prompt_tokens = ?,
+                    output_tokens = ?, finished_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                (
+                    JobStatus.BLOCKED,
+                    reason,
                     prompt_tokens,
                     output_tokens,
                     _now(),

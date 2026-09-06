@@ -3,6 +3,7 @@ from clients.cli.bot import (
     _parse_run,
     _print_commands,
     _print_help,
+    _print_job_status,
     _print_plan,
     _submit_agent_prompt,
 )
@@ -52,6 +53,19 @@ def test_conversational_agent_prompt_gets_full_workspace_access(tmp_path):
             "allow_command": True,
         },
     )
+
+
+def test_job_status_labels_blocked_reason(tmp_path, capsys):
+    store = JobStore(tmp_path / "suto.db")
+    job = store.create_job("loop forever")
+    store.claim_next_job()
+    store.block_job(job.id, "repeated tool call")
+
+    _print_job_status(store, job.id)
+
+    output = capsys.readouterr().out
+    assert "Status: blocked" in output
+    assert "Blocked reason: repeated tool call" in output
 
 
 def test_print_plan_shows_persistent_steps(tmp_path, capsys):

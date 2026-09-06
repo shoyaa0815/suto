@@ -10,6 +10,7 @@ from .context import (
     READ_ONLY_WORKSPACE_TOOLS,
     WRITE_WORKSPACE_TOOLS,
     ExecutionContext,
+    ExecutionLimitExceeded,
 )
 from .models import Job, JobStatus, StepStatus
 from .store import JobStore
@@ -39,6 +40,16 @@ class JobRunner:
         def save_command_event(event: dict) -> None:
             self.store.add_command_event(job.id, event)
 
+        def guard_file_change(path: str) -> None:
+            limits = context.limits
+            if self.store.has_changed_path(job.id, path):
+                return
+            if self.store.changed_file_count(job.id) >= limits.max_changed_files:
+                raise ExecutionLimitExceeded(
+                    "job file-change limit reached "
+                    f"({limits.max_changed_files} distinct files)"
+                )
+
         try:
             allowed_tools = READ_ONLY_WORKSPACE_TOOLS
             allowed_tools = allowed_tools | PLANNING_TOOLS
@@ -52,6 +63,7 @@ class JobRunner:
                 allowed_tools=allowed_tools,
                 plan_store=self.store,
                 command_event_callback=save_command_event,
+                change_guard_callback=guard_file_change,
             )
             result = await self.execute(
                 job.prompt,
@@ -74,6 +86,15 @@ class JobRunner:
             return
 
         if result.status == "completed":
+            if not self.store.has_successful_verification_after_last_change(job.id):
+                self.store.block_job(
+                    job.id,
+                    "workspace changes were not followed by a successful "
+                    "pytest, compileall, or ruff verification",
+                    result.prompt_tokens,
+                    result.output_tokens,
+                )
+                return
             steps = self.store.list_steps(job.id)
             unfinished = [
                 step.position
@@ -106,6 +127,13 @@ class JobRunner:
             self.store.complete_job(
                 job.id,
                 result.text,
+                result.prompt_tokens,
+                result.output_tokens,
+            )
+        elif result.status == "blocked":
+            self.store.block_job(
+                job.id,
+                result.error or result.text or "execution blocked",
                 result.prompt_tokens,
                 result.output_tokens,
             )

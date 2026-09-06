@@ -23,7 +23,8 @@ PROMPT = """- Workspace tools are available only for automation jobs.
 - apply_workspace_patch is available only for jobs explicitly created with
   write permission. Read an existing file first and pass its sha256 as
   expected_sha256. The tool replaces the complete file content atomically.
-- Never claim to run commands or delete files.
+- Never claim to have run a command unless run_workspace_command returned its
+  result. File deletion is unavailable.
 - All paths must be relative to the workspace. Never try to escape it with
   parent paths or external symlinks."""
 
@@ -282,6 +283,9 @@ def build_workspace_tools(
             return f"expected_sha256 must be omitted when creating a new file: {path}"
         if new_data == old_data and existed:
             return f"no changes for workspace file: {relative_path}"
+
+        if context.change_guard_callback is not None:
+            context.change_guard_callback(relative_path)
 
         old_text = old_data.decode("utf-8", errors="replace")
         diff = "".join(

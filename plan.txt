@@ -1,16 +1,16 @@
 SUTO AUTOMATION ROADMAP
-อัปเดตล่าสุด: 2026-08-30
+อัปเดตล่าสุด: 2026-09-06
 
 สถานะรวม
 ========
-ตอนนี้ทำถึง Phase 2B แล้ว
-Phase 0, Phase 1, Phase 2A และ Phase 2B ทำเสร็จแล้ว
-Phase 2A-2B ยังเป็นไฟล์ที่แก้ค้างอยู่ใน working tree และยังไม่ได้ commit
-งานถัดไปที่แนะนำ: Phase 3 - Safe command execution
+ตอนนี้ทำถึง Phase 4 แล้ว
+Phase 0-3 ทำเสร็จแล้ว และ Phase 4 ทำส่วน plan, verify และ guardrails แล้ว
+งานถัดไปที่แนะนำ: Phase 4 - Retry and Safe Resume
 
 สัญลักษณ์สถานะ
 ===============
 [DONE]    ทำเสร็จและมี test
+[IN PROGRESS] กำลังพัฒนา บางส่วนใช้งานได้แล้ว
 [PENDING] ยังไม่ได้ทำ
 [LATER]   ทำภายหลังได้ ไม่ขวาง automation ขั้นหลัก
 
@@ -78,11 +78,10 @@ Phase 2B - Opt-in Workspace Write                       [DONE]
 - tool audit ไม่เก็บเนื้อหาไฟล์เต็ม
 - ยังไม่อนุญาตลบไฟล์หรือรัน command
 
-ผลทดสอบปัจจุบัน: 93 tests passed
-สถานะ Git: Phase 2A และ 2B ยังไม่ได้ commit
+ผลทดสอบใน Phase นี้ผ่านแล้ว
 
 
-Phase 3 - Safe Command Execution                        [PENDING] <- NEXT
+Phase 3 - Safe Command Execution                        [DONE]
 ============================================================
 เป้าหมาย: ให้ automation รัน test, formatter และคำสั่งที่จำเป็นได้
 
@@ -103,7 +102,7 @@ Definition of done:
 agent แก้ไฟล์แล้วรัน test เพื่อตรวจงานได้ โดยต้องได้รับสิทธิ์จาก user
 
 
-Phase 4 - Plan, Verify and Recovery                      [PENDING]
+Phase 4 - Plan, Verify and Recovery                      [IN PROGRESS] <- NEXT
 ============================================================
 เป้าหมาย: ทำงานหลายขั้นได้เสถียร ไม่วนลูปและรู้ว่างานสำเร็จจริง
 
@@ -117,6 +116,17 @@ Phase 4 - Plan, Verify and Recovery                      [PENDING]
 - resume งานจาก checkpoint ที่ปลอดภัย
 - สรุปว่าแก้อะไร ตรวจอะไร และอะไรยังไม่สำเร็จ
 - เพิ่ม /plan <job_id> และแสดง blocked reason ใน /status
+
+ทำแล้ว:
+- durable plan และสถานะ step ใน SQLite
+- verification commands และ completion gate หลังแก้ไฟล์
+- จำกัด 15 นาที, 100,000 tokens, 40 tool calls และ 10 ไฟล์ต่อ job
+- ตรวจจับ tool call เดิมซ้ำ 3 ครั้ง
+- สถานะ blocked พร้อมเหตุผลถาวร
+
+ยังเหลือ:
+- retry เฉพาะ transient error พร้อม backoff
+- resume จาก checkpoint ที่ปลอดภัยหลัง worker ถูกขัดจังหวะ
 
 Definition of done:
 job แบบหลายขั้นหยุดอย่างมีเหตุผล ตรวจผลได้ และไม่ claim success ถ้า verify ไม่ผ่าน
@@ -211,13 +221,11 @@ Phase นี้ไม่ควรเริ่มก่อน Phase 3-6 เสถ
 
 ลำดับที่ควรทำต่อ
 ================
-1. Commit Phase 2A-2B ที่ทำเสร็จแล้ว
-2. ทำ Phase 3 Safe Command Execution
-3. ทำ Phase 4 Plan, Verify and Recovery
-4. ทำ Phase 5 Approval and Change Control
-5. ทำ Phase 6 Scheduler and Triggers
-6. ทำ Phase 7-8
-7. พิจารณา Phase 9 เมื่อจำเป็นจริง
+1. ทำ Phase 4 Retry and Safe Resume ให้เสร็จ
+2. ทำ Phase 5 Approval and Change Control
+3. ทำ Phase 6 Scheduler and Triggers
+4. ทำ Phase 7-8
+5. พิจารณา Phase 9 เมื่อจำเป็นจริง
 
 กติกาหลักของทุก Phase
 ======================

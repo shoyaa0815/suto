@@ -7,6 +7,7 @@ from automation.context import (
     READ_ONLY_WORKSPACE_TOOLS,
     WRITE_WORKSPACE_TOOLS,
     ExecutionContext,
+    ExecutionLimitExceeded,
 )
 from tools.workspace import build_workspace_tools
 
@@ -143,3 +144,21 @@ def test_workspace_patch_creates_new_file_and_blocks_external_symlink(tmp_path):
             expected_sha256=hashlib.sha256(b"secret").hexdigest(),
         )
     assert outside.read_text(encoding="utf-8") == "secret"
+
+
+def test_workspace_patch_checks_change_budget_before_writing(tmp_path):
+    def reject_change(path):
+        raise ExecutionLimitExceeded("job file-change limit reached")
+
+    context = ExecutionContext(
+        "job_limited",
+        tmp_path,
+        allowed_tools=READ_ONLY_WORKSPACE_TOOLS | WRITE_WORKSPACE_TOOLS,
+        change_guard_callback=reject_change,
+    )
+    tools = build_workspace_tools(context)
+
+    with pytest.raises(ExecutionLimitExceeded, match="file-change limit"):
+        tools["apply_workspace_patch"]("blocked.txt", "content")
+
+    assert not (tmp_path / "blocked.txt").exists()

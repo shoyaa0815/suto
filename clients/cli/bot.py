@@ -16,7 +16,12 @@ from core.modes import get_mode_policy
 
 EXIT_COMMANDS = frozenset({"/exit", "/quit"})
 TERMINAL_JOB_STATUSES = frozenset(
-    {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}
+    {
+        JobStatus.COMPLETED,
+        JobStatus.FAILED,
+        JobStatus.CANCELLED,
+        JobStatus.BLOCKED,
+    }
 )
 
 
@@ -132,7 +137,8 @@ def _print_job_status(store: JobStore, job_id: str) -> None:
     if job.result:
         print(f"Result:\n{job.result}")
     if job.error:
-        print(f"Error: {job.error}")
+        label = "Blocked reason" if job.status == JobStatus.BLOCKED else "Error"
+        print(f"{label}: {job.error}")
 
 
 def _print_plan(store: JobStore, job_id: str) -> None:
@@ -261,6 +267,8 @@ def _print_automatic_job_result(job: Job) -> None:
         print(f"suto> {job.result or 'Task completed.'}")
     elif job.status == JobStatus.CANCELLED:
         print(f"suto> Job {job.id} was cancelled.")
+    elif job.status == JobStatus.BLOCKED:
+        print(f"suto> Job {job.id} was blocked: {job.error or 'unknown reason'}")
     else:
         print(f"suto> Job {job.id} failed: {job.error or 'unknown error'}")
 

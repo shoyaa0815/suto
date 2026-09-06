@@ -15,6 +15,19 @@ PLANNING_TOOLS = frozenset({"create_plan", "update_step", "revise_plan"})
 COMMAND_TOOLS = frozenset({"run_workspace_command"})
 
 
+class ExecutionLimitExceeded(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class ExecutionLimits:
+    max_elapsed_seconds: float = 900
+    max_tokens: int = 100_000
+    max_tool_calls: int = 40
+    max_changed_files: int = 10
+    repeated_tool_call_limit: int = 3
+
+
 @dataclass(frozen=True)
 class ExecutionContext:
     job_id: str
@@ -22,6 +35,8 @@ class ExecutionContext:
     allowed_tools: frozenset[str] = READ_ONLY_WORKSPACE_TOOLS
     plan_store: object | None = None
     command_event_callback: object | None = None
+    change_guard_callback: object | None = None
+    limits: ExecutionLimits = ExecutionLimits()
 
     def __post_init__(self) -> None:
         resolved = self.workspace.expanduser().resolve()

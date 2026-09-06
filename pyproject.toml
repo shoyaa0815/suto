@@ -1,7 +1,7 @@
 [project]
 name = "suto"
 version = "0.1.0"
-description = "Chat bot powered by a local Ollama model with request-scoped tools"
+description = "Ai agent powered by a local Ollama model with request-scoped tools"
 requires-python = ">=3.12"
 dependencies = [
     "discord.py>=2.7.1",

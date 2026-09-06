@@ -230,6 +230,16 @@ async def test_worker_runs_job_and_records_progress(tmp_path):
                 "after_sha256": "after",
             }
         )
+        execution_context.command_event_callback(
+            {
+                "command": ["pytest", "-q"],
+                "status": "completed",
+                "exit_code": 0,
+                "stdout": "1 passed",
+                "stderr": "",
+                "elapsed_seconds": 0.1,
+            }
+        )
         return AIExecutionResult(
             text=f"finished: {prompt}",
             status="completed",
@@ -268,6 +278,84 @@ async def test_worker_runs_job_and_records_progress(tmp_path):
     assert tool_event.tool_name == "read_workspace_file"
     assert tool_event.status == "finished"
     assert store.list_change_events(job.id)[0].path == "README.md"
+
+
+def test_job_store_blocks_job_with_persistent_reason(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    job = store.create_job("unsafe loop")
+    store.claim_next_job()
+
+    assert store.block_job(job.id, "tool loop detected", 20, 5)
+
+    blocked = store.get_job(job.id)
+    assert blocked.status == JobStatus.BLOCKED
+    assert blocked.error == "tool loop detected"
+    assert blocked.total_tokens == 25
+
+
+def test_verification_must_succeed_after_latest_change(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    job = store.create_job("update code", allow_write=True, allow_command=True)
+    store.add_change_event(
+        job.id,
+        {
+            "path": "app.py",
+            "diff": "changed",
+            "before_sha256": "before",
+            "after_sha256": "after",
+        },
+    )
+
+    assert not store.has_successful_verification_after_last_change(job.id)
+
+    store.add_command_event(
+        job.id,
+        {
+            "command": ["git", "status", "--short"],
+            "status": "completed",
+            "exit_code": 0,
+            "stdout": "",
+            "stderr": "",
+            "elapsed_seconds": 0.1,
+        },
+    )
+    assert not store.has_successful_verification_after_last_change(job.id)
+
+    store.add_command_event(
+        job.id,
+        {
+            "command": ["pytest", "-q"],
+            "status": "completed",
+            "exit_code": 0,
+            "stdout": "1 passed",
+            "stderr": "",
+            "elapsed_seconds": 0.1,
+        },
+    )
+    assert store.has_successful_verification_after_last_change(job.id)
+
+
+async def test_runner_blocks_unverified_workspace_changes(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    job = store.create_job("change code", workspace=str(tmp_path), allow_write=True)
+    claimed = store.claim_next_job()
+
+    async def execute(prompt, **kwargs):
+        kwargs["change_event_callback"](
+            {
+                "path": "app.py",
+                "diff": "changed",
+                "before_sha256": "before",
+                "after_sha256": "after",
+            }
+        )
+        return AIExecutionResult("done", "completed", None, 10, 2, 0.1)
+
+    await JobRunner(store, execute=execute).run(claimed)
+
+    blocked = store.get_job(job.id)
+    assert blocked.status == JobStatus.BLOCKED
+    assert "not followed by a successful" in blocked.error
 
 
 async def test_worker_cancels_running_job(tmp_path):
