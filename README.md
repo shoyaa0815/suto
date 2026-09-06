@@ -7,8 +7,9 @@ token accounting.
 The current `chat` mode is the interactive shell for exercising the harness
 with web, date/time, and attached-document tools. The `agent` mode provides the
 automation execution path with persistent jobs and restricted workspace tools.
-Jobs are read-only by default and may receive explicit file-write permission.
-Command execution and scheduling are intentionally not implemented yet.
+Jobs are read-only by default and may receive explicit file-write or controlled
+verification-command permission. Scheduling is intentionally not implemented
+yet.
 
 ## Prerequisites
 
@@ -42,10 +43,12 @@ enable raw developer timing logs.
 The CLI includes a persistent single-worker automation queue:
 
 ```text
-/run [--workspace <path>] [--allow-write] <task>
+/run [--workspace <path>] [--allow-write] [--allow-command] <task>
                     create a background automation job
 /jobs               list recent jobs
 /status <job_id>    show progress, result, errors, and token usage
+/plan <job_id>      show the job's current ordered plan and step statuses
+/commands <job_id>  show commands executed by a job and their captured output
 /changes <job_id>   show the files and unified diffs changed by a job
 /cancel <job_id>    cancel a queued or running job
 ```
@@ -60,13 +63,31 @@ inside the workspace assigned at submission. The default workspace is the
 current directory. Add `--allow-write` to let that one job create or replace
 text files. Existing files must be read first and are changed only when their
 SHA-256 still matches, preventing stale writes. Writes use an atomic replace;
-file deletion and command execution are unavailable.
+file deletion and arbitrary shell execution are unavailable.
 
 Resolved paths and symlinks are checked to prevent access outside the
 workspace. Every tool call records its arguments, status, elapsed time, result
 size, and error. File content is omitted from tool-call arguments. Successful
 writes additionally record the path, before/after hashes, and unified diff for
 `/changes`.
+
+For multi-step work, the agent can create a durable ordered plan, mark each step
+as pending, in progress, completed, or failed, and replace the plan when new
+information changes the approach. Plans survive restarts with their jobs. Use
+`/plan <job_id>` to inspect the full plan; `/status <job_id>` shows the current
+step. A job with an unfinished plan cannot be marked completed.
+
+Add `--allow-command` to grant one job access to a small allowlist of verification
+commands: `git status`, `git diff`, `pytest`, `python -m pytest`,
+`python -m compileall`, and `ruff check`. Commands run without a shell, inside
+the assigned workspace, with a scrubbed environment, timeout, and output limit.
+Every execution records its arguments, status, exit code, elapsed time, stdout,
+and stderr for `/commands`. `compileall` additionally requires `--allow-write`.
+
+Command permission should be granted only to trusted workspaces: `pytest` runs
+the project's Python code, so an allowlist alone is not an operating-system
+sandbox. Package installation, arbitrary Python scripts, shell pipelines,
+redirects, background processes, and network tools are not available.
 
 ## Harness structure
 
@@ -90,8 +111,8 @@ entire process:
 - `chat` — interactive harness mode for testing and using the current web,
   date/time, and attached-file tools.
 - `agent` — persistent automation jobs with workspace listing, searching, and
-  file reading. File writes require `--allow-write`; commands and scheduling
-  remain unavailable.
+  file reading. File writes require `--allow-write`; controlled verification
+  commands require `--allow-command`; scheduling remains unavailable.
 
 Tool access is enforced twice: the model only receives schemas allowed by the
 selected mode, and the Python execution loop rejects any disallowed tool

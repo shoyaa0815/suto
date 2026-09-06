@@ -21,6 +21,10 @@ def test_agent_mode_has_restricted_workspace_tools():
         "read_workspace_file",
         "search_workspace",
         "apply_workspace_patch",
+        "create_plan",
+        "update_step",
+        "revise_plan",
+        "run_workspace_command",
     }
     assert policy.allowed_tools == expected
 

@@ -12,11 +12,20 @@ import aiohttp
 from automation.context import ALL_WORKSPACE_TOOLS, ExecutionContext
 from core.language import ReplyLanguage, choose_reply_language, detect_language_code
 from core.modes import DEFAULT_MODE, get_mode_policy
-from tools import build_attachment_tools, build_workspace_tools, get_tools
+from tools import (
+    PLANNING_TOOL_NAMES,
+    COMMAND_TOOL_NAMES,
+    build_attachment_tools,
+    build_command_tools,
+    build_planning_tools,
+    build_workspace_tools,
+    get_tools,
+)
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_MODEL = "qwen3.5:9b"
 MAX_TOOL_ROUNDS = 6
+MAX_AGENT_TOOL_ROUNDS = 20
 MAX_LANGUAGE_CORRECTIONS = 2
 OLLAMA_TIMEOUT_SECONDS = int(os.environ.get("OLLAMA_TIMEOUT_SECONDS", "300"))
 PROGRESS_INTERVAL_SECONDS = float(
@@ -58,6 +67,7 @@ class AIExecutionResult:
 class _RequestProgress:
     callback: ProgressCallback | None
     started: float
+    max_rounds: int = MAX_TOOL_ROUNDS
     prompt_tokens: int = 0
     output_tokens: int = 0
     activity: str = "starting"
@@ -100,7 +110,7 @@ class _RequestProgress:
                 time.perf_counter() - self.activity_started
             ),
             "round": self.round_number,
-            "max_rounds": MAX_TOOL_ROUNDS,
+            "max_rounds": self.max_rounds,
             "prompt_tokens": self.prompt_tokens,
             "output_tokens": self.output_tokens,
             "total_tokens": self.total_tokens,
@@ -379,7 +389,14 @@ async def execute_local_ai(
     change_event_callback: ChangeEventCallback | None = None,
 ) -> AIExecutionResult:
     request_started = time.perf_counter()
-    progress = _RequestProgress(progress_callback, request_started)
+    max_tool_rounds = (
+        MAX_AGENT_TOOL_ROUNDS if execution_context is not None else MAX_TOOL_ROUNDS
+    )
+    progress = _RequestProgress(
+        progress_callback,
+        request_started,
+        max_rounds=max_tool_rounds,
+    )
     outcome = "completed"
 
     def build_result(
@@ -403,15 +420,20 @@ async def execute_local_ai(
     if not attachments:
         # Attachment tools are useful only when this request has attachments.
         allowed_tools = allowed_tools - ATTACHMENT_TOOL_NAMES
+    job_scoped_tools = (
+        ALL_WORKSPACE_TOOLS | PLANNING_TOOL_NAMES | COMMAND_TOOL_NAMES
+    )
     if execution_context is None:
-        allowed_tools = allowed_tools - ALL_WORKSPACE_TOOLS
+        allowed_tools = allowed_tools - job_scoped_tools
     else:
-        allowed_workspace_tools = (
-            ALL_WORKSPACE_TOOLS & execution_context.allowed_tools
-        )
+        allowed_job_tools = job_scoped_tools & execution_context.allowed_tools
+        if execution_context.plan_store is None:
+            allowed_job_tools = allowed_job_tools - PLANNING_TOOL_NAMES
+        if execution_context.command_event_callback is None:
+            allowed_job_tools = allowed_job_tools - COMMAND_TOOL_NAMES
         allowed_tools = (
-            allowed_tools - ALL_WORKSPACE_TOOLS
-        ) | allowed_workspace_tools
+            allowed_tools - job_scoped_tools
+        ) | allowed_job_tools
 
     _, tool_schemas, tool_guidance = get_tools(allowed_tools)
     timeout = aiohttp.ClientTimeout(
@@ -463,11 +485,25 @@ async def execute_local_ai(
                         change_event_callback,
                     )
                 )
+                if execution_context.plan_store is not None:
+                    runtime_handlers.update(
+                        build_planning_tools(
+                            execution_context,
+                            execution_context.plan_store,
+                        )
+                    )
+                if execution_context.command_event_callback is not None:
+                    runtime_handlers.update(
+                        build_command_tools(
+                            execution_context,
+                            execution_context.command_event_callback,
+                        )
+                    )
             tools, _, _ = get_tools(allowed_tools, runtime_handlers)
-            for round_number in range(1, MAX_TOOL_ROUNDS + 1):
+            for round_number in range(1, max_tool_rounds + 1):
                 await progress.emit(
                     "model",
-                    f"waiting for AI (loop {round_number}/{MAX_TOOL_ROUNDS})",
+                    f"waiting for AI (loop {round_number}/{max_tool_rounds})",
                     round_number,
                 )
                 data = await _chat(session, messages, tool_schemas, think)
@@ -554,7 +590,7 @@ async def execute_local_ai(
                         round_number,
                     )
 
-            outcome = f"stopped after {MAX_TOOL_ROUNDS} tool loops"
+            outcome = f"stopped after {max_tool_rounds} tool loops"
             return build_result(
                 "no response from ai",
                 status="failed",

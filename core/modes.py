@@ -46,6 +46,10 @@ MODE_POLICIES = {
                 "read_workspace_file",
                 "search_workspace",
                 "apply_workspace_patch",
+                "create_plan",
+                "update_step",
+                "revise_plan",
+                "run_workspace_command",
             }
         ),
     ),

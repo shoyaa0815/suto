@@ -10,6 +10,13 @@ class JobStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class StepStatus(StrEnum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 @dataclass(frozen=True)
 class Job:
     id: str
@@ -20,6 +27,7 @@ class Job:
     source_ref: str | None
     workspace: str
     allow_write: bool
+    allow_command: bool
     result: str | None
     error: str | None
     prompt_tokens: int
@@ -65,4 +73,29 @@ class ChangeEvent:
     diff: str
     before_sha256: str | None
     after_sha256: str
+    created_at: str
+
+
+@dataclass(frozen=True)
+class JobStep:
+    id: int
+    job_id: str
+    position: int
+    description: str
+    status: StepStatus
+    result: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class CommandEvent:
+    id: int
+    job_id: str
+    command: str
+    status: str
+    exit_code: int | None
+    stdout: str
+    stderr: str
+    elapsed_seconds: float
     created_at: str

@@ -12,6 +12,10 @@
 from .datetime_tool import get_current_datetime
 from .datetime_tool import PROMPT as DATETIME_PROMPT
 from .datetime_tool import SCHEMA as DATETIME_SCHEMA
+from .command import build_command_tools
+from .command import COMMAND_TOOL_NAMES
+from .command import PROMPT as COMMAND_PROMPT
+from .command import SCHEMA as COMMAND_SCHEMA
 from .fetch import fetch_url
 from .fetch import PROMPT as FETCH_PROMPT
 from .fetch import SCHEMA as FETCH_SCHEMA
@@ -23,6 +27,11 @@ from .file_reader import SUMMARY_SCHEMA as FILE_SUMMARY_SCHEMA
 from .search import search_web
 from .search import PROMPT as SEARCH_PROMPT
 from .search import SCHEMA as SEARCH_SCHEMA
+from .planning import build_planning_tools
+from .planning import CREATE_PLAN_SCHEMA
+from .planning import PLANNING_TOOL_NAMES
+from .planning import PROMPT as PLANNING_PROMPT
+from .planning import REVISE_PLAN_SCHEMA, UPDATE_STEP_SCHEMA
 from .workspace import build_workspace_tools
 from .workspace import PATCH_SCHEMA as WORKSPACE_PATCH_SCHEMA
 from .workspace import LIST_SCHEMA as WORKSPACE_LIST_SCHEMA
@@ -48,6 +57,10 @@ ALL_TOOLS = {
     "read_workspace_file": _workspace_unavailable,
     "search_workspace": _workspace_unavailable,
     "apply_workspace_patch": _workspace_unavailable,
+    "create_plan": _workspace_unavailable,
+    "update_step": _workspace_unavailable,
+    "revise_plan": _workspace_unavailable,
+    "run_workspace_command": _workspace_unavailable,
 }
 
 ALL_TOOL_SCHEMAS = {
@@ -63,6 +76,10 @@ ALL_TOOL_SCHEMAS = {
         WORKSPACE_READ_SCHEMA,
         WORKSPACE_SEARCH_SCHEMA,
         WORKSPACE_PATCH_SCHEMA,
+        CREATE_PLAN_SCHEMA,
+        UPDATE_STEP_SCHEMA,
+        REVISE_PLAN_SCHEMA,
+        COMMAND_SCHEMA,
     ]
 }
 
@@ -77,6 +94,10 @@ ALL_TOOL_GUIDANCE = {
     "read_workspace_file": WORKSPACE_PROMPT,
     "search_workspace": WORKSPACE_PROMPT,
     "apply_workspace_patch": WORKSPACE_PROMPT,
+    "create_plan": PLANNING_PROMPT,
+    "update_step": PLANNING_PROMPT,
+    "revise_plan": PLANNING_PROMPT,
+    "run_workspace_command": COMMAND_PROMPT,
 }
 
 

@@ -4,7 +4,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from .models import ChangeEvent, Job, JobEvent, JobStatus, ToolEvent
+from .models import (
+    ChangeEvent,
+    CommandEvent,
+    Job,
+    JobEvent,
+    JobStatus,
+    JobStep,
+    StepStatus,
+    ToolEvent,
+)
 
 
 def _now() -> str:
@@ -36,6 +45,7 @@ class JobStore:
                     source_ref TEXT,
                     workspace TEXT NOT NULL DEFAULT '.',
                     allow_write INTEGER NOT NULL DEFAULT 0,
+                    allow_command INTEGER NOT NULL DEFAULT 0,
                     result TEXT,
                     error TEXT,
                     prompt_tokens INTEGER NOT NULL DEFAULT 0,
@@ -91,6 +101,38 @@ class JobStore:
 
                 CREATE INDEX IF NOT EXISTS change_events_job_id_idx
                     ON change_events(job_id, id);
+
+                CREATE TABLE IF NOT EXISTS job_steps (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    description TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    result TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE,
+                    UNIQUE(job_id, position)
+                );
+
+                CREATE INDEX IF NOT EXISTS job_steps_job_id_idx
+                    ON job_steps(job_id, position);
+
+                CREATE TABLE IF NOT EXISTS command_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL,
+                    command TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    exit_code INTEGER,
+                    stdout TEXT NOT NULL,
+                    stderr TEXT NOT NULL,
+                    elapsed_seconds REAL NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS command_events_job_id_idx
+                    ON command_events(job_id, id);
                 """
             )
             columns = {
@@ -104,6 +146,11 @@ class JobStore:
             if "allow_write" not in columns:
                 connection.execute(
                     "ALTER TABLE jobs ADD COLUMN allow_write "
+                    "INTEGER NOT NULL DEFAULT 0"
+                )
+            if "allow_command" not in columns:
+                connection.execute(
+                    "ALTER TABLE jobs ADD COLUMN allow_command "
                     "INTEGER NOT NULL DEFAULT 0"
                 )
 
@@ -120,6 +167,7 @@ class JobStore:
             source_ref=row["source_ref"],
             workspace=row["workspace"],
             allow_write=bool(row["allow_write"]),
+            allow_command=bool(row["allow_command"]),
             result=row["result"],
             error=row["error"],
             prompt_tokens=row["prompt_tokens"],
@@ -173,6 +221,37 @@ class JobStore:
             created_at=row["created_at"],
         )
 
+    @staticmethod
+    def _to_step(row: sqlite3.Row | None) -> JobStep | None:
+        if row is None:
+            return None
+        return JobStep(
+            id=row["id"],
+            job_id=row["job_id"],
+            position=row["position"],
+            description=row["description"],
+            status=StepStatus(row["status"]),
+            result=row["result"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _to_command_event(row: sqlite3.Row | None) -> CommandEvent | None:
+        if row is None:
+            return None
+        return CommandEvent(
+            id=row["id"],
+            job_id=row["job_id"],
+            command=row["command"],
+            status=row["status"],
+            exit_code=row["exit_code"],
+            stdout=row["stdout"],
+            stderr=row["stderr"],
+            elapsed_seconds=row["elapsed_seconds"],
+            created_at=row["created_at"],
+        )
+
     def create_job(
         self,
         prompt: str,
@@ -181,6 +260,7 @@ class JobStore:
         source_ref: str | None = None,
         workspace: str = ".",
         allow_write: bool = False,
+        allow_command: bool = False,
     ) -> Job:
         job_id = f"job_{uuid4().hex[:8]}"
         created_at = _now()
@@ -189,8 +269,8 @@ class JobStore:
                 """
                 INSERT INTO jobs (
                     id, prompt, mode, status, source, source_ref,
-                    workspace, allow_write, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    workspace, allow_write, allow_command, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -201,6 +281,7 @@ class JobStore:
                     source_ref,
                     workspace,
                     int(allow_write),
+                    int(allow_command),
                     created_at,
                 ),
             )
@@ -388,6 +469,201 @@ class JobStore:
             for row in rows
             if (event := self._to_change_event(row)) is not None
         ]
+
+    def create_plan(self, job_id: str, descriptions: list[str]) -> list[JobStep]:
+        """Create the first plan for a job without replacing an existing one."""
+        return self._write_plan(job_id, descriptions, replace=False)
+
+    def revise_plan(self, job_id: str, descriptions: list[str]) -> list[JobStep]:
+        """Atomically replace the current plan while the job is running."""
+        return self._write_plan(job_id, descriptions, replace=True)
+
+    def _write_plan(
+        self,
+        job_id: str,
+        descriptions: list[str],
+        replace: bool,
+    ) -> list[JobStep]:
+        normalized = [" ".join(str(item).split()) for item in descriptions]
+        if not normalized or any(not item for item in normalized):
+            raise ValueError("a plan requires at least one non-empty step")
+        if len(normalized) > 20:
+            raise ValueError("a plan cannot contain more than 20 steps")
+
+        timestamp = _now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            job = connection.execute(
+                "SELECT status FROM jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+            if job is None:
+                raise ValueError(f"job not found: {job_id}")
+            if JobStatus(job["status"]) != JobStatus.RUNNING:
+                raise ValueError("plans can be changed only while a job is running")
+
+            existing = connection.execute(
+                "SELECT 1 FROM job_steps WHERE job_id = ? LIMIT 1",
+                (job_id,),
+            ).fetchone()
+            if existing is not None and not replace:
+                raise ValueError("a plan already exists; use revise_plan")
+            if replace:
+                connection.execute("DELETE FROM job_steps WHERE job_id = ?", (job_id,))
+
+            connection.executemany(
+                """
+                INSERT INTO job_steps (
+                    job_id, position, description, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        job_id,
+                        position,
+                        description,
+                        StepStatus.PENDING,
+                        timestamp,
+                        timestamp,
+                    )
+                    for position, description in enumerate(normalized, start=1)
+                ],
+            )
+        return self.list_steps(job_id)
+
+    def list_steps(self, job_id: str) -> list[JobStep]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM job_steps WHERE job_id = ? ORDER BY position ASC",
+                (job_id,),
+            ).fetchall()
+        return [step for row in rows if (step := self._to_step(row)) is not None]
+
+    def update_step(
+        self,
+        job_id: str,
+        position: int,
+        status: str | StepStatus,
+        result: str | None = None,
+    ) -> JobStep:
+        try:
+            step_status = StepStatus(status)
+        except ValueError as error:
+            choices = ", ".join(item.value for item in StepStatus)
+            raise ValueError(f"invalid step status; choose one of: {choices}") from error
+        if position < 1:
+            raise ValueError("step position must be at least 1")
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            job = connection.execute(
+                "SELECT status FROM jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+            if job is None:
+                raise ValueError(f"job not found: {job_id}")
+            if JobStatus(job["status"]) != JobStatus.RUNNING:
+                raise ValueError("steps can be updated only while a job is running")
+            if step_status == StepStatus.IN_PROGRESS:
+                connection.execute(
+                    """
+                    UPDATE job_steps SET status = ?, updated_at = ?
+                    WHERE job_id = ? AND status = ? AND position != ?
+                    """,
+                    (
+                        StepStatus.PENDING,
+                        _now(),
+                        job_id,
+                        StepStatus.IN_PROGRESS,
+                        position,
+                    ),
+                )
+            cursor = connection.execute(
+                """
+                UPDATE job_steps SET status = ?, result = ?, updated_at = ?
+                WHERE job_id = ? AND position = ?
+                """,
+                (step_status, result, _now(), job_id, position),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(f"step not found: {position}")
+            row = connection.execute(
+                "SELECT * FROM job_steps WHERE job_id = ? AND position = ?",
+                (job_id, position),
+            ).fetchone()
+        step = self._to_step(row)
+        if step is None:
+            raise RuntimeError(f"failed to update step: {position}")
+        return step
+
+    def current_step(self, job_id: str) -> JobStep | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM job_steps
+                WHERE job_id = ? AND status IN (?, ?)
+                ORDER BY CASE status WHEN ? THEN 0 ELSE 1 END, position ASC
+                LIMIT 1
+                """,
+                (
+                    job_id,
+                    StepStatus.IN_PROGRESS,
+                    StepStatus.PENDING,
+                    StepStatus.IN_PROGRESS,
+                ),
+            ).fetchone()
+        return self._to_step(row)
+
+    def add_command_event(self, job_id: str, event: dict) -> None:
+        command = json.dumps(
+            event.get("command") or [],
+            ensure_ascii=False,
+        )
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO command_events (
+                    job_id, command, status, exit_code, stdout, stderr,
+                    elapsed_seconds, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job_id,
+                    command,
+                    str(event.get("status", "unknown")),
+                    event.get("exit_code"),
+                    str(event.get("stdout", "")),
+                    str(event.get("stderr", "")),
+                    float(event.get("elapsed_seconds", 0)),
+                    _now(),
+                ),
+            )
+
+    def list_command_events(
+        self,
+        job_id: str,
+        limit: int = 20,
+    ) -> list[CommandEvent]:
+        safe_limit = min(max(int(limit), 1), 100)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM command_events
+                WHERE job_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (job_id, safe_limit),
+            ).fetchall()
+        return [
+            event
+            for row in rows
+            if (event := self._to_command_event(row)) is not None
+        ]
+
+    def latest_command_event(self, job_id: str) -> CommandEvent | None:
+        events = self.list_command_events(job_id, limit=1)
+        return events[0] if events else None
 
     def complete_job(
         self,

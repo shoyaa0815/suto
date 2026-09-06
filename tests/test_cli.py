@@ -1,4 +1,5 @@
-from clients.cli.bot import _parse_run, _print_help
+from automation.store import JobStore
+from clients.cli.bot import _parse_run, _print_commands, _print_help, _print_plan
 from clients.cli.progress import format_elapsed, print_progress
 
 
@@ -13,26 +14,67 @@ def test_print_help_lists_exit_commands(capsys):
     assert "/help" in output
     assert "/exit" in output
     assert "/quit" in output
+    assert "/plan" in output
+
+
+def test_print_plan_shows_persistent_steps(tmp_path, capsys):
+    store = JobStore(tmp_path / "suto.db")
+    job = store.create_job("inspect project")
+    store.claim_next_job()
+    store.create_plan(job.id, ["Inspect files", "Write report"])
+    store.update_step(job.id, 1, "completed", "files inspected")
+
+    _print_plan(store, job.id)
+
+    output = capsys.readouterr().out
+    assert f"Plan for {job.id}:" in output
+    assert "1. [completed] Inspect files — files inspected" in output
+    assert "2. [pending] Write report" in output
+
+
+def test_print_commands_shows_audit_output(tmp_path, capsys):
+    store = JobStore(tmp_path / "suto.db")
+    job = store.create_job("run checks", allow_command=True)
+    store.add_command_event(
+        job.id,
+        {
+            "command": ["pytest", "-q"],
+            "status": "completed",
+            "exit_code": 0,
+            "stdout": "2 passed",
+            "stderr": "",
+            "elapsed_seconds": 0.4,
+        },
+    )
+
+    _print_commands(store, job.id)
+
+    output = capsys.readouterr().out
+    assert "pytest -q" in output
+    assert "[completed] exit=0" in output
+    assert "2 passed" in output
 
 
 def test_parse_run_accepts_workspace(tmp_path):
-    task, workspace, allow_write = _parse_run(
+    task, workspace, allow_write, allow_command = _parse_run(
         f'--workspace "{tmp_path}" "inspect this project"'
     )
 
     assert task == "inspect this project"
     assert workspace == tmp_path.resolve()
     assert allow_write is False
+    assert allow_command is False
 
 
 def test_parse_run_accepts_write_permission_and_workspace(tmp_path):
-    task, workspace, allow_write = _parse_run(
-        f'--allow-write --workspace "{tmp_path}" "update docs"'
+    task, workspace, allow_write, allow_command = _parse_run(
+        f'--allow-write --allow-command --workspace "{tmp_path}" "update docs"'
     )
 
     assert task == "update docs"
     assert workspace == tmp_path.resolve()
     assert allow_write is True
+    assert allow_command is True
 
 
 def test_parse_run_rejects_missing_workspace(tmp_path):

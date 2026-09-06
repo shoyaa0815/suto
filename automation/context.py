@@ -11,6 +11,8 @@ READ_ONLY_WORKSPACE_TOOLS = frozenset(
 )
 WRITE_WORKSPACE_TOOLS = frozenset({"apply_workspace_patch"})
 ALL_WORKSPACE_TOOLS = READ_ONLY_WORKSPACE_TOOLS | WRITE_WORKSPACE_TOOLS
+PLANNING_TOOLS = frozenset({"create_plan", "update_step", "revise_plan"})
+COMMAND_TOOLS = frozenset({"run_workspace_command"})
 
 
 @dataclass(frozen=True)
@@ -18,6 +20,8 @@ class ExecutionContext:
     job_id: str
     workspace: Path
     allowed_tools: frozenset[str] = READ_ONLY_WORKSPACE_TOOLS
+    plan_store: object | None = None
+    command_event_callback: object | None = None
 
     def __post_init__(self) -> None:
         resolved = self.workspace.expanduser().resolve()

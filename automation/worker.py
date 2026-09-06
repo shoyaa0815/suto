@@ -28,6 +28,7 @@ class AutomationWorker:
         source_ref: str | None = None,
         workspace: str | Path = ".",
         allow_write: bool = False,
+        allow_command: bool = False,
     ) -> Job:
         job = self.store.create_job(
             prompt,
@@ -36,6 +37,7 @@ class AutomationWorker:
             source_ref=source_ref,
             workspace=str(workspace),
             allow_write=allow_write,
+            allow_command=allow_command,
         )
         self._wake.set()
         return job

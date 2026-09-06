@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import shlex
 import sys
@@ -19,11 +20,13 @@ def _print_help() -> None:
     print("Commands:")
     print("  /help  show available commands")
     print(
-        "  /run [--workspace <path>] [--allow-write] <task>  "
+        "  /run [--workspace <path>] [--allow-write] [--allow-command] <task>  "
         "create an automation job"
     )
     print("  /jobs  list recent automation jobs")
     print("  /status <job_id>  show job status and result")
+    print("  /plan <job_id>  show the current automation plan")
+    print("  /commands <job_id>  show commands executed by a job")
     print("  /changes <job_id>  show files changed by a job")
     print("  /cancel <job_id>  cancel a queued or running job")
     print("  /exit  exit suto")
@@ -83,7 +86,14 @@ def _print_job_status(store: JobStore, job_id: str) -> None:
     print(f"Workspace: {job.workspace}")
     permission = "read/write" if job.allow_write else "read-only"
     print(f"Workspace access: {permission}")
+    print(f"Command execution: {'allowed' if job.allow_command else 'blocked'}")
     print(f"Tokens: {job.total_tokens:,}")
+    current_step = store.current_step(job.id)
+    if current_step is not None:
+        print(
+            f"Current step: {current_step.position}. "
+            f"[{current_step.status.value}] {current_step.description}"
+        )
     event = store.latest_event(job.id)
     if event is not None:
         print(
@@ -100,10 +110,58 @@ def _print_job_status(store: JobStore, job_id: str) -> None:
         )
         if tool_event.error:
             print(f"Tool error: {tool_event.error}")
+    command_event = store.latest_command_event(job.id)
+    if command_event is not None:
+        command = shlex.join(json.loads(command_event.command))
+        exit_code = (
+            "none" if command_event.exit_code is None else command_event.exit_code
+        )
+        print(
+            f"Last command: {command} ({command_event.status}, "
+            f"exit {exit_code}, {command_event.elapsed_seconds:.1f}s)"
+        )
     if job.result:
         print(f"Result:\n{job.result}")
     if job.error:
         print(f"Error: {job.error}")
+
+
+def _print_plan(store: JobStore, job_id: str) -> None:
+    if store.get_job(job_id) is None:
+        print(f"Job not found: {job_id}")
+        return
+    steps = store.list_steps(job_id)
+    if not steps:
+        print(f"No plan created for {job_id}.")
+        return
+    print(f"Plan for {job_id}:")
+    for step in steps:
+        line = f"{step.position}. [{step.status.value}] {step.description}"
+        if step.result:
+            line += f" — {step.result}"
+        print(line)
+
+
+def _print_commands(store: JobStore, job_id: str) -> None:
+    if store.get_job(job_id) is None:
+        print(f"Job not found: {job_id}")
+        return
+    events = store.list_command_events(job_id)
+    if not events:
+        print(f"No commands recorded for {job_id}.")
+        return
+    print(f"Commands for {job_id} (newest first):")
+    for event in events:
+        command = shlex.join(json.loads(event.command))
+        exit_code = "none" if event.exit_code is None else event.exit_code
+        print(
+            f"[{event.status}] exit={exit_code} "
+            f"time={event.elapsed_seconds:.1f}s  {command}"
+        )
+        if event.stdout:
+            print(f"stdout:\n{event.stdout}")
+        if event.stderr:
+            print(f"stderr:\n{event.stderr}")
 
 
 def _print_changes(store: JobStore, job_id: str) -> None:
@@ -121,22 +179,26 @@ def _print_changes(store: JobStore, job_id: str) -> None:
         print(change.diff)
 
 
-def _parse_run(argument: str) -> tuple[str, Path, bool]:
+def _parse_run(argument: str) -> tuple[str, Path, bool, bool]:
     try:
         parts = shlex.split(argument)
     except ValueError as error:
         raise ValueError(f"invalid /run arguments: {error}") from error
     if not parts:
         raise ValueError(
-            "usage: /run [--workspace <path>] [--allow-write] <task>"
+            "usage: /run [--workspace <path>] [--allow-write] "
+            "[--allow-command] <task>"
         )
 
     workspace = Path.cwd()
     allow_write = False
+    allow_command = False
     while parts and parts[0].startswith("--"):
         flag = parts.pop(0)
         if flag == "--allow-write":
             allow_write = True
+        elif flag == "--allow-command":
+            allow_command = True
         elif flag == "--workspace":
             if not parts:
                 raise ValueError("--workspace requires a path")
@@ -147,7 +209,7 @@ def _parse_run(argument: str) -> tuple[str, Path, bool]:
         raise ValueError("/run requires a task")
     if not workspace.is_dir():
         raise ValueError(f"workspace is not a directory: {workspace}")
-    return " ".join(parts), workspace, allow_write
+    return " ".join(parts), workspace, allow_write, allow_command
 
 
 async def _chat_loop(mode: str) -> None:
@@ -183,7 +245,7 @@ async def _chat_loop(mode: str) -> None:
                 return
             if command == "/run":
                 try:
-                    task, workspace, allow_write = _parse_run(argument)
+                    task, workspace, allow_write, allow_command = _parse_run(argument)
                 except ValueError as error:
                     print(error)
                     continue
@@ -191,6 +253,7 @@ async def _chat_loop(mode: str) -> None:
                     task,
                     workspace=workspace,
                     allow_write=allow_write,
+                    allow_command=allow_command,
                 )
                 print(f"Created job {job.id}")
                 continue
@@ -202,6 +265,18 @@ async def _chat_loop(mode: str) -> None:
                     print("usage: /status <job_id>")
                     continue
                 _print_job_status(store, argument)
+                continue
+            if command == "/plan":
+                if not argument:
+                    print("usage: /plan <job_id>")
+                    continue
+                _print_plan(store, argument)
+                continue
+            if command == "/commands":
+                if not argument:
+                    print("usage: /commands <job_id>")
+                    continue
+                _print_commands(store, argument)
                 continue
             if command == "/changes":
                 if not argument:
