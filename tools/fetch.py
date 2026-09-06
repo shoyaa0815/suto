@@ -12,7 +12,7 @@ HEADERS = {
 
 # PROMPT is this tool's slice of the AI's system prompt: when to call
 # fetch_url and how to use its result. See the comment in datetime_tool.py
-# for why this lives next to the tool instead of in ai.py.
+# for why this lives next to the tool instead of in the AI runtime.
 #
 # The link-verification rule below is written here, not in search.py, even
 # though it's triggered by search_web results — the rule governs an action

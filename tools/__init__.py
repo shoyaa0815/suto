@@ -7,7 +7,7 @@
 #
 # To add a new tool: create tools/your_tool.py with those three things,
 # then add it to the imports and the three dicts/lists below. Nothing
-# outside this package needs to change. ai.py asks this registry for the tools
+# outside this package needs to change. The AI executor asks this registry for tools
 # allowed by the active mode instead of exposing every tool globally.
 from .datetime_tool import get_current_datetime
 from .datetime_tool import PROMPT as DATETIME_PROMPT
@@ -49,7 +49,7 @@ ALL_TOOLS = {
     "get_current_datetime": get_current_datetime,
     "search_web": search_web,
     "fetch_url": fetch_url,
-    # This placeholder is replaced with a request-scoped handler in ai.py.
+    # This placeholder is replaced with a request-scoped handler by ai/executor.py.
     "read_attached_file": _EMPTY_ATTACHMENT_TOOLS["read_attached_file"],
     "search_attachment": _EMPTY_ATTACHMENT_TOOLS["search_attachment"],
     "summarize_attachment": _EMPTY_ATTACHMENT_TOOLS["summarize_attachment"],

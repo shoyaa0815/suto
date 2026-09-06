@@ -42,7 +42,7 @@ _last_call_time = 0.0
 # PROMPT is this tool's slice of the AI's system prompt: when to call
 # search_web, when not to, and how to avoid hammering it. See the comment
 # in datetime_tool.py for why this lives next to the tool instead of in
-# ai.py — the same reasoning applies here.
+# ai/client.py — the same reasoning applies here.
 PROMPT = """- Use search_web only for things you can't already answer correctly:
   current events, recent releases, prices, or anything time-sensitive, or a
   named person/place/thing you don't already know for certain. If a query

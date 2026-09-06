@@ -122,7 +122,8 @@ redirects, background processes, and network tools are not available.
 
 - `main.py` — entry point that selects a harness mode
 - `clients/cli/` — interactive terminal shell
-- `ai.py` — shared AI runtime, tool loop, progress, and token accounting
+- `ai/` — shared AI runtime, Ollama client, prompts, progress, tool loop, and
+  token accounting
 - `automation/` — execution context, job store, runner, and background worker
 - `core/modes.py` — capability policies for interactive chat and automation
 - `tools/` — tools the AI can call (each tool = handler + schema + prompt),

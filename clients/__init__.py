@@ -3,6 +3,6 @@
 # messages into a prompt, hand that to ask_local_ai(), and send the answer
 # back in whatever shape its platform wants.
 #
-# Nothing in here holds logic about *what* the bot can do — that lives in ai.py
+# Nothing in here holds logic about *what* the bot can do — that lives in ai/
 # and tools/, shared by every client. Adding a client should never mean
 # touching them.
