@@ -32,6 +32,19 @@ venv/bin/python main.py chat cli
 venv/bin/python main.py agent cli
 ```
 
+In `agent cli` mode, type a task normally to run it as an automation job in the
+current directory. Conversational jobs receive file-write and allowlisted
+verification-command access, and the CLI waits for the job and prints its
+result automatically:
+
+```text
+> fix the failing validation tests and update the documentation
+```
+
+Starting agent mode therefore grants tasks typed this way access to modify the
+current workspace and run trusted-project verification code. Use `/run` when a
+different workspace, read-only execution, or background submission is needed.
+
 The CLI prints live user-facing request progress, including the current AI/tool
 step, tool loop number, total and current-step elapsed time, and tokens
 accumulated after each model response. A heartbeat is printed every 10 seconds

@@ -37,8 +37,9 @@ MODE_POLICIES = {
         prompt=(
             "You are in automation agent mode. Restricted workspace tools may "
             "be available for a job. You may modify files only when that job "
-            "explicitly grants write permission. You cannot run commands. Never "
-            "claim to have taken an unavailable action."
+            "explicitly grants write permission, and run verification commands "
+            "only when command permission is granted. Never claim to have taken "
+            "an unavailable action."
         ),
         allowed_tools=frozenset(
             {

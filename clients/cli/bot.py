@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from ai import ask_local_ai
+from automation.models import Job, JobStatus
 from automation.runner import JobRunner
 from automation.store import JobStore
 from automation.worker import AutomationWorker
@@ -14,9 +15,17 @@ from core.language import choose_reply_language
 from core.modes import get_mode_policy
 
 EXIT_COMMANDS = frozenset({"/exit", "/quit"})
+TERMINAL_JOB_STATUSES = frozenset(
+    {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}
+)
 
 
-def _print_help() -> None:
+def _print_help(mode: str | None = None) -> None:
+    if mode == "agent":
+        print(
+            "Type a task normally to run it in the current workspace with "
+            "file-write and verification-command access."
+        )
     print("Commands:")
     print("  /help  show available commands")
     print(
@@ -212,6 +221,50 @@ def _parse_run(argument: str) -> tuple[str, Path, bool, bool]:
     return " ".join(parts), workspace, allow_write, allow_command
 
 
+def _submit_agent_prompt(
+    worker: AutomationWorker,
+    prompt: str,
+    workspace: Path | None = None,
+) -> Job:
+    """Submit a conversational agent prompt with full local-workspace access."""
+    return worker.submit(
+        prompt,
+        workspace=(workspace or Path.cwd()).resolve(),
+        allow_write=True,
+        allow_command=True,
+    )
+
+
+async def _wait_for_job(store: JobStore, job_id: str) -> Job:
+    last_event_id: int | None = None
+    while True:
+        job = store.get_job(job_id)
+        if job is None:
+            raise RuntimeError(f"automation job disappeared: {job_id}")
+
+        event = store.latest_event(job_id)
+        if event is not None and event.id != last_event_id:
+            print(
+                f"[{job_id}] {event.detail} "
+                f"({format_elapsed(event.elapsed_seconds)}, "
+                f"tokens {event.total_tokens:,})"
+            )
+            last_event_id = event.id
+
+        if job.status in TERMINAL_JOB_STATUSES:
+            return job
+        await asyncio.sleep(0.25)
+
+
+def _print_automatic_job_result(job: Job) -> None:
+    if job.status == JobStatus.COMPLETED:
+        print(f"suto> {job.result or 'Task completed.'}")
+    elif job.status == JobStatus.CANCELLED:
+        print(f"suto> Job {job.id} was cancelled.")
+    else:
+        print(f"suto> Job {job.id} failed: {job.error or 'unknown error'}")
+
+
 async def _chat_loop(mode: str) -> None:
     previous_language_code: str | None = None
     database_path = os.environ.get("SUTO_DB_PATH", "data/suto.db")
@@ -219,6 +272,11 @@ async def _chat_loop(mode: str) -> None:
     worker = AutomationWorker(store, JobRunner(store))
     worker_task = asyncio.create_task(worker.start())
     print(f"suto CLI (mode: {mode}) — type /help for commands")
+    if mode == "agent":
+        print(
+            "Type a task normally. Suto will work in the current directory "
+            "with file-write and verification-command access."
+        )
 
     try:
         while True:
@@ -238,7 +296,7 @@ async def _chat_loop(mode: str) -> None:
             argument = argument.strip()
 
             if command == "/help":
-                _print_help()
+                _print_help(mode)
                 continue
             if command in EXIT_COMMANDS:
                 print("bye")
@@ -292,6 +350,17 @@ async def _chat_loop(mode: str) -> None:
                     print(f"Cancelled job {argument}")
                 else:
                     print(f"Job cannot be cancelled: {argument}")
+                continue
+
+            if prompt.startswith("/"):
+                print(f"Unknown command: {command}. Type /help for commands.")
+                continue
+
+            if mode == "agent":
+                job = _submit_agent_prompt(worker, prompt)
+                print(f"Working on {job.id}...")
+                completed_job = await _wait_for_job(store, job.id)
+                _print_automatic_job_result(completed_job)
                 continue
 
             reply_language = choose_reply_language(
