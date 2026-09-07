@@ -75,6 +75,7 @@ def _write_context(workspace):
         "job_test",
         workspace,
         allowed_tools=READ_ONLY_WORKSPACE_TOOLS | WRITE_WORKSPACE_TOOLS,
+        approval_callback=lambda *args: None,
     )
 
 

@@ -44,7 +44,11 @@ class AutomationWorker:
 
     async def cancel(self, job_id: str) -> bool:
         job = self.store.get_job(job_id)
-        if job is None or job.status not in {JobStatus.QUEUED, JobStatus.RUNNING}:
+        if job is None or job.status not in {
+            JobStatus.QUEUED,
+            JobStatus.RUNNING,
+            JobStatus.WAITING_APPROVAL,
+        }:
             return False
         cancelled = self.store.cancel_job(job_id)
         if cancelled and self.active_job_id == job_id and self._active_task:
@@ -57,6 +61,18 @@ class AutomationWorker:
         if resumed:
             self._wake.set()
         return resumed
+
+    def approve(self, job_id: str, actor: str = "cli") -> tuple[bool, str]:
+        decided, message = self.store.decide_approval(job_id, True, actor)
+        if decided or "queued" in message:
+            self._wake.set()
+        return decided, message
+
+    def reject(self, job_id: str, actor: str = "cli") -> tuple[bool, str]:
+        decided, message = self.store.decide_approval(job_id, False, actor)
+        if decided:
+            self._wake.set()
+        return decided, message
 
     async def start(self) -> None:
         self.store.recover_interrupted_jobs()

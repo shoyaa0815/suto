@@ -3,6 +3,8 @@ from pathlib import Path
 
 from core.settings import env_float, env_int
 
+from .models import ActionType
+
 
 READ_ONLY_WORKSPACE_TOOLS = frozenset(
     {
@@ -15,6 +17,21 @@ WRITE_WORKSPACE_TOOLS = frozenset({"apply_workspace_patch"})
 ALL_WORKSPACE_TOOLS = READ_ONLY_WORKSPACE_TOOLS | WRITE_WORKSPACE_TOOLS
 PLANNING_TOOLS = frozenset({"create_plan", "update_step", "revise_plan"})
 COMMAND_TOOLS = frozenset({"run_workspace_command"})
+ACTION_POLICIES = {
+    ActionType.READ: "allow",
+    ActionType.WRITE: "require_approval",
+    ActionType.COMMAND: "require_approval",
+    ActionType.DESTRUCTIVE: "deny",
+}
+
+
+class ApprovalRequired(RuntimeError):
+    """Raised when an exact state-changing action needs user approval."""
+
+    def __init__(self, approval_id: str, summary: str) -> None:
+        self.approval_id = approval_id
+        self.summary = summary
+        super().__init__(f"approval required ({approval_id}): {summary}")
 
 
 class ExecutionLimitExceeded(RuntimeError):
@@ -46,6 +63,7 @@ class ExecutionContext:
     plan_store: object | None = None
     command_event_callback: object | None = None
     change_guard_callback: object | None = None
+    approval_callback: object | None = None
     limits: ExecutionLimits = ExecutionLimits()
 
     def __post_init__(self) -> None:
@@ -57,3 +75,20 @@ class ExecutionContext:
     def require_tool(self, name: str) -> None:
         if name not in self.allowed_tools:
             raise PermissionError(f"tool is not allowed for this job: {name}")
+
+    def require_approval(
+        self,
+        action_type: str,
+        action: dict,
+        summary: str,
+        preview: str,
+    ) -> None:
+        kind = ActionType(action_type)
+        policy = ACTION_POLICIES[kind]
+        if policy == "allow":
+            return
+        if policy == "deny":
+            raise PermissionError(f"{kind.value} actions are not allowed")
+        if self.approval_callback is None:
+            raise PermissionError(f"approval is unavailable for {kind.value} action")
+        self.approval_callback(kind.value, action, summary, preview)

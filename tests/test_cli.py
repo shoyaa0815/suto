@@ -23,6 +23,8 @@ def test_print_help_lists_exit_commands(capsys):
     assert "/quit" in output
     assert "/plan" in output
     assert "/resume" in output
+    assert "/approve" in output
+    assert "/reject" in output
 
 
 def test_agent_help_explains_conversational_tasks(capsys):
@@ -67,6 +69,27 @@ def test_job_status_labels_blocked_reason(tmp_path, capsys):
     output = capsys.readouterr().out
     assert "Status: blocked" in output
     assert "Blocked reason: repeated tool call" in output
+
+
+def test_job_status_shows_pending_approval_preview(tmp_path, capsys):
+    store = JobStore(tmp_path / "suto.db")
+    job = store.create_job("update docs", allow_write=True)
+    store.claim_next_job()
+    store.request_or_consume_approval(
+        job.id,
+        "write",
+        {"tool": "apply_workspace_patch", "path": "README.md", "hash": "new"},
+        "replace workspace file README.md",
+        "--- a/README.md\n+++ b/README.md\n-old\n+new\n",
+    )
+
+    _print_job_status(store, job.id)
+
+    output = capsys.readouterr().out
+    assert "Status: waiting_approval" in output
+    assert "(write, pending)" in output
+    assert "replace workspace file README.md" in output
+    assert "+new" in output
 
 
 def test_print_plan_shows_persistent_steps(tmp_path, capsys):

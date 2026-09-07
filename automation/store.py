@@ -1,10 +1,15 @@
+import hashlib
 import json
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
 from .models import (
+    ActionType,
+    ApprovalEvent,
+    ApprovalRequest,
+    ApprovalStatus,
     ChangeEvent,
     CommandEvent,
     Job,
@@ -14,6 +19,7 @@ from .models import (
     StepStatus,
     ToolEvent,
 )
+from .redaction import redact_text, redact_value
 
 
 def _now() -> str:
@@ -135,6 +141,41 @@ class JobStore:
 
                 CREATE INDEX IF NOT EXISTS command_events_job_id_idx
                     ON command_events(job_id, id);
+
+                CREATE TABLE IF NOT EXISTS approval_requests (
+                    id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL,
+                    action_type TEXT NOT NULL,
+                    action_digest TEXT NOT NULL,
+                    action_summary TEXT NOT NULL,
+                    preview TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    requested_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    decided_at TEXT,
+                    decided_by TEXT,
+                    consumed_at TEXT,
+                    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS approval_requests_job_id_idx
+                    ON approval_requests(job_id, requested_at);
+
+                CREATE TABLE IF NOT EXISTS approval_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    approval_id TEXT NOT NULL,
+                    job_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    detail TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(approval_id) REFERENCES approval_requests(id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS approval_events_job_id_idx
+                    ON approval_events(job_id, id);
                 """
             )
             columns = {
@@ -266,6 +307,39 @@ class JobStore:
             created_at=row["created_at"],
         )
 
+    @staticmethod
+    def _to_approval(row: sqlite3.Row | None) -> ApprovalRequest | None:
+        if row is None:
+            return None
+        return ApprovalRequest(
+            id=row["id"],
+            job_id=row["job_id"],
+            action_type=ActionType(row["action_type"]),
+            action_digest=row["action_digest"],
+            action_summary=row["action_summary"],
+            preview=row["preview"],
+            status=ApprovalStatus(row["status"]),
+            requested_at=row["requested_at"],
+            expires_at=row["expires_at"],
+            decided_at=row["decided_at"],
+            decided_by=row["decided_by"],
+            consumed_at=row["consumed_at"],
+        )
+
+    @staticmethod
+    def _to_approval_event(row: sqlite3.Row | None) -> ApprovalEvent | None:
+        if row is None:
+            return None
+        return ApprovalEvent(
+            id=row["id"],
+            approval_id=row["approval_id"],
+            job_id=row["job_id"],
+            event_type=row["event_type"],
+            actor=row["actor"],
+            detail=row["detail"],
+            created_at=row["created_at"],
+        )
+
     def create_job(
         self,
         prompt: str,
@@ -288,7 +362,7 @@ class JobStore:
                 """,
                 (
                     job_id,
-                    prompt,
+                    redact_text(prompt),
                     mode,
                     JobStatus.QUEUED,
                     source,
@@ -370,7 +444,7 @@ class JobStore:
                 (
                     job_id,
                     str(update.get("activity", "progress")),
-                    str(update.get("detail", "")),
+                    redact_text(update.get("detail", "")),
                     float(update.get("elapsed_seconds", 0)),
                     int(update.get("total_tokens", 0)),
                     _now(),
@@ -399,7 +473,7 @@ class JobStore:
 
     def add_tool_event(self, job_id: str, event: dict) -> None:
         arguments = json.dumps(
-            event.get("arguments") or {},
+            redact_value(event.get("arguments") or {}),
             ensure_ascii=False,
             sort_keys=True,
         )
@@ -418,7 +492,7 @@ class JobStore:
                     str(event.get("status", "unknown")),
                     float(event.get("elapsed_seconds", 0)),
                     int(event.get("result_size", 0)),
-                    event.get("error"),
+                    redact_text(event["error"]) if event.get("error") else None,
                     _now(),
                 ),
             )
@@ -464,7 +538,7 @@ class JobStore:
                 (
                     job_id,
                     str(event["path"]),
-                    str(event["diff"]),
+                    redact_text(event["diff"]),
                     event.get("before_sha256"),
                     str(event["after_sha256"]),
                     _now(),
@@ -551,7 +625,7 @@ class JobStore:
         descriptions: list[str],
         replace: bool,
     ) -> list[JobStep]:
-        normalized = [" ".join(str(item).split()) for item in descriptions]
+        normalized = [redact_text(" ".join(str(item).split())) for item in descriptions]
         if not normalized or any(not item for item in normalized):
             raise ValueError("a plan requires at least one non-empty step")
         if len(normalized) > 20:
@@ -663,7 +737,13 @@ class JobStore:
                 UPDATE job_steps SET status = ?, result = ?, updated_at = ?
                 WHERE job_id = ? AND position = ?
                 """,
-                (step_status, result, _now(), job_id, position),
+                (
+                    step_status,
+                    redact_text(result) if result is not None else None,
+                    _now(),
+                    job_id,
+                    position,
+                ),
             )
             if cursor.rowcount != 1:
                 raise ValueError(f"step not found: {position}")
@@ -696,7 +776,7 @@ class JobStore:
 
     def add_command_event(self, job_id: str, event: dict) -> None:
         command = json.dumps(
-            event.get("command") or [],
+            redact_value(event.get("command") or []),
             ensure_ascii=False,
         )
         with self._connect() as connection:
@@ -712,8 +792,8 @@ class JobStore:
                     command,
                     str(event.get("status", "unknown")),
                     event.get("exit_code"),
-                    str(event.get("stdout", "")),
-                    str(event.get("stderr", "")),
+                    redact_text(event.get("stdout", "")),
+                    redact_text(event.get("stderr", "")),
                     float(event.get("elapsed_seconds", 0)),
                     _now(),
                 ),
@@ -752,6 +832,310 @@ class JobStore:
                 (job_id,),
             ).fetchone()
         return int(row["count"])
+
+    @staticmethod
+    def action_digest(action_type: str | ActionType, action: dict) -> str:
+        kind = ActionType(action_type)
+        canonical = json.dumps(
+            {"action_type": kind.value, "action": action},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _add_approval_event(
+        connection: sqlite3.Connection,
+        approval_id: str,
+        job_id: str,
+        event_type: str,
+        actor: str,
+        detail: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO approval_events (
+                approval_id, job_id, event_type, actor, detail, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                approval_id,
+                job_id,
+                event_type,
+                redact_text(actor),
+                redact_text(detail),
+                _now(),
+            ),
+        )
+
+    def request_or_consume_approval(
+        self,
+        job_id: str,
+        action_type: str | ActionType,
+        action: dict,
+        summary: str,
+        preview: str,
+        ttl_seconds: int = 600,
+    ) -> tuple[bool, ApprovalRequest]:
+        """Consume an exact approval or persist a request and pause the job."""
+        kind = ActionType(action_type)
+        if kind == ActionType.READ:
+            raise ValueError("read actions do not require approval")
+        digest = self.action_digest(kind, action)
+        timestamp = datetime.now(UTC)
+        now = timestamp.isoformat()
+        expires_at = (timestamp + timedelta(seconds=max(int(ttl_seconds), 1))).isoformat()
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            job = connection.execute(
+                "SELECT status FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if job is None:
+                raise ValueError(f"job not found: {job_id}")
+            if JobStatus(job["status"]) != JobStatus.RUNNING:
+                raise ValueError("approval can be requested only while a job is running")
+
+            active_rows = connection.execute(
+                """
+                SELECT * FROM approval_requests
+                WHERE job_id = ? AND status IN (?, ?)
+                ORDER BY requested_at DESC
+                """,
+                (job_id, ApprovalStatus.PENDING, ApprovalStatus.APPROVED),
+            ).fetchall()
+            matching = None
+            for row in active_rows:
+                if datetime.fromisoformat(row["expires_at"]) <= timestamp:
+                    connection.execute(
+                        "UPDATE approval_requests SET status = ? WHERE id = ?",
+                        (ApprovalStatus.EXPIRED, row["id"]),
+                    )
+                    self._add_approval_event(
+                        connection,
+                        row["id"],
+                        job_id,
+                        "expired",
+                        "system",
+                        "approval expired before action execution",
+                    )
+                    continue
+                if row["action_digest"] == digest and matching is None:
+                    matching = row
+                    continue
+                connection.execute(
+                    "UPDATE approval_requests SET status = ? WHERE id = ?",
+                    (ApprovalStatus.INVALIDATED, row["id"]),
+                )
+                self._add_approval_event(
+                    connection,
+                    row["id"],
+                    job_id,
+                    "invalidated",
+                    "system",
+                    "a different action was proposed",
+                )
+
+            if (
+                matching is not None
+                and ApprovalStatus(matching["status"]) == ApprovalStatus.APPROVED
+            ):
+                connection.execute(
+                    """
+                    UPDATE approval_requests
+                    SET status = ?, consumed_at = ?
+                    WHERE id = ? AND status = ?
+                    """,
+                    (
+                        ApprovalStatus.CONSUMED,
+                        now,
+                        matching["id"],
+                        ApprovalStatus.APPROVED,
+                    ),
+                )
+                self._add_approval_event(
+                    connection,
+                    matching["id"],
+                    job_id,
+                    "consumed",
+                    "system",
+                    "exact approved action authorized for one execution",
+                )
+                row = connection.execute(
+                    "SELECT * FROM approval_requests WHERE id = ?",
+                    (matching["id"],),
+                ).fetchone()
+                approval = self._to_approval(row)
+                if approval is None:
+                    raise RuntimeError("failed to consume approval")
+                return True, approval
+
+            if matching is None:
+                approval_id = f"approval_{uuid4().hex[:10]}"
+                connection.execute(
+                    """
+                    INSERT INTO approval_requests (
+                        id, job_id, action_type, action_digest, action_summary,
+                        preview, status, requested_at, expires_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        approval_id,
+                        job_id,
+                        kind,
+                        digest,
+                        redact_text(summary),
+                        redact_text(preview),
+                        ApprovalStatus.PENDING,
+                        now,
+                        expires_at,
+                    ),
+                )
+                self._add_approval_event(
+                    connection,
+                    approval_id,
+                    job_id,
+                    "requested",
+                    "agent",
+                    f"requested approval for {kind.value} action {digest}",
+                )
+            else:
+                approval_id = matching["id"]
+
+            connection.execute(
+                """
+                UPDATE jobs
+                SET status = ?, error = NULL, finished_at = NULL
+                WHERE id = ? AND status = ?
+                """,
+                (JobStatus.WAITING_APPROVAL, job_id, JobStatus.RUNNING),
+            )
+            row = connection.execute(
+                "SELECT * FROM approval_requests WHERE id = ?",
+                (approval_id,),
+            ).fetchone()
+        approval = self._to_approval(row)
+        if approval is None:
+            raise RuntimeError("failed to create approval request")
+        return False, approval
+
+    def list_approvals(self, job_id: str, limit: int = 50) -> list[ApprovalRequest]:
+        safe_limit = min(max(int(limit), 1), 200)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM approval_requests WHERE job_id = ?
+                ORDER BY requested_at DESC LIMIT ?
+                """,
+                (job_id, safe_limit),
+            ).fetchall()
+        return [item for row in rows if (item := self._to_approval(row)) is not None]
+
+    def latest_approval(self, job_id: str) -> ApprovalRequest | None:
+        approvals = self.list_approvals(job_id, limit=1)
+        return approvals[0] if approvals else None
+
+    def list_approval_events(self, job_id: str) -> list[ApprovalEvent]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM approval_events WHERE job_id = ? ORDER BY id ASC",
+                (job_id,),
+            ).fetchall()
+        return [
+            item for row in rows if (item := self._to_approval_event(row)) is not None
+        ]
+
+    def decide_approval(
+        self,
+        job_id: str,
+        approve: bool,
+        actor: str = "cli",
+    ) -> tuple[bool, str]:
+        timestamp = datetime.now(UTC)
+        now = timestamp.isoformat()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            job = connection.execute(
+                "SELECT status FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if job is None:
+                return False, f"job not found: {job_id}"
+            if JobStatus(job["status"]) != JobStatus.WAITING_APPROVAL:
+                return False, "job is not waiting for approval"
+            row = connection.execute(
+                """
+                SELECT * FROM approval_requests
+                WHERE job_id = ? AND status = ?
+                ORDER BY requested_at DESC LIMIT 1
+                """,
+                (job_id, ApprovalStatus.PENDING),
+            ).fetchone()
+            if row is None:
+                return False, "no pending approval request"
+            if datetime.fromisoformat(row["expires_at"]) <= timestamp:
+                connection.execute(
+                    "UPDATE approval_requests SET status = ? WHERE id = ?",
+                    (ApprovalStatus.EXPIRED, row["id"]),
+                )
+                self._add_approval_event(
+                    connection,
+                    row["id"],
+                    job_id,
+                    "expired",
+                    actor,
+                    "approval decision arrived after expiry",
+                )
+                connection.execute(
+                    """
+                    UPDATE jobs SET status = ?, started_at = NULL, finished_at = NULL
+                    WHERE id = ? AND status = ?
+                    """,
+                    (JobStatus.QUEUED, job_id, JobStatus.WAITING_APPROVAL),
+                )
+                return False, "approval expired; job queued to request a new approval"
+
+            decision = ApprovalStatus.APPROVED if approve else ApprovalStatus.REJECTED
+            connection.execute(
+                """
+                UPDATE approval_requests
+                SET status = ?, decided_at = ?, decided_by = ?
+                WHERE id = ? AND status = ?
+                """,
+                (decision, now, redact_text(actor), row["id"], ApprovalStatus.PENDING),
+            )
+            self._add_approval_event(
+                connection,
+                row["id"],
+                job_id,
+                decision.value,
+                actor,
+                f"{decision.value} {row['action_type']} action {row['action_digest']}",
+            )
+            if approve:
+                connection.execute(
+                    """
+                    UPDATE jobs
+                    SET status = ?, error = NULL, started_at = NULL, finished_at = NULL
+                    WHERE id = ? AND status = ?
+                    """,
+                    (JobStatus.QUEUED, job_id, JobStatus.WAITING_APPROVAL),
+                )
+                return True, f"approved {row['id']}; job queued"
+            connection.execute(
+                """
+                UPDATE jobs SET status = ?, error = ?, finished_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                (
+                    JobStatus.BLOCKED,
+                    redact_text(f"approval rejected by {actor}: {row['action_summary']}"),
+                    now,
+                    job_id,
+                    JobStatus.WAITING_APPROVAL,
+                ),
+            )
+            return True, f"rejected {row['id']}; job blocked"
 
     def has_successful_verification_after_last_change(self, job_id: str) -> bool:
         with self._connect() as connection:
@@ -804,7 +1188,7 @@ class JobStore:
                 """,
                 (
                     JobStatus.COMPLETED,
-                    result,
+                    redact_text(result),
                     prompt_tokens,
                     output_tokens,
                     _now(),
@@ -831,7 +1215,7 @@ class JobStore:
                 """,
                 (
                     JobStatus.FAILED,
-                    error,
+                    redact_text(error),
                     prompt_tokens,
                     output_tokens,
                     _now(),
@@ -858,7 +1242,7 @@ class JobStore:
                 """,
                 (
                     JobStatus.BLOCKED,
-                    reason,
+                    redact_text(reason),
                     prompt_tokens,
                     output_tokens,
                     _now(),
@@ -878,9 +1262,16 @@ class JobStore:
             connection.execute(
                 """
                 UPDATE jobs SET prompt_tokens = ?, output_tokens = ?
-                WHERE id = ? AND status = ?
+                WHERE id = ? AND status IN (?, ?, ?)
                 """,
-                (prompt_tokens, output_tokens, job_id, JobStatus.RUNNING),
+                (
+                    prompt_tokens,
+                    output_tokens,
+                    job_id,
+                    JobStatus.RUNNING,
+                    JobStatus.WAITING_APPROVAL,
+                    JobStatus.QUEUED,
+                ),
             )
 
     def record_retry(
@@ -908,7 +1299,7 @@ class JobStore:
                     "activity": "retry",
                     "detail": (
                         f"retrying after transient error in {delay_seconds:g}s: "
-                        f"{reason}"
+                        f"{redact_text(reason)}"
                     ),
                     "elapsed_seconds": 0,
                     "total_tokens": prompt_tokens + output_tokens,
@@ -926,7 +1317,7 @@ class JobStore:
                 """,
                 (
                     JobStatus.INTERRUPTED,
-                    reason,
+                    redact_text(reason),
                     _now(),
                     job_id,
                     JobStatus.RUNNING,
@@ -961,11 +1352,12 @@ class JobStore:
 
     def cancel_job(self, job_id: str) -> bool:
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(
                 """
                 UPDATE jobs
                 SET status = ?, finished_at = ?
-                WHERE id = ? AND status IN (?, ?)
+                WHERE id = ? AND status IN (?, ?, ?)
                 """,
                 (
                     JobStatus.CANCELLED,
@@ -973,8 +1365,30 @@ class JobStore:
                     job_id,
                     JobStatus.QUEUED,
                     JobStatus.RUNNING,
+                    JobStatus.WAITING_APPROVAL,
                 ),
             )
+            if cursor.rowcount == 1:
+                approvals = connection.execute(
+                    """
+                    SELECT id FROM approval_requests
+                    WHERE job_id = ? AND status IN (?, ?)
+                    """,
+                    (job_id, ApprovalStatus.PENDING, ApprovalStatus.APPROVED),
+                ).fetchall()
+                for approval in approvals:
+                    connection.execute(
+                        "UPDATE approval_requests SET status = ? WHERE id = ?",
+                        (ApprovalStatus.INVALIDATED, approval["id"]),
+                    )
+                    self._add_approval_event(
+                        connection,
+                        approval["id"],
+                        job_id,
+                        "invalidated",
+                        "system",
+                        "job was cancelled",
+                    )
         return cursor.rowcount == 1
 
     def recover_interrupted_jobs(self) -> int:

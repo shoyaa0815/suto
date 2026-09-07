@@ -6,12 +6,14 @@ from dataclasses import replace
 from pathlib import Path
 
 from ai import AIExecutionResult, execute_local_ai
+from core.settings import env_int
 
 from .context import (
     COMMAND_TOOLS,
     PLANNING_TOOLS,
     READ_ONLY_WORKSPACE_TOOLS,
     WRITE_WORKSPACE_TOOLS,
+    ApprovalRequired,
     ExecutionContext,
     ExecutionLimitExceeded,
 )
@@ -20,6 +22,11 @@ from .store import JobStore
 
 AIExecutor = Callable[..., Awaitable[AIExecutionResult]]
 DEFAULT_RETRY_DELAYS = (1.0, 2.0, 4.0)
+APPROVAL_TTL_SECONDS = env_int(
+    "APPROVAL_TTL_SECONDS",
+    600,
+    minimum=1,
+)
 
 
 class JobRunner:
@@ -134,6 +141,23 @@ class JobRunner:
                     f"({limits.max_changed_files} distinct files)"
                 )
 
+        def require_approval(
+            action_type: str,
+            action: dict,
+            summary: str,
+            preview: str,
+        ) -> None:
+            authorized, approval = self.store.request_or_consume_approval(
+                job.id,
+                action_type,
+                action,
+                summary,
+                preview,
+                ttl_seconds=APPROVAL_TTL_SECONDS,
+            )
+            if not authorized:
+                raise ApprovalRequired(approval.id, approval.action_summary)
+
         try:
             if checkpoint_error := self._checkpoint_error(job):
                 self.store.block_job(
@@ -156,6 +180,7 @@ class JobRunner:
                 plan_store=self.store,
                 command_event_callback=save_command_event,
                 change_guard_callback=guard_file_change,
+                approval_callback=require_approval,
             )
             prompt = self._resume_prompt(job) if job.attempt_count > 1 else job.prompt
             retry_count = job.retry_count
@@ -269,6 +294,13 @@ class JobRunner:
             self.store.fail_job(job.id, f"{type(error).__name__}: {error}")
             return
 
+        if result.status == "waiting_approval":
+            self.store.update_job_usage(
+                job.id,
+                total_prompt_tokens,
+                total_output_tokens,
+            )
+            return
         if result.status == "completed":
             if not self.store.has_successful_verification_after_last_change(job.id):
                 self.store.block_job(

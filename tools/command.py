@@ -25,6 +25,7 @@ PROMPT = """- run_workspace_command is available only when the job explicitly
   grants command permission. Use it to inspect or verify work, never to install
   packages, start services, access the network, or modify files directly.
 - Only the documented git, pytest, compileall, and ruff checks are accepted.
+  Each exact command requires user approval before execution.
   A command failure is evidence: inspect its output, update the plan, and fix the
   cause instead of claiming success.
 - After changing code, run the most relevant permitted test or check and record
@@ -269,6 +270,22 @@ def build_command_tools(
         context.require_tool("run_workspace_command")
         prepared = _prepare_command(context, command)
         timeout = min(max(int(timeout_seconds), 1), MAX_TIMEOUT_SECONDS)
+        requested = [str(part) for part in command]
+        command_preview = shlex.join(requested)
+        context.require_approval(
+            "command",
+            {
+                "tool": "run_workspace_command",
+                "command": requested,
+                "timeout_seconds": timeout,
+            },
+            f"run workspace command: {command_preview}",
+            (
+                f"command: {command_preview}\n"
+                f"workspace: {context.workspace}\n"
+                f"timeout_seconds: {timeout}"
+            ),
+        )
         started = time.perf_counter()
         event = {
             "job_id": context.job_id,

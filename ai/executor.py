@@ -6,6 +6,7 @@ import aiohttp
 
 from automation.context import (
     ALL_WORKSPACE_TOOLS,
+    ApprovalRequired,
     ExecutionContext,
     ExecutionLimitExceeded,
 )
@@ -294,7 +295,7 @@ async def execute_local_ai(
                                 if inspect.iscoroutinefunction(func)
                                 else func(**args)
                             )
-                        except ExecutionLimitExceeded:
+                        except (ExecutionLimitExceeded, ApprovalRequired):
                             raise
                         except (asyncio.TimeoutError, TimeoutError):
                             tool_outcome = "timed out"
@@ -353,6 +354,13 @@ async def execute_local_ai(
         raise
     except ExecutionLimitExceeded as error:
         return blocked_result(str(error))
+    except ApprovalRequired as error:
+        outcome = f"waiting for approval: {error.approval_id}"
+        return build_result(
+            str(error),
+            status="waiting_approval",
+            error=str(error),
+        )
     except aiohttp.ClientConnectorError as error:
         outcome = "AI server connection failed"
         config.debug(f"[ai] connection failed: {error!r}")

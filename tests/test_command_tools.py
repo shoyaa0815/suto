@@ -11,7 +11,12 @@ def _context(tmp_path, *, allow_write=False):
     allowed = COMMAND_TOOLS
     if allow_write:
         allowed = allowed | WRITE_WORKSPACE_TOOLS
-    return ExecutionContext("job_test", tmp_path, allowed_tools=allowed)
+    return ExecutionContext(
+        "job_test",
+        tmp_path,
+        allowed_tools=allowed,
+        approval_callback=lambda *args: None,
+    )
 
 
 def test_command_validation_accepts_checks_and_rejects_shell(tmp_path):
@@ -59,6 +64,7 @@ async def test_command_runs_check_and_persists_audit(tmp_path):
         tmp_path,
         allowed_tools=COMMAND_TOOLS,
         command_event_callback=lambda event: store.add_command_event(job.id, event),
+        approval_callback=lambda *args: None,
     )
     tool = build_command_tools(
         context,

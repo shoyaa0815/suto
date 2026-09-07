@@ -172,6 +172,7 @@ async def test_agent_job_runs_allowlisted_command_and_audits_it(
         tmp_path,
         allowed_tools=COMMAND_TOOLS,
         command_event_callback=command_events.append,
+        approval_callback=lambda *args: None,
     )
 
     result = await ai.execute_local_ai(
@@ -224,4 +225,3 @@ async def test_disallowed_tool_call_is_not_executed(monkeypatch):
 
     assert answer == "blocked"
     assert tool_results == ["tool is not allowed in agent mode: search_web"]
-

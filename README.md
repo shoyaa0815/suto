@@ -8,8 +8,9 @@ The current `chat` mode is the interactive shell for exercising the harness
 with web, date/time, and attached-document tools. The `agent` mode provides the
 automation execution path with persistent jobs and restricted workspace tools.
 Jobs are read-only by default and may receive explicit file-write or controlled
-verification-command permission. Scheduling is intentionally not implemented
-yet.
+verification-command permission. Every exact write and command additionally
+requires a persistent, expiring user approval before execution. Scheduling is
+intentionally not implemented yet.
 
 ## Prerequisites
 
@@ -69,6 +70,7 @@ MAX_JOB_TOKENS=100000
 MAX_TOOL_CALLS=40
 MAX_CHANGED_FILES=10
 REPEATED_TOOL_CALL_LIMIT=3
+APPROVAL_TTL_SECONDS=600
 
 SUTO_DB_PATH=data/suto.db
 SUTO_DEBUG=0
@@ -89,16 +91,18 @@ venv/bin/python main.py agent cli
 
 In `agent cli` mode, type a task normally to run it as an automation job in the
 current directory. Conversational jobs receive file-write and allowlisted
-verification-command access, and the CLI waits for the job and prints its
-result automatically:
+verification-command capability. The CLI waits until the job completes or
+needs approval, then prints the result or the commands needed to review and
+decide the pending action:
 
 ```text
 > fix the failing validation tests and update the documentation
 ```
 
-Starting agent mode therefore grants tasks typed this way access to modify the
-current workspace and run trusted-project verification code. Use `/run` when a
-different workspace, read-only execution, or background submission is needed.
+Starting agent mode therefore lets tasks typed this way propose changes to the
+current workspace and trusted-project verification commands. It does not bypass
+per-action approval. Use `/run` when a different workspace, read-only execution,
+or background submission is needed.
 
 The CLI prints live user-facing request progress, including the current AI/tool
 step, tool loop number, total and current-step elapsed time, and tokens
@@ -118,8 +122,10 @@ The CLI includes a persistent single-worker automation queue:
 /plan <job_id>      show the job's current ordered plan and step statuses
 /commands <job_id>  show commands executed by a job and their captured output
 /changes <job_id>   show the files and unified diffs changed by a job
-/cancel <job_id>    cancel a queued or running job
+/cancel <job_id>    cancel a queued, running, or waiting job
 /resume <job_id>    safely resume an interrupted job from its checkpoint
+/approve <job_id>   approve the pending exact action and queue the job
+/reject <job_id>    reject the pending action and block the job
 ```
 
 Jobs and progress events are stored in `data/suto.db` by default. Set
@@ -135,6 +141,15 @@ current directory. Add `--allow-write` to let that one job create or replace
 text files. Existing files must be read first and are changed only when their
 SHA-256 still matches, preventing stale writes. Writes use an atomic replace;
 file deletion and arbitrary shell execution are unavailable.
+
+Write and command flags grant only the capability to propose that kind of
+action. Before execution, Suto persists an approval request, changes the job to
+`waiting_approval`, releases the worker, and shows the diff or exact command in
+`/status`. `/approve` queues the job to continue from its checkpoint;
+`/reject` moves it to `blocked`. Approvals expire after 10 minutes by default,
+are bound to a SHA-256 digest of one exact action, and are consumed once. If the
+path, content hash, command, timeout, or other bound detail changes, the old
+approval is invalidated and a new preview must be approved.
 
 Resolved paths and symlinks are checked to prevent access outside the
 workspace. Every tool call records its arguments, status, elapsed time, result
@@ -154,6 +169,12 @@ commands: `git status`, `git diff`, `pytest`, `python -m pytest`,
 the assigned workspace, with a scrubbed environment, timeout, and output limit.
 Every execution records its arguments, status, exit code, elapsed time, stdout,
 and stderr for `/commands`. `compileall` additionally requires `--allow-write`.
+The approved command must match its requested arguments and timeout exactly.
+
+Prompts, progress, errors, tool audits, command output, diffs, approval
+previews, and persisted results are redacted for common API key, token,
+authorization, password, and secret patterns before they are stored. Secrets
+should still be kept in `.env` rather than entered in prompts or source files.
 
 By default, each automation job is limited to 15 minutes, 100,000 accumulated
 model tokens, 40 tool calls, and 10 distinct changed files. A third identical

@@ -10,6 +10,23 @@ class JobStatus(StrEnum):
     CANCELLED = "cancelled"
     BLOCKED = "blocked"
     INTERRUPTED = "interrupted"
+    WAITING_APPROVAL = "waiting_approval"
+
+
+class ApprovalStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    CONSUMED = "consumed"
+    EXPIRED = "expired"
+    INVALIDATED = "invalidated"
+
+
+class ActionType(StrEnum):
+    READ = "read"
+    WRITE = "write"
+    COMMAND = "command"
+    DESTRUCTIVE = "destructive"
 
 
 class StepStatus(StrEnum):
@@ -102,4 +119,31 @@ class CommandEvent:
     stdout: str
     stderr: str
     elapsed_seconds: float
+    created_at: str
+
+
+@dataclass(frozen=True)
+class ApprovalRequest:
+    id: str
+    job_id: str
+    action_type: ActionType
+    action_digest: str
+    action_summary: str
+    preview: str
+    status: ApprovalStatus
+    requested_at: str
+    expires_at: str
+    decided_at: str | None
+    decided_by: str | None
+    consumed_at: str | None
+
+
+@dataclass(frozen=True)
+class ApprovalEvent:
+    id: int
+    approval_id: str
+    job_id: str
+    event_type: str
+    actor: str
+    detail: str
     created_at: str

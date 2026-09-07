@@ -38,8 +38,9 @@ MODE_POLICIES = {
             "You are in automation agent mode. Restricted workspace tools may "
             "be available for a job. You may modify files only when that job "
             "explicitly grants write permission, and run verification commands "
-            "only when command permission is granted. Never claim to have taken "
-            "an unavailable action."
+            "only when command permission is granted. Exact writes and commands "
+            "also pause for user approval before execution. Never claim to have "
+            "taken an unavailable action."
         ),
         allowed_tools=frozenset(
             {

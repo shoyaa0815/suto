@@ -22,6 +22,7 @@ TERMINAL_JOB_STATUSES = frozenset(
         JobStatus.CANCELLED,
         JobStatus.BLOCKED,
         JobStatus.INTERRUPTED,
+        JobStatus.WAITING_APPROVAL,
     }
 )
 
@@ -43,8 +44,10 @@ def _print_help(mode: str | None = None) -> None:
     print("  /plan <job_id>  show the current automation plan")
     print("  /commands <job_id>  show commands executed by a job")
     print("  /changes <job_id>  show files changed by a job")
-    print("  /cancel <job_id>  cancel a queued or running job")
+    print("  /cancel <job_id>  cancel a queued, running, or waiting job")
     print("  /resume <job_id>  safely resume an interrupted job")
+    print("  /approve <job_id>  approve the pending exact action")
+    print("  /reject <job_id>  reject the pending action and block the job")
     print("  /exit  exit suto")
     print("  /quit  exit suto")
 
@@ -137,6 +140,16 @@ def _print_job_status(store: JobStore, job_id: str) -> None:
             f"Last command: {command} ({command_event.status}, "
             f"exit {exit_code}, {command_event.elapsed_seconds:.1f}s)"
         )
+    approval = store.latest_approval(job.id)
+    if approval is not None:
+        print(
+            f"Latest approval: {approval.id} "
+            f"({approval.action_type.value}, {approval.status.value})"
+        )
+        print(f"Action: {approval.action_summary}")
+        print(f"Expires: {approval.expires_at}")
+        if approval.preview:
+            print(f"Preview:\n{approval.preview}")
     if job.result:
         print(f"Result:\n{job.result}")
     if job.error:
@@ -274,6 +287,12 @@ def _print_automatic_job_result(job: Job) -> None:
         print(f"suto> Job {job.id} was blocked: {job.error or 'unknown reason'}")
     elif job.status == JobStatus.INTERRUPTED:
         print(f"suto> Job {job.id} was interrupted. Resume it with /resume {job.id}.")
+    elif job.status == JobStatus.WAITING_APPROVAL:
+        print(
+            f"suto> Job {job.id} is waiting for approval. "
+            f"Review it with /status {job.id}, then use /approve {job.id} "
+            f"or /reject {job.id}."
+        )
     else:
         print(f"suto> Job {job.id} failed: {job.error or 'unknown error'}")
 
@@ -372,6 +391,20 @@ async def _chat_loop(mode: str) -> None:
                     print(f"Resumed job {argument}")
                 else:
                     print(f"Job cannot be resumed: {argument}")
+                continue
+            if command == "/approve":
+                if not argument:
+                    print("usage: /approve <job_id>")
+                    continue
+                _, message = worker.approve(argument)
+                print(message)
+                continue
+            if command == "/reject":
+                if not argument:
+                    print("usage: /reject <job_id>")
+                    continue
+                _, message = worker.reject(argument)
+                print(message)
                 continue
 
             if prompt.startswith("/"):

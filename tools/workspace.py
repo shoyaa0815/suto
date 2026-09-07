@@ -22,7 +22,8 @@ PROMPT = """- Workspace tools are available only for automation jobs.
   the exact files needed.
 - apply_workspace_patch is available only for jobs explicitly created with
   write permission. Read an existing file first and pass its sha256 as
-  expected_sha256. The tool replaces the complete file content atomically.
+  expected_sha256. The exact diff requires user approval before the tool
+  replaces the complete file content atomically.
 - Never claim to have run a command unless run_workspace_command returned its
   result. File deletion is unavailable.
 - All paths must be relative to the workspace. Never try to escape it with
@@ -299,6 +300,19 @@ def build_workspace_tools(
         if len(diff) > MAX_DIFF_CHARS:
             diff = diff[:MAX_DIFF_CHARS] + "\n[diff truncated]\n"
 
+        after_sha256 = _sha256(new_data)
+        context.require_approval(
+            "write",
+            {
+                "tool": "apply_workspace_patch",
+                "path": relative_path,
+                "before_sha256": before_sha256,
+                "after_sha256": after_sha256,
+            },
+            f"replace workspace file {relative_path}",
+            diff or f"replace {relative_path} (content changed without a line diff)",
+        )
+
         file_descriptor, temporary_name = tempfile.mkstemp(
             dir=target.parent,
             prefix=".suto-write-",
@@ -316,7 +330,6 @@ def build_workspace_tools(
         finally:
             temporary_path.unlink(missing_ok=True)
 
-        after_sha256 = _sha256(new_data)
         audit_warning = ""
         if change_callback is not None:
             try:
