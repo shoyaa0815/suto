@@ -36,6 +36,22 @@ class StepStatus(StrEnum):
     FAILED = "failed"
 
 
+class ScheduleKind(StrEnum):
+    ONCE = "once"
+    INTERVAL = "interval"
+    CRON = "cron"
+
+
+class MissedRunPolicy(StrEnum):
+    RUN_ONCE = "run_once"
+    SKIP = "skip"
+
+
+class TriggerStatus(StrEnum):
+    CREATED = "created"
+    SKIPPED = "skipped"
+
+
 @dataclass(frozen=True)
 class Job:
     id: str
@@ -145,5 +161,38 @@ class ApprovalEvent:
     job_id: str
     event_type: str
     actor: str
+    detail: str
+    created_at: str
+
+
+@dataclass(frozen=True)
+class Schedule:
+    id: str
+    kind: ScheduleKind
+    expression: str
+    timezone: str
+    prompt: str
+    workspace: str
+    allow_write: bool
+    allow_command: bool
+    enabled: bool
+    missed_run_policy: MissedRunPolicy
+    retry_limit: int
+    retry_delay_seconds: int
+    next_run_at: str | None
+    last_run_at: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class TriggerEvent:
+    id: int
+    schedule_id: str
+    scheduled_for: str
+    idempotency_key: str
+    attempt: int
+    status: TriggerStatus
+    job_id: str | None
     detail: str
     created_at: str

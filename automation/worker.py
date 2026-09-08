@@ -3,6 +3,7 @@ from pathlib import Path
 
 from .models import Job, JobStatus
 from .runner import JobRunner
+from .scheduler import Scheduler
 from .store import JobStore
 
 
@@ -15,6 +16,7 @@ class AutomationWorker:
     ) -> None:
         self.store = store
         self.runner = runner
+        self.scheduler = Scheduler(store)
         self.poll_interval = poll_interval
         self.active_job_id: str | None = None
         self._active_task: asyncio.Task | None = None
@@ -62,6 +64,9 @@ class AutomationWorker:
             self._wake.set()
         return resumed
 
+    def wake(self) -> None:
+        self._wake.set()
+
     def approve(self, job_id: str, actor: str = "cli") -> tuple[bool, str]:
         decided, message = self.store.decide_approval(job_id, True, actor)
         if decided or "queued" in message:
@@ -77,6 +82,7 @@ class AutomationWorker:
     async def start(self) -> None:
         self.store.recover_interrupted_jobs()
         while not self._stopping:
+            self.scheduler.tick()
             job = self.store.claim_next_job()
             if job is None:
                 self._wake.clear()

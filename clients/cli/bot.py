@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from ai import ask_local_ai
-from automation.models import Job, JobStatus
+from automation.models import Job, JobStatus, MissedRunPolicy, ScheduleKind
 from automation.runner import JobRunner
 from automation.store import JobStore
 from automation.worker import AutomationWorker
@@ -40,12 +40,18 @@ def _print_help(mode: str | None = None) -> None:
         "create an automation job"
     )
     print("  /jobs  list recent automation jobs")
+    print(
+        "  /schedule (--at <ISO> | --every <seconds> | --cron <expr>) "
+        "[options] <task>  create a schedule"
+    )
+    print("  /schedules  list schedules")
+    print("  /pause <schedule_id>  pause a schedule")
     print("  /status <job_id>  show job status and result")
     print("  /plan <job_id>  show the current automation plan")
     print("  /commands <job_id>  show commands executed by a job")
     print("  /changes <job_id>  show files changed by a job")
     print("  /cancel <job_id>  cancel a queued, running, or waiting job")
-    print("  /resume <job_id>  safely resume an interrupted job")
+    print("  /resume <job_id|schedule_id>  resume a job or schedule")
     print("  /approve <job_id>  approve the pending exact action")
     print("  /reject <job_id>  reject the pending action and block the job")
     print("  /exit  exit suto")
@@ -91,6 +97,28 @@ def _print_jobs(store: JobStore) -> None:
         print(
             f"{job.id}  {job.status.value:<9}  "
             f"tokens={job.total_tokens:<6}  {prompt}"
+        )
+
+
+def _print_schedules(store: JobStore) -> None:
+    schedules = store.list_schedules()
+    if not schedules:
+        print("No schedules yet.")
+        return
+    for schedule in schedules:
+        if not schedule.enabled:
+            state = "paused"
+        elif schedule.next_run_at is None:
+            state = "finished"
+        else:
+            state = "active"
+        prompt = " ".join(schedule.prompt.split())
+        if len(prompt) > 50:
+            prompt = prompt[:47] + "..."
+        next_run = schedule.next_run_at or "none"
+        print(
+            f"{schedule.id}  {state:<8}  {schedule.kind.value:<8}  "
+            f"next={next_run}  {prompt}"
         )
 
 
@@ -243,6 +271,99 @@ def _parse_run(argument: str) -> tuple[str, Path, bool, bool]:
     return " ".join(parts), workspace, allow_write, allow_command
 
 
+def _parse_schedule(argument: str) -> dict:
+    try:
+        parts = shlex.split(argument)
+    except ValueError as error:
+        raise ValueError(f"invalid /schedule arguments: {error}") from error
+    usage = (
+        "usage: /schedule (--at <ISO> | --every <seconds> | --cron <expr>) "
+        "[--timezone <zone>] [--workspace <path>] [--allow-write] "
+        "[--allow-command] [--missed-run <run_once|skip>] "
+        "[--retry <count>] [--retry-delay <seconds>] <task>"
+    )
+    if not parts:
+        raise ValueError(usage)
+
+    kind = None
+    expression = None
+    timezone = "UTC"
+    workspace = Path.cwd()
+    allow_write = False
+    allow_command = False
+    missed_run_policy = MissedRunPolicy.RUN_ONCE
+    retry_limit = 0
+    retry_delay_seconds = 60
+    while parts and parts[0].startswith("--"):
+        flag = parts.pop(0)
+        if flag in {"--at", "--every", "--cron"}:
+            if kind is not None:
+                raise ValueError("choose exactly one of --at, --every, or --cron")
+            if not parts:
+                raise ValueError(f"{flag} requires a value")
+            kind = {
+                "--at": ScheduleKind.ONCE,
+                "--every": ScheduleKind.INTERVAL,
+                "--cron": ScheduleKind.CRON,
+            }[flag]
+            expression = parts.pop(0)
+        elif flag in {
+            "--timezone",
+            "--workspace",
+            "--missed-run",
+            "--retry",
+            "--retry-delay",
+        }:
+            if not parts:
+                raise ValueError(f"{flag} requires a value")
+            value = parts.pop(0)
+            if flag == "--timezone":
+                timezone = value
+            elif flag == "--workspace":
+                workspace = Path(value).expanduser().resolve()
+            elif flag == "--missed-run":
+                try:
+                    missed_run_policy = MissedRunPolicy(value)
+                except ValueError as error:
+                    raise ValueError(
+                        "--missed-run must be run_once or skip"
+                    ) from error
+            elif flag == "--retry":
+                try:
+                    retry_limit = int(value)
+                except ValueError as error:
+                    raise ValueError("--retry must be a whole number") from error
+            else:
+                try:
+                    retry_delay_seconds = int(value)
+                except ValueError as error:
+                    raise ValueError("--retry-delay must be a whole number") from error
+        elif flag == "--allow-write":
+            allow_write = True
+        elif flag == "--allow-command":
+            allow_command = True
+        else:
+            raise ValueError(f"unknown /schedule option: {flag}")
+    if kind is None:
+        raise ValueError("choose one of --at, --every, or --cron")
+    if not parts:
+        raise ValueError("/schedule requires a task")
+    if not workspace.is_dir():
+        raise ValueError(f"workspace is not a directory: {workspace}")
+    return {
+        "kind": kind,
+        "expression": expression,
+        "prompt": " ".join(parts),
+        "timezone": timezone,
+        "workspace": workspace,
+        "allow_write": allow_write,
+        "allow_command": allow_command,
+        "missed_run_policy": missed_run_policy,
+        "retry_limit": retry_limit,
+        "retry_delay_seconds": retry_delay_seconds,
+    }
+
+
 def _submit_agent_prompt(
     worker: AutomationWorker,
     prompt: str,
@@ -302,6 +423,7 @@ async def _chat_loop(mode: str) -> None:
     database_path = os.environ.get("SUTO_DB_PATH", "data/suto.db")
     store = JobStore(database_path)
     worker = AutomationWorker(store, JobRunner(store))
+    scheduler = worker.scheduler
     worker_task = asyncio.create_task(worker.start())
     print(f"suto CLI (mode: {mode}) — type /help for commands")
     if mode == "agent":
@@ -350,6 +472,30 @@ async def _chat_loop(mode: str) -> None:
             if command == "/jobs":
                 _print_jobs(store)
                 continue
+            if command == "/schedule":
+                try:
+                    options = _parse_schedule(argument)
+                    schedule = scheduler.create(**options)
+                except ValueError as error:
+                    print(error)
+                    continue
+                worker.wake()
+                print(
+                    f"Created schedule {schedule.id}; "
+                    f"next run {schedule.next_run_at}"
+                )
+                continue
+            if command == "/schedules":
+                _print_schedules(store)
+                continue
+            if command == "/pause":
+                if not argument:
+                    print("usage: /pause <schedule_id>")
+                elif store.set_schedule_enabled(argument, False):
+                    print(f"Paused schedule {argument}")
+                else:
+                    print(f"Schedule not found: {argument}")
+                continue
             if command == "/status":
                 if not argument:
                     print("usage: /status <job_id>")
@@ -385,9 +531,15 @@ async def _chat_loop(mode: str) -> None:
                 continue
             if command == "/resume":
                 if not argument:
-                    print("usage: /resume <job_id>")
+                    print("usage: /resume <job_id|schedule_id>")
                     continue
-                if worker.resume(argument):
+                if argument.startswith("sch_"):
+                    if store.set_schedule_enabled(argument, True):
+                        worker.wake()
+                        print(f"Resumed schedule {argument}")
+                    else:
+                        print(f"Schedule not found: {argument}")
+                elif worker.resume(argument):
                     print(f"Resumed job {argument}")
                 else:
                     print(f"Job cannot be resumed: {argument}")

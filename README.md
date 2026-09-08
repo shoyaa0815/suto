@@ -76,11 +76,27 @@ When an action needs approval:
 An approval applies only to the displayed action, expires after a limited time,
 and can be used once.
 
+Create persistent schedules with an ISO-8601 time, an interval in seconds, or a
+standard five-field cron expression:
+
+```text
+/schedule --at 2026-09-09T09:00:00+07:00 prepare the daily report
+/schedule --every 3600 inspect this project
+/schedule --cron "0 9 * * 1-5" --timezone Asia/Bangkok update the report
+```
+
+Schedule options include `--workspace`, `--allow-write`, `--allow-command`,
+`--missed-run run_once|skip`, `--retry`, and `--retry-delay`. Scheduled jobs use
+the saved permission profile, never broader permissions.
+
 ## Commands
 
 ```text
 /help               show all commands
 /jobs               list jobs
+/schedule ...        create a one-time, interval, or cron schedule
+/schedules           list schedules
+/pause <schedule_id> pause a schedule
 /status <job_id>    show job status and pending approval
 /plan <job_id>      show the job plan
 /commands <job_id>  show command results
@@ -88,6 +104,6 @@ and can be used once.
 /approve <job_id>   approve an action
 /reject <job_id>    reject an action
 /cancel <job_id>    cancel a job
-/resume <job_id>    resume an interrupted job
+/resume <id>        resume an interrupted job or paused schedule
 /exit               exit Suto
 ```

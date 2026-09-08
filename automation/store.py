@@ -16,8 +16,13 @@ from .models import (
     JobEvent,
     JobStatus,
     JobStep,
+    MissedRunPolicy,
+    Schedule,
+    ScheduleKind,
     StepStatus,
     ToolEvent,
+    TriggerEvent,
+    TriggerStatus,
 )
 from .redaction import redact_text, redact_value
 
@@ -176,6 +181,47 @@ class JobStore:
 
                 CREATE INDEX IF NOT EXISTS approval_events_job_id_idx
                     ON approval_events(job_id, id);
+
+                CREATE TABLE IF NOT EXISTS schedules (
+                    id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    expression TEXT NOT NULL,
+                    timezone TEXT NOT NULL,
+                    prompt TEXT NOT NULL,
+                    workspace TEXT NOT NULL,
+                    allow_write INTEGER NOT NULL DEFAULT 0,
+                    allow_command INTEGER NOT NULL DEFAULT 0,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    missed_run_policy TEXT NOT NULL DEFAULT 'run_once',
+                    retry_limit INTEGER NOT NULL DEFAULT 0,
+                    retry_delay_seconds INTEGER NOT NULL DEFAULT 60,
+                    next_run_at TEXT,
+                    last_run_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS schedules_due_idx
+                    ON schedules(enabled, next_run_at);
+
+                CREATE TABLE IF NOT EXISTS trigger_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    schedule_id TEXT NOT NULL,
+                    scheduled_for TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    attempt INTEGER NOT NULL DEFAULT 1,
+                    status TEXT NOT NULL,
+                    job_id TEXT,
+                    detail TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(schedule_id) REFERENCES schedules(id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL,
+                    UNIQUE(schedule_id, scheduled_for, attempt)
+                );
+
+                CREATE INDEX IF NOT EXISTS trigger_history_schedule_idx
+                    ON trigger_history(schedule_id, id);
                 """
             )
             columns = {
@@ -336,6 +382,45 @@ class JobStore:
             job_id=row["job_id"],
             event_type=row["event_type"],
             actor=row["actor"],
+            detail=row["detail"],
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _to_schedule(row: sqlite3.Row | None) -> Schedule | None:
+        if row is None:
+            return None
+        return Schedule(
+            id=row["id"],
+            kind=ScheduleKind(row["kind"]),
+            expression=row["expression"],
+            timezone=row["timezone"],
+            prompt=row["prompt"],
+            workspace=row["workspace"],
+            allow_write=bool(row["allow_write"]),
+            allow_command=bool(row["allow_command"]),
+            enabled=bool(row["enabled"]),
+            missed_run_policy=MissedRunPolicy(row["missed_run_policy"]),
+            retry_limit=int(row["retry_limit"]),
+            retry_delay_seconds=int(row["retry_delay_seconds"]),
+            next_run_at=row["next_run_at"],
+            last_run_at=row["last_run_at"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _to_trigger(row: sqlite3.Row | None) -> TriggerEvent | None:
+        if row is None:
+            return None
+        return TriggerEvent(
+            id=int(row["id"]),
+            schedule_id=row["schedule_id"],
+            scheduled_for=row["scheduled_for"],
+            idempotency_key=row["idempotency_key"],
+            attempt=int(row["attempt"]),
+            status=TriggerStatus(row["status"]),
+            job_id=row["job_id"],
             detail=row["detail"],
             created_at=row["created_at"],
         )
@@ -1429,3 +1514,345 @@ class JobStore:
                     ),
                 )
         return cursor.rowcount
+
+    def create_schedule(
+        self,
+        *,
+        kind: str | ScheduleKind,
+        expression: str,
+        timezone: str,
+        prompt: str,
+        workspace: str = ".",
+        allow_write: bool = False,
+        allow_command: bool = False,
+        missed_run_policy: str | MissedRunPolicy = MissedRunPolicy.RUN_ONCE,
+        retry_limit: int = 0,
+        retry_delay_seconds: int = 60,
+        next_run_at: str,
+    ) -> Schedule:
+        schedule_id = f"sch_{uuid4().hex[:8]}"
+        timestamp = _now()
+        schedule_kind = ScheduleKind(kind)
+        missed_policy = MissedRunPolicy(missed_run_policy)
+        if retry_limit < 0 or retry_limit > 10:
+            raise ValueError("retry limit must be between 0 and 10")
+        if retry_delay_seconds < 1 or retry_delay_seconds > 86_400:
+            raise ValueError("retry delay must be between 1 and 86400 seconds")
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO schedules (
+                    id, kind, expression, timezone, prompt, workspace,
+                    allow_write, allow_command, enabled, missed_run_policy,
+                    retry_limit, retry_delay_seconds, next_run_at,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    schedule_id,
+                    schedule_kind,
+                    expression,
+                    timezone,
+                    redact_text(prompt),
+                    workspace,
+                    int(allow_write),
+                    int(allow_command),
+                    missed_policy,
+                    retry_limit,
+                    retry_delay_seconds,
+                    next_run_at,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        schedule = self.get_schedule(schedule_id)
+        if schedule is None:
+            raise RuntimeError(f"failed to create schedule: {schedule_id}")
+        return schedule
+
+    def get_schedule(self, schedule_id: str) -> Schedule | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM schedules WHERE id = ?", (schedule_id,)
+            ).fetchone()
+        return self._to_schedule(row)
+
+    def list_schedules(self, limit: int = 100) -> list[Schedule]:
+        safe_limit = min(max(int(limit), 1), 500)
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM schedules ORDER BY created_at DESC LIMIT ?",
+                (safe_limit,),
+            ).fetchall()
+        return [
+            schedule
+            for row in rows
+            if (schedule := self._to_schedule(row)) is not None
+        ]
+
+    def list_due_schedules(self, now: str) -> list[Schedule]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM schedules
+                WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?
+                ORDER BY next_run_at ASC
+                """,
+                (now,),
+            ).fetchall()
+        return [
+            schedule
+            for row in rows
+            if (schedule := self._to_schedule(row)) is not None
+        ]
+
+    def set_schedule_enabled(self, schedule_id: str, enabled: bool) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE schedules SET enabled = ?, updated_at = ? WHERE id = ?",
+                (int(enabled), _now(), schedule_id),
+            )
+        return cursor.rowcount == 1
+
+    @staticmethod
+    def _insert_scheduled_job(
+        connection: sqlite3.Connection,
+        schedule: sqlite3.Row,
+    ) -> str:
+        job_id = f"job_{uuid4().hex[:8]}"
+        schedule_id = (
+            schedule["schedule_row_id"]
+            if "schedule_row_id" in schedule.keys()
+            else schedule["id"]
+        )
+        connection.execute(
+            """
+            INSERT INTO jobs (
+                id, prompt, mode, status, source, source_ref, workspace,
+                allow_write, allow_command, created_at
+            ) VALUES (?, ?, 'agent', ?, 'schedule', ?, ?, ?, ?, ?)
+            """,
+            (
+                job_id,
+                schedule["prompt"],
+                JobStatus.QUEUED,
+                schedule_id,
+                schedule["workspace"],
+                schedule["allow_write"],
+                schedule["allow_command"],
+                _now(),
+            ),
+        )
+        return job_id
+
+    def fire_schedule(
+        self,
+        schedule_id: str,
+        scheduled_for: str,
+        next_run_at: str | None,
+        *,
+        skip_detail: str | None = None,
+    ) -> TriggerEvent | None:
+        """Atomically materialize one occurrence and advance its schedule."""
+        key_source = f"{schedule_id}:{scheduled_for}:1"
+        idempotency_key = hashlib.sha256(key_source.encode()).hexdigest()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            schedule = connection.execute(
+                "SELECT * FROM schedules WHERE id = ?", (schedule_id,)
+            ).fetchone()
+            if (
+                schedule is None
+                or not schedule["enabled"]
+                or schedule["next_run_at"] != scheduled_for
+            ):
+                return None
+
+            existing = connection.execute(
+                "SELECT * FROM trigger_history WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+            if existing is not None:
+                return self._to_trigger(existing)
+
+            detail = skip_detail or "created scheduled job"
+            status = TriggerStatus.SKIPPED if skip_detail else TriggerStatus.CREATED
+            job_id = None
+            if not skip_detail:
+                active = connection.execute(
+                    """
+                    SELECT 1 FROM trigger_history AS trigger
+                    JOIN jobs ON jobs.id = trigger.job_id
+                    WHERE trigger.schedule_id = ?
+                      AND jobs.status IN (?, ?, ?, ?)
+                    LIMIT 1
+                    """,
+                    (
+                        schedule_id,
+                        JobStatus.QUEUED,
+                        JobStatus.RUNNING,
+                        JobStatus.WAITING_APPROVAL,
+                        JobStatus.INTERRUPTED,
+                    ),
+                ).fetchone()
+                if active is not None:
+                    status = TriggerStatus.SKIPPED
+                    detail = "skipped because a previous run is still active"
+                else:
+                    job_id = self._insert_scheduled_job(connection, schedule)
+
+            connection.execute(
+                """
+                INSERT INTO trigger_history (
+                    schedule_id, scheduled_for, idempotency_key, attempt,
+                    status, job_id, detail, created_at
+                ) VALUES (?, ?, ?, 1, ?, ?, ?, ?)
+                """,
+                (
+                    schedule_id,
+                    scheduled_for,
+                    idempotency_key,
+                    status,
+                    job_id,
+                    detail,
+                    _now(),
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE schedules
+                SET next_run_at = ?, last_run_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (next_run_at, scheduled_for, _now(), schedule_id),
+            )
+            row = connection.execute(
+                "SELECT * FROM trigger_history WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+        return self._to_trigger(row)
+
+    def list_trigger_history(
+        self, schedule_id: str, limit: int = 50
+    ) -> list[TriggerEvent]:
+        safe_limit = min(max(int(limit), 1), 200)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM trigger_history WHERE schedule_id = ?
+                ORDER BY id DESC LIMIT ?
+                """,
+                (schedule_id, safe_limit),
+            ).fetchall()
+        return [
+            trigger
+            for row in rows
+            if (trigger := self._to_trigger(row)) is not None
+        ]
+
+    def list_retryable_triggers(self, now: str) -> list[TriggerEvent]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT trigger.* FROM trigger_history AS trigger
+                JOIN schedules ON schedules.id = trigger.schedule_id
+                JOIN jobs ON jobs.id = trigger.job_id
+                WHERE schedules.enabled = 1
+                  AND trigger.status = ?
+                  AND jobs.status = ?
+                  AND trigger.attempt <= schedules.retry_limit
+                  AND datetime(
+                      jobs.finished_at,
+                      '+' || schedules.retry_delay_seconds || ' seconds'
+                  )
+                      <= datetime(?)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM trigger_history AS newer
+                      WHERE newer.schedule_id = trigger.schedule_id
+                        AND newer.scheduled_for = trigger.scheduled_for
+                        AND newer.attempt = trigger.attempt + 1
+                  )
+                ORDER BY jobs.finished_at ASC
+                """,
+                (TriggerStatus.CREATED, JobStatus.FAILED, now),
+            ).fetchall()
+        return [
+            trigger
+            for row in rows
+            if (trigger := self._to_trigger(row)) is not None
+        ]
+
+    def retry_trigger(self, trigger_id: int) -> TriggerEvent | None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            previous = connection.execute(
+                """
+                SELECT trigger.*, jobs.status AS job_status,
+                       schedules.enabled, schedules.retry_limit,
+                       schedules.prompt, schedules.workspace,
+                       schedules.allow_write, schedules.allow_command,
+                       schedules.id AS schedule_row_id
+                FROM trigger_history AS trigger
+                JOIN jobs ON jobs.id = trigger.job_id
+                JOIN schedules ON schedules.id = trigger.schedule_id
+                WHERE trigger.id = ?
+                """,
+                (trigger_id,),
+            ).fetchone()
+            if (
+                previous is None
+                or not previous["enabled"]
+                or previous["job_status"] != JobStatus.FAILED
+                or previous["attempt"] > previous["retry_limit"]
+            ):
+                return None
+            attempt = int(previous["attempt"]) + 1
+            key_source = (
+                f"{previous['schedule_id']}:{previous['scheduled_for']}:{attempt}"
+            )
+            key = hashlib.sha256(key_source.encode()).hexdigest()
+            existing = connection.execute(
+                "SELECT * FROM trigger_history WHERE idempotency_key = ?", (key,)
+            ).fetchone()
+            if existing is not None:
+                return self._to_trigger(existing)
+            active = connection.execute(
+                """
+                SELECT 1 FROM trigger_history AS trigger
+                JOIN jobs ON jobs.id = trigger.job_id
+                WHERE trigger.schedule_id = ? AND jobs.status IN (?, ?, ?, ?)
+                LIMIT 1
+                """,
+                (
+                    previous["schedule_id"],
+                    JobStatus.QUEUED,
+                    JobStatus.RUNNING,
+                    JobStatus.WAITING_APPROVAL,
+                    JobStatus.INTERRUPTED,
+                ),
+            ).fetchone()
+            if active is not None:
+                return None
+            job_id = self._insert_scheduled_job(connection, previous)
+            connection.execute(
+                """
+                INSERT INTO trigger_history (
+                    schedule_id, scheduled_for, idempotency_key, attempt,
+                    status, job_id, detail, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    previous["schedule_id"],
+                    previous["scheduled_for"],
+                    key,
+                    attempt,
+                    TriggerStatus.CREATED,
+                    job_id,
+                    f"created retry attempt {attempt}",
+                    _now(),
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM trigger_history WHERE idempotency_key = ?", (key,)
+            ).fetchone()
+        return self._to_trigger(row)

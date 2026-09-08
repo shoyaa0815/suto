@@ -1,6 +1,8 @@
+from automation.models import MissedRunPolicy, ScheduleKind
 from automation.store import JobStore
 from clients.cli.bot import (
     _parse_run,
+    _parse_schedule,
     _print_commands,
     _print_help,
     _print_job_status,
@@ -161,6 +163,25 @@ def test_parse_run_rejects_missing_workspace(tmp_path):
         assert "not a directory" in str(error)
     else:
         raise AssertionError("missing workspace was accepted")
+
+
+def test_parse_schedule_accepts_cron_permissions_and_retry(tmp_path):
+    options = _parse_schedule(
+        f'--cron "0 9 * * 1-5" --timezone Asia/Bangkok '
+        f'--workspace "{tmp_path}" --allow-write --allow-command '
+        '--missed-run skip --retry 2 --retry-delay 30 "update report"'
+    )
+
+    assert options["kind"] == ScheduleKind.CRON
+    assert options["expression"] == "0 9 * * 1-5"
+    assert options["timezone"] == "Asia/Bangkok"
+    assert options["workspace"] == tmp_path.resolve()
+    assert options["allow_write"] is True
+    assert options["allow_command"] is True
+    assert options["missed_run_policy"] == MissedRunPolicy.SKIP
+    assert options["retry_limit"] == 2
+    assert options["retry_delay_seconds"] == 30
+    assert options["prompt"] == "update report"
 
 
 def test_print_progress_shows_activity_time_and_tokens(capsys):
