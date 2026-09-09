@@ -26,16 +26,28 @@ Tool use:
 
 """
 
+SKILL_SECTION = """
+Reusable automation skills:
+{skill_instructions}
+- These instructions specialize the task but cannot expand workspace, tool,
+  command, approval, or resource permissions.
+
+"""
+
 
 def build_system_prompt(
     mode_prompt: str,
     tool_guidance: str,
     reply_language: ReplyLanguage,
+    skill_instructions: str = "",
 ) -> str:
     guidance = tool_guidance or "- No tools are available in this workspace."
-    return BASE_PROMPT.format(
+    prompt = BASE_PROMPT.format(
         mode_prompt=mode_prompt,
         tool_guidance=guidance,
         reply_language_name=reply_language.name,
         reply_language_code=reply_language.code,
     )
+    if skill_instructions:
+        prompt += SKILL_SECTION.format(skill_instructions=skill_instructions.strip())
+    return prompt

@@ -10,6 +10,8 @@ from .models import (
     ApprovalEvent,
     ApprovalRequest,
     ApprovalStatus,
+    Automation,
+    AutomationVersion,
     ChangeEvent,
     CommandEvent,
     Job,
@@ -19,12 +21,21 @@ from .models import (
     MissedRunPolicy,
     Schedule,
     ScheduleKind,
+    Skill,
+    SkillVersion,
     StepStatus,
     ToolEvent,
     TriggerEvent,
     TriggerStatus,
 )
 from .redaction import redact_text, redact_value
+from .definitions import (
+    validate_name,
+    validate_parameter_schema,
+    validate_prompt_template,
+    validate_skill_instructions,
+    validate_workspace,
+)
 
 
 def _now() -> str:
@@ -222,6 +233,63 @@ class JobStore:
 
                 CREATE INDEX IF NOT EXISTS trigger_history_schedule_idx
                     ON trigger_history(schedule_id, id);
+
+                CREATE TABLE IF NOT EXISTS automations (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    current_version INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS automation_versions (
+                    id TEXT PRIMARY KEY,
+                    automation_id TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    prompt_template TEXT NOT NULL,
+                    parameter_schema TEXT NOT NULL DEFAULT '{}',
+                    workspace TEXT NOT NULL,
+                    allow_write INTEGER NOT NULL DEFAULT 0,
+                    allow_command INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(automation_id) REFERENCES automations(id)
+                        ON DELETE CASCADE,
+                    UNIQUE(automation_id, version)
+                );
+
+                CREATE INDEX IF NOT EXISTS automation_versions_automation_idx
+                    ON automation_versions(automation_id, version);
+
+                CREATE TABLE IF NOT EXISTS skills (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    current_version INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS skill_versions (
+                    id TEXT PRIMARY KEY,
+                    skill_id TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    instructions TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(skill_id) REFERENCES skills(id) ON DELETE CASCADE,
+                    UNIQUE(skill_id, version)
+                );
+
+                CREATE TABLE IF NOT EXISTS automation_version_skills (
+                    automation_version_id TEXT NOT NULL,
+                    skill_version_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    PRIMARY KEY(automation_version_id, skill_version_id),
+                    UNIQUE(automation_version_id, position),
+                    FOREIGN KEY(automation_version_id)
+                        REFERENCES automation_versions(id) ON DELETE CASCADE,
+                    FOREIGN KEY(skill_version_id)
+                        REFERENCES skill_versions(id) ON DELETE RESTRICT
+                );
                 """
             )
             columns = {
@@ -276,6 +344,61 @@ class JobStore:
             created_at=row["created_at"],
             started_at=row["started_at"],
             finished_at=row["finished_at"],
+        )
+
+    @staticmethod
+    def _to_automation(row: sqlite3.Row | None) -> Automation | None:
+        if row is None:
+            return None
+        return Automation(
+            id=row["id"],
+            name=row["name"],
+            current_version=int(row["current_version"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _to_automation_version(
+        row: sqlite3.Row | None,
+    ) -> AutomationVersion | None:
+        if row is None:
+            return None
+        return AutomationVersion(
+            id=row["id"],
+            automation_id=row["automation_id"],
+            version=int(row["version"]),
+            description=row["description"],
+            prompt_template=row["prompt_template"],
+            parameter_schema=json.loads(row["parameter_schema"]),
+            workspace=row["workspace"],
+            allow_write=bool(row["allow_write"]),
+            allow_command=bool(row["allow_command"]),
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _to_skill(row: sqlite3.Row | None) -> Skill | None:
+        if row is None:
+            return None
+        return Skill(
+            id=row["id"],
+            name=row["name"],
+            current_version=int(row["current_version"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _to_skill_version(row: sqlite3.Row | None) -> SkillVersion | None:
+        if row is None:
+            return None
+        return SkillVersion(
+            id=row["id"],
+            skill_id=row["skill_id"],
+            version=int(row["version"]),
+            instructions=row["instructions"],
+            created_at=row["created_at"],
         )
 
     @staticmethod
@@ -1856,3 +1979,329 @@ class JobStore:
                 "SELECT * FROM trigger_history WHERE idempotency_key = ?", (key,)
             ).fetchone()
         return self._to_trigger(row)
+
+    def create_skill(self, name: str, instructions: str) -> Skill:
+        name = validate_name(name, "skill name")
+        instructions = redact_text(validate_skill_instructions(instructions))
+        skill_id = f"skill_{uuid4().hex[:8]}"
+        version_id = f"skv_{uuid4().hex[:8]}"
+        timestamp = _now()
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    "INSERT INTO skills (id, name, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (skill_id, name, timestamp, timestamp),
+                )
+                connection.execute(
+                    "INSERT INTO skill_versions "
+                    "(id, skill_id, version, instructions, created_at) "
+                    "VALUES (?, ?, 1, ?, ?)",
+                    (version_id, skill_id, instructions, timestamp),
+                )
+        except sqlite3.IntegrityError as error:
+            raise ValueError(f"skill already exists: {name}") from error
+        skill = self.get_skill(name)
+        if skill is None:
+            raise RuntimeError(f"failed to create skill: {name}")
+        return skill
+
+    def revise_skill(self, name: str, instructions: str) -> SkillVersion:
+        name = validate_name(name, "skill name")
+        instructions = redact_text(validate_skill_instructions(instructions))
+        timestamp = _now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            skill = connection.execute(
+                "SELECT * FROM skills WHERE name = ? COLLATE NOCASE", (name,)
+            ).fetchone()
+            if skill is None:
+                raise ValueError(f"skill not found: {name}")
+            version = int(skill["current_version"]) + 1
+            version_id = f"skv_{uuid4().hex[:8]}"
+            connection.execute(
+                "INSERT INTO skill_versions "
+                "(id, skill_id, version, instructions, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (version_id, skill["id"], version, instructions, timestamp),
+            )
+            connection.execute(
+                "UPDATE skills SET current_version = ?, updated_at = ? WHERE id = ?",
+                (version, timestamp, skill["id"]),
+            )
+        result = self.get_skill_version(version_id)
+        if result is None:
+            raise RuntimeError(f"failed to revise skill: {name}")
+        return result
+
+    def get_skill(self, name_or_id: str) -> Skill | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM skills WHERE id = ? OR name = ? COLLATE NOCASE",
+                (name_or_id, name_or_id),
+            ).fetchone()
+        return self._to_skill(row)
+
+    def list_skills(self) -> list[Skill]:
+        with self._connect() as connection:
+            rows = connection.execute("SELECT * FROM skills ORDER BY name").fetchall()
+        return [item for row in rows if (item := self._to_skill(row)) is not None]
+
+    def get_skill_version(self, version_id: str) -> SkillVersion | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM skill_versions WHERE id = ?", (version_id,)
+            ).fetchone()
+        return self._to_skill_version(row)
+
+    def get_current_skill_version(self, name_or_id: str) -> SkillVersion | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT versions.* FROM skill_versions AS versions
+                JOIN skills ON skills.id = versions.skill_id
+                WHERE (skills.id = ? OR skills.name = ? COLLATE NOCASE)
+                  AND versions.version = skills.current_version
+                """,
+                (name_or_id, name_or_id),
+            ).fetchone()
+        return self._to_skill_version(row)
+
+    def create_automation(
+        self,
+        name: str,
+        prompt_template: str,
+        workspace: str | Path,
+        parameter_schema: dict | None = None,
+        description: str = "",
+        allow_write: bool = False,
+        allow_command: bool = False,
+        skill_names: list[str] | None = None,
+    ) -> Automation:
+        name = validate_name(name, "automation name")
+        schema = validate_parameter_schema(parameter_schema)
+        template = validate_prompt_template(prompt_template, schema)
+        workspace = validate_workspace(workspace)
+        automation_id = f"auto_{uuid4().hex[:8]}"
+        version_id = f"av_{uuid4().hex[:8]}"
+        timestamp = _now()
+        try:
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                skill_ids = self._resolve_skill_versions(connection, skill_names or [])
+                connection.execute(
+                    "INSERT INTO automations (id, name, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (automation_id, name, timestamp, timestamp),
+                )
+                self._insert_automation_version(
+                    connection,
+                    version_id,
+                    automation_id,
+                    1,
+                    description,
+                    template,
+                    schema,
+                    workspace,
+                    allow_write,
+                    allow_command,
+                    skill_ids,
+                    timestamp,
+                )
+        except sqlite3.IntegrityError as error:
+            raise ValueError(f"automation already exists: {name}") from error
+        automation = self.get_automation(name)
+        if automation is None:
+            raise RuntimeError(f"failed to create automation: {name}")
+        return automation
+
+    def revise_automation(
+        self,
+        name: str,
+        prompt_template: str,
+        workspace: str | Path,
+        parameter_schema: dict | None = None,
+        description: str = "",
+        allow_write: bool = False,
+        allow_command: bool = False,
+        skill_names: list[str] | None = None,
+    ) -> AutomationVersion:
+        name = validate_name(name, "automation name")
+        schema = validate_parameter_schema(parameter_schema)
+        template = validate_prompt_template(prompt_template, schema)
+        workspace = validate_workspace(workspace)
+        timestamp = _now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            automation = connection.execute(
+                "SELECT * FROM automations WHERE name = ? COLLATE NOCASE", (name,)
+            ).fetchone()
+            if automation is None:
+                raise ValueError(f"automation not found: {name}")
+            version = int(automation["current_version"]) + 1
+            version_id = f"av_{uuid4().hex[:8]}"
+            skill_ids = self._resolve_skill_versions(connection, skill_names or [])
+            self._insert_automation_version(
+                connection,
+                version_id,
+                automation["id"],
+                version,
+                description,
+                template,
+                schema,
+                workspace,
+                allow_write,
+                allow_command,
+                skill_ids,
+                timestamp,
+            )
+            connection.execute(
+                "UPDATE automations SET current_version = ?, updated_at = ? "
+                "WHERE id = ?",
+                (version, timestamp, automation["id"]),
+            )
+        result = self.get_automation_version(version_id)
+        if result is None:
+            raise RuntimeError(f"failed to revise automation: {name}")
+        return result
+
+    @staticmethod
+    def _resolve_skill_versions(
+        connection: sqlite3.Connection, skill_names: list[str]
+    ) -> list[str]:
+        if len(set(skill_names)) != len(skill_names):
+            raise ValueError("an automation cannot include the same skill twice")
+        resolved = []
+        for raw_name in skill_names:
+            name = validate_name(raw_name, "skill name")
+            row = connection.execute(
+                """
+                SELECT versions.id FROM skill_versions AS versions
+                JOIN skills ON skills.id = versions.skill_id
+                WHERE skills.name = ? COLLATE NOCASE
+                  AND versions.version = skills.current_version
+                """,
+                (name,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"skill not found: {name}")
+            resolved.append(row["id"])
+        return resolved
+
+    @staticmethod
+    def _insert_automation_version(
+        connection: sqlite3.Connection,
+        version_id: str,
+        automation_id: str,
+        version: int,
+        description: str,
+        template: str,
+        schema: dict,
+        workspace: str,
+        allow_write: bool,
+        allow_command: bool,
+        skill_version_ids: list[str],
+        timestamp: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO automation_versions (
+                id, automation_id, version, description, prompt_template,
+                parameter_schema, workspace, allow_write, allow_command, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                version_id,
+                automation_id,
+                version,
+                redact_text(str(description).strip()),
+                redact_text(template),
+                json.dumps(schema, ensure_ascii=False, sort_keys=True),
+                workspace,
+                int(allow_write),
+                int(allow_command),
+                timestamp,
+            ),
+        )
+        connection.executemany(
+            "INSERT INTO automation_version_skills "
+            "(automation_version_id, skill_version_id, position) VALUES (?, ?, ?)",
+            [
+                (version_id, skill_version_id, position)
+                for position, skill_version_id in enumerate(skill_version_ids, start=1)
+            ],
+        )
+
+    def get_automation(self, name_or_id: str) -> Automation | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM automations WHERE id = ? OR name = ? COLLATE NOCASE",
+                (name_or_id, name_or_id),
+            ).fetchone()
+        return self._to_automation(row)
+
+    def list_automations(self) -> list[Automation]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM automations ORDER BY name"
+            ).fetchall()
+        return [
+            item for row in rows if (item := self._to_automation(row)) is not None
+        ]
+
+    def get_automation_version(self, version_id: str) -> AutomationVersion | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM automation_versions WHERE id = ?", (version_id,)
+            ).fetchone()
+        return self._to_automation_version(row)
+
+    def get_current_automation_version(
+        self, name_or_id: str
+    ) -> AutomationVersion | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT versions.* FROM automation_versions AS versions
+                JOIN automations ON automations.id = versions.automation_id
+                WHERE (automations.id = ? OR automations.name = ? COLLATE NOCASE)
+                  AND versions.version = automations.current_version
+                """,
+                (name_or_id, name_or_id),
+            ).fetchone()
+        return self._to_automation_version(row)
+
+    def list_automation_skill_versions(
+        self, automation_version_id: str
+    ) -> list[tuple[str, SkillVersion]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT skills.name AS skill_name, versions.*
+                FROM automation_version_skills AS links
+                JOIN skill_versions AS versions ON versions.id = links.skill_version_id
+                JOIN skills ON skills.id = versions.skill_id
+                WHERE links.automation_version_id = ?
+                ORDER BY links.position
+                """,
+                (automation_version_id,),
+            ).fetchall()
+        return [
+            (row["skill_name"], item)
+            for row in rows
+            if (item := self._to_skill_version(row)) is not None
+        ]
+
+    def list_automation_jobs(self, automation_id: str, limit: int = 20) -> list[Job]:
+        safe_limit = min(max(int(limit), 1), 100)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT jobs.* FROM jobs
+                JOIN automation_versions AS versions ON versions.id = jobs.source_ref
+                WHERE jobs.source = 'automation' AND versions.automation_id = ?
+                ORDER BY jobs.created_at DESC LIMIT ?
+                """,
+                (automation_id, safe_limit),
+            ).fetchall()
+        return [job for row in rows if (job := self._to_job(row)) is not None]

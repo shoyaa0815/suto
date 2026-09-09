@@ -53,6 +53,47 @@ class TriggerStatus(StrEnum):
 
 
 @dataclass(frozen=True)
+class Automation:
+    id: str
+    name: str
+    current_version: int
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class AutomationVersion:
+    id: str
+    automation_id: str
+    version: int
+    description: str
+    prompt_template: str
+    parameter_schema: dict
+    workspace: str
+    allow_write: bool
+    allow_command: bool
+    created_at: str
+
+
+@dataclass(frozen=True)
+class Skill:
+    id: str
+    name: str
+    current_version: int
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class SkillVersion:
+    id: str
+    skill_id: str
+    version: int
+    instructions: str
+    created_at: str
+
+
+@dataclass(frozen=True)
 class Job:
     id: str
     prompt: str

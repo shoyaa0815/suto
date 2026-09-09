@@ -182,6 +182,15 @@ class JobRunner:
                 change_guard_callback=guard_file_change,
                 approval_callback=require_approval,
             )
+            skill_versions = (
+                self.store.list_automation_skill_versions(job.source_ref)
+                if job.source == "automation" and job.source_ref
+                else []
+            )
+            skill_instructions = "\n\n".join(
+                f"Skill {name} (version {version.version}):\n{version.instructions}"
+                for name, version in skill_versions
+            )
             prompt = self._resume_prompt(job) if job.attempt_count > 1 else job.prompt
             retry_count = job.retry_count
             while True:
@@ -244,6 +253,11 @@ class JobRunner:
                                 execution_context=attempt_context,
                                 tool_event_callback=save_tool_event,
                                 change_event_callback=save_change_event,
+                                **(
+                                    {"skill_instructions": skill_instructions}
+                                    if skill_instructions
+                                    else {}
+                                ),
                             ),
                             timeout=remaining_seconds,
                         )

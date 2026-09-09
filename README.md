@@ -97,6 +97,8 @@ the saved permission profile, never broader permissions.
 /schedule ...        create a one-time, interval, or cron schedule
 /schedules           list schedules
 /pause <schedule_id> pause a schedule
+/automation ...      manage and run reusable automations
+/skill ...           manage reusable instruction skills
 /status <job_id>    show job status and pending approval
 /plan <job_id>      show the job plan
 /commands <job_id>  show command results
@@ -106,4 +108,55 @@ the saved permission profile, never broader permissions.
 /cancel <job_id>    cancel a job
 /resume <id>        resume an interrupted job or paused schedule
 /exit               exit Suto
+```
+
+## Reusable automations
+
+Create reusable skills from UTF-8 text files, then create an automation from a
+JSON definition:
+
+```text
+/skill create python-testing ./python-testing.txt
+/automation create ./fix-bug.json
+/automation run fix-bug issue_id=123 test_suite=unit
+/automation history fix-bug
+```
+
+Example `fix-bug.json`:
+
+```json
+{
+  "format_version": 1,
+  "name": "fix-bug",
+  "description": "Inspect, fix, and verify one issue",
+  "prompt_template": "Fix issue {{issue_id}} and run {{test_suite}} tests.",
+  "parameter_schema": {
+    "issue_id": {"type": "integer", "required": true},
+    "test_suite": {"type": "string", "default": "unit"}
+  },
+  "workspace": "/absolute/path/to/project",
+  "allow_write": true,
+  "allow_command": true,
+  "skills": ["python-testing"]
+}
+```
+
+Editing creates an immutable new version. Jobs retain the exact automation and
+skill versions they used:
+
+```text
+/automation edit fix-bug ./fix-bug-v2.json
+/skill edit python-testing ./python-testing-v2.txt
+/automation show fix-bug
+/automation list
+/skill show python-testing
+/skill list
+```
+
+Definitions can be moved between Suto installations without job data or
+secrets:
+
+```text
+/automation export fix-bug ./fix-bug.bundle.json
+/automation import ./fix-bug.bundle.json
 ```

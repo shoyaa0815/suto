@@ -1,6 +1,8 @@
 import asyncio
 from pathlib import Path
+from typing import Any
 
+from .definitions import render_automation_prompt
 from .models import Job, JobStatus
 from .runner import JobRunner
 from .scheduler import Scheduler
@@ -43,6 +45,24 @@ class AutomationWorker:
         )
         self._wake.set()
         return job
+
+    def submit_automation(
+        self,
+        name: str,
+        parameters: dict[str, Any] | None = None,
+    ) -> Job:
+        version = self.store.get_current_automation_version(name)
+        if version is None:
+            raise ValueError(f"automation not found: {name}")
+        prompt = render_automation_prompt(version, parameters or {})
+        return self.submit(
+            prompt,
+            source="automation",
+            source_ref=version.id,
+            workspace=version.workspace,
+            allow_write=version.allow_write,
+            allow_command=version.allow_command,
+        )
 
     async def cancel(self, job_id: str) -> bool:
         job = self.store.get_job(job_id)

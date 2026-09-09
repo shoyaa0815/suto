@@ -48,6 +48,7 @@ async def execute_local_ai(
     execution_context: ExecutionContext | None = None,
     tool_event_callback: ToolEventCallback | None = None,
     change_event_callback: ChangeEventCallback | None = None,
+    skill_instructions: str = "",
 ) -> AIExecutionResult:
     request_started = time.perf_counter()
     max_tool_rounds = (
@@ -149,6 +150,7 @@ async def execute_local_ai(
                 policy.prompt,
                 tool_guidance,
                 reply_language,
+                skill_instructions,
             ),
         },
         {"role": "user", "content": prompt},

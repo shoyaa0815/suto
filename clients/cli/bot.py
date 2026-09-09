@@ -6,6 +6,12 @@ import sys
 from pathlib import Path
 
 from ai import ask_local_ai
+from automation.bundles import import_bundle, write_bundle
+from automation.definitions import (
+    automation_options,
+    load_definition_file,
+    parse_parameter_value,
+)
 from automation.models import Job, JobStatus, MissedRunPolicy, ScheduleKind
 from automation.runner import JobRunner
 from automation.store import JobStore
@@ -45,6 +51,8 @@ def _print_help(mode: str | None = None) -> None:
         "[options] <task>  create a schedule"
     )
     print("  /schedules  list schedules")
+    print("  /automation <create|edit|list|show|run|history|export|import> ...")
+    print("  /skill <create|edit|list|show> ...")
     print("  /pause <schedule_id>  pause a schedule")
     print("  /status <job_id>  show job status and result")
     print("  /plan <job_id>  show the current automation plan")
@@ -236,6 +244,132 @@ def _print_changes(store: JobStore, job_id: str) -> None:
         print(f"Change {index}: {change.path}")
         print(f"SHA256: {before} -> {change.after_sha256}")
         print(change.diff)
+
+
+def _print_automations(store: JobStore) -> None:
+    items = store.list_automations()
+    if not items:
+        print("No reusable automations yet.")
+        return
+    for item in items:
+        version = store.get_current_automation_version(item.id)
+        skills = store.list_automation_skill_versions(version.id) if version else []
+        print(
+            f"{item.name}  version={item.current_version}  "
+            f"skills={len(skills)}  "
+            f"workspace={version.workspace if version else 'unknown'}"
+        )
+
+
+def _print_automation(store: JobStore, name: str) -> None:
+    item = store.get_automation(name)
+    if item is None:
+        print(f"Automation not found: {name}")
+        return
+    version = store.get_current_automation_version(item.id)
+    if version is None:
+        print(f"Automation has no version: {name}")
+        return
+    skills = store.list_automation_skill_versions(version.id)
+    print(f"Automation: {item.name}")
+    print(f"Version: {version.version} ({version.id})")
+    print(f"Description: {version.description or 'none'}")
+    print(f"Workspace: {version.workspace}")
+    print(f"Write: {'allowed' if version.allow_write else 'blocked'}")
+    print(f"Command: {'allowed' if version.allow_command else 'blocked'}")
+    print("Skills: " + (", ".join(name for name, _ in skills) or "none"))
+    print(
+        "Parameters: "
+        + (json.dumps(version.parameter_schema, ensure_ascii=False) or "{}")
+    )
+    print(f"Prompt template:\n{version.prompt_template}")
+
+
+def _print_automation_history(store: JobStore, name: str) -> None:
+    item = store.get_automation(name)
+    if item is None:
+        print(f"Automation not found: {name}")
+        return
+    jobs = store.list_automation_jobs(item.id)
+    if not jobs:
+        print(f"No runs for automation: {item.name}")
+        return
+    for job in jobs:
+        version = store.get_automation_version(job.source_ref or "")
+        version_number = version.version if version else "unknown"
+        print(
+            f"{job.id}  {job.status.value:<16}  version={version_number}  "
+            f"tokens={job.total_tokens}  created={job.created_at}"
+        )
+
+
+def _print_skills(store: JobStore) -> None:
+    skills = store.list_skills()
+    if not skills:
+        print("No reusable skills yet.")
+        return
+    for skill in skills:
+        print(f"{skill.name}  version={skill.current_version}")
+
+
+def _print_skill(store: JobStore, name: str) -> None:
+    skill = store.get_skill(name)
+    if skill is None:
+        print(f"Skill not found: {name}")
+        return
+    version = store.get_current_skill_version(skill.id)
+    if version is None:
+        print(f"Skill has no version: {name}")
+        return
+    print(f"Skill: {skill.name}")
+    print(f"Version: {version.version} ({version.id})")
+    print(f"Instructions:\n{version.instructions}")
+
+
+def _parse_automation_run(argument: str) -> tuple[str, dict]:
+    try:
+        parts = shlex.split(argument)
+    except ValueError as error:
+        raise ValueError(f"invalid automation run arguments: {error}") from error
+    if not parts:
+        raise ValueError("usage: /automation run <name> [key=value ...]")
+    name = parts.pop(0)
+    parameters = {}
+    for item in parts:
+        key, separator, raw_value = item.partition("=")
+        if not separator or not key:
+            raise ValueError(f"parameter must use key=value: {item}")
+        if key in parameters:
+            raise ValueError(f"parameter was provided more than once: {key}")
+        parameters[key] = parse_parameter_value(raw_value)
+    return name, parameters
+
+
+def _definition_options(path: str, forced_name: str | None = None) -> dict:
+    options = automation_options(load_definition_file(path), forced_name)
+    if forced_name is not None:
+        options["name"] = forced_name
+    return options
+
+
+def _single_argument(argument: str, usage: str) -> str:
+    try:
+        parts = shlex.split(argument)
+    except ValueError as error:
+        raise ValueError(f"invalid arguments: {error}") from error
+    if len(parts) != 1:
+        raise ValueError(usage)
+    return parts[0]
+
+
+def _read_skill_file(path: str) -> str:
+    source = Path(path).expanduser().resolve()
+    if not source.is_file():
+        raise ValueError(f"skill file not found: {source}")
+    try:
+        return source.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise ValueError(f"cannot read skill file: {error}") from error
 
 
 def _parse_run(argument: str) -> tuple[str, Path, bool, bool]:
@@ -471,6 +605,102 @@ async def _chat_loop(mode: str) -> None:
                 continue
             if command == "/jobs":
                 _print_jobs(store)
+                continue
+            if command == "/automation":
+                subcommand, _, remainder = argument.partition(" ")
+                subcommand = subcommand.casefold()
+                remainder = remainder.strip()
+                try:
+                    if subcommand == "list":
+                        _print_automations(store)
+                    elif subcommand == "show":
+                        if not remainder:
+                            raise ValueError("usage: /automation show <name>")
+                        _print_automation(store, remainder)
+                    elif subcommand == "create":
+                        definition_path = _single_argument(
+                            remainder,
+                            "usage: /automation create <definition.json>",
+                        )
+                        item = store.create_automation(
+                            **_definition_options(definition_path)
+                        )
+                        print(f"Created automation {item.name} version 1")
+                    elif subcommand == "edit":
+                        parts = shlex.split(remainder)
+                        if len(parts) != 2:
+                            raise ValueError(
+                                "usage: /automation edit <name> <definition.json>"
+                            )
+                        version = store.revise_automation(
+                            **_definition_options(parts[1], parts[0])
+                        )
+                        print(
+                            f"Created automation {parts[0]} version {version.version}"
+                        )
+                    elif subcommand == "run":
+                        name, parameters = _parse_automation_run(remainder)
+                        job = worker.submit_automation(name, parameters)
+                        print(f"Created job {job.id} from automation {name}")
+                    elif subcommand == "history":
+                        if not remainder:
+                            raise ValueError("usage: /automation history <name>")
+                        _print_automation_history(store, remainder)
+                    elif subcommand == "export":
+                        parts = shlex.split(remainder)
+                        if len(parts) != 2:
+                            raise ValueError(
+                                "usage: /automation export <name> <output.json>"
+                            )
+                        target = write_bundle(store, parts[0], parts[1])
+                        print(f"Exported automation {parts[0]} to {target}")
+                    elif subcommand == "import":
+                        bundle_path = _single_argument(
+                            remainder,
+                            "usage: /automation import <bundle.json>",
+                        )
+                        name, version = import_bundle(store, bundle_path)
+                        print(f"Imported automation {name} version {version}")
+                    else:
+                        raise ValueError(
+                            "usage: /automation "
+                            "<create|edit|list|show|run|history|export|import> ..."
+                        )
+                except (OSError, ValueError) as error:
+                    print(error)
+                continue
+            if command == "/skill":
+                subcommand, _, remainder = argument.partition(" ")
+                subcommand = subcommand.casefold()
+                remainder = remainder.strip()
+                try:
+                    if subcommand == "list":
+                        _print_skills(store)
+                    elif subcommand == "show":
+                        if not remainder:
+                            raise ValueError("usage: /skill show <name>")
+                        _print_skill(store, remainder)
+                    elif subcommand in {"create", "edit"}:
+                        parts = shlex.split(remainder)
+                        if len(parts) != 2:
+                            raise ValueError(
+                                f"usage: /skill {subcommand} <name> <instructions.txt>"
+                            )
+                        instructions = _read_skill_file(parts[1])
+                        if subcommand == "create":
+                            skill = store.create_skill(parts[0], instructions)
+                            print(f"Created skill {skill.name} version 1")
+                        else:
+                            version = store.revise_skill(parts[0], instructions)
+                            print(
+                                f"Created skill {parts[0]} version {version.version}"
+                            )
+                    else:
+                        raise ValueError(
+                            "usage: /skill <create|edit|list|show> ..."
+                        )
+                except (OSError, ValueError) as error:
+                    print(error)
                 continue
             if command == "/schedule":
                 try:
