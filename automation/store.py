@@ -1,6 +1,8 @@
 import hashlib
 import json
+import os
 import sqlite3
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -29,6 +31,11 @@ from .models import (
     TriggerStatus,
 )
 from .redaction import redact_text, redact_value
+from .migrations import initialize_database
+from .operations import OperationsStore
+from .options import validate_options
+from .subtasks import SubtaskStore
+from .knowledge import KnowledgeStore
 from .definitions import (
     validate_name,
     validate_parameter_schema,
@@ -42,22 +49,34 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-class JobStore:
+class JobStore(OperationsStore, SubtaskStore, KnowledgeStore):
     def __init__(self, path: str | Path = "data/suto.db") -> None:
-        self.path = Path(path)
+        self.path = Path(path).expanduser().resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._initialize()
+        fd = os.open(self.path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        finally:
+            os.close(fd)
+        initialize_database(self)
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self):
         connection = sqlite3.connect(self.path, timeout=10)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
-        return connection
+        connection.create_function('canonical_workspace', 1, lambda path: str(Path(path).expanduser().resolve()))
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def _initialize(self) -> None:
         with self._connect() as connection:
             connection.executescript(
                 """
+                BEGIN IMMEDIATE;
                 CREATE TABLE IF NOT EXISTS jobs (
                     id TEXT PRIMARY KEY,
                     prompt TEXT NOT NULL,
@@ -344,6 +363,8 @@ class JobStore:
             created_at=row["created_at"],
             started_at=row["started_at"],
             finished_at=row["finished_at"],
+            parent_id=row["parent_id"],
+            options=json.loads(row["options"]),
         )
 
     @staticmethod
@@ -557,7 +578,9 @@ class JobStore:
         workspace: str = ".",
         allow_write: bool = False,
         allow_command: bool = False,
+        options: dict | None = None,
     ) -> Job:
+        options = validate_options(options)
         job_id = f"job_{uuid4().hex[:8]}"
         created_at = _now()
         with self._connect() as connection:
@@ -565,8 +588,8 @@ class JobStore:
                 """
                 INSERT INTO jobs (
                     id, prompt, mode, status, source, source_ref,
-                    workspace, allow_write, allow_command, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    workspace, allow_write, allow_command, created_at, options
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -579,6 +602,7 @@ class JobStore:
                     int(allow_write),
                     int(allow_command),
                     created_at,
+                    json.dumps(options, sort_keys=True),
                 ),
             )
         job = self.get_job(job_id)
@@ -608,8 +632,14 @@ class JobStore:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
-                SELECT id FROM jobs
-                WHERE status = ?
+                SELECT id FROM jobs AS candidate
+                WHERE status = ? AND
+                (SELECT COUNT(*) FROM jobs AS active WHERE active.status='running') <
+                  (SELECT value FROM runtime_settings WHERE key='concurrency') AND
+                (SELECT COUNT(*) FROM jobs AS active WHERE active.status='running' AND canonical_workspace(active.workspace)=canonical_workspace(candidate.workspace)) <
+                  (SELECT value FROM runtime_settings WHERE key='workspace_concurrency') AND
+                COALESCE((SELECT tokens FROM daily_usage WHERE day=date('now')),0) <
+                  (SELECT value FROM runtime_settings WHERE key='daily_token_quota')
                 ORDER BY created_at ASC
                 LIMIT 1
                 """,
@@ -1470,7 +1500,7 @@ class JobStore:
             connection.execute(
                 """
                 UPDATE jobs SET prompt_tokens = ?, output_tokens = ?
-                WHERE id = ? AND status IN (?, ?, ?)
+                WHERE id = ? AND status IN (?, ?, ?, ?)
                 """,
                 (
                     prompt_tokens,
@@ -1479,6 +1509,7 @@ class JobStore:
                     JobStatus.RUNNING,
                     JobStatus.WAITING_APPROVAL,
                     JobStatus.QUEUED,
+                    JobStatus.WAITING_CHILDREN,
                 ),
             )
 
@@ -1552,9 +1583,9 @@ class JobStore:
                 """
                 UPDATE jobs
                 SET status = ?, error = NULL, started_at = NULL, finished_at = NULL
-                WHERE id = ? AND status = ?
+                WHERE id = ? AND status IN (?, ?)
                 """,
-                (JobStatus.QUEUED, job_id, JobStatus.INTERRUPTED),
+                (JobStatus.QUEUED, job_id, JobStatus.INTERRUPTED, JobStatus.BLOCKED),
             )
         return cursor.rowcount == 1
 
@@ -1565,7 +1596,7 @@ class JobStore:
                 """
                 UPDATE jobs
                 SET status = ?, finished_at = ?
-                WHERE id = ? AND status IN (?, ?, ?)
+                WHERE id = ? AND status IN (?, ?, ?, ?, ?)
                 """,
                 (
                     JobStatus.CANCELLED,
@@ -1574,6 +1605,8 @@ class JobStore:
                     JobStatus.QUEUED,
                     JobStatus.RUNNING,
                     JobStatus.WAITING_APPROVAL,
+                    JobStatus.WAITING_CHILDREN,
+                    JobStatus.INTERRUPTED,
                 ),
             )
             if cursor.rowcount == 1:
@@ -1597,18 +1630,29 @@ class JobStore:
                         "system",
                         "job was cancelled",
                     )
-        return cursor.rowcount == 1
+        cancelled = cursor.rowcount == 1
+        if cancelled:
+            for child in self.children(job_id):
+                self.cancel_job(child.id)
+        return cancelled
 
     def recover_interrupted_jobs(self) -> int:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            running_ids = [
-                row["id"]
-                for row in connection.execute(
-                    "SELECT id FROM jobs WHERE status = ?",
-                    (JobStatus.RUNNING,),
-                ).fetchall()
-            ]
+            connection.execute(
+                """
+                UPDATE job_steps SET status = ?, updated_at = ?
+                WHERE status = ? AND job_id IN (
+                    SELECT id FROM jobs WHERE status = ?
+                )
+                """,
+                (
+                    StepStatus.PENDING,
+                    _now(),
+                    StepStatus.IN_PROGRESS,
+                    JobStatus.RUNNING,
+                ),
+            )
             cursor = connection.execute(
                 """
                 UPDATE jobs
@@ -1622,20 +1666,6 @@ class JobStore:
                     JobStatus.RUNNING,
                 ),
             )
-            if running_ids:
-                placeholders = ",".join("?" for _ in running_ids)
-                connection.execute(
-                    f"""
-                    UPDATE job_steps SET status = ?, updated_at = ?
-                    WHERE job_id IN ({placeholders}) AND status = ?
-                    """,
-                    (
-                        StepStatus.PENDING,
-                        _now(),
-                        *running_ids,
-                        StepStatus.IN_PROGRESS,
-                    ),
-                )
         return cursor.rowcount
 
     def create_schedule(
@@ -1807,7 +1837,7 @@ class JobStore:
                     SELECT 1 FROM trigger_history AS trigger
                     JOIN jobs ON jobs.id = trigger.job_id
                     WHERE trigger.schedule_id = ?
-                      AND jobs.status IN (?, ?, ?, ?)
+                      AND jobs.status IN (?, ?, ?, ?, ?)
                     LIMIT 1
                     """,
                     (
@@ -1815,6 +1845,7 @@ class JobStore:
                         JobStatus.QUEUED,
                         JobStatus.RUNNING,
                         JobStatus.WAITING_APPROVAL,
+                        JobStatus.WAITING_CHILDREN,
                         JobStatus.INTERRUPTED,
                     ),
                 ).fetchone()
@@ -1943,7 +1974,7 @@ class JobStore:
                 """
                 SELECT 1 FROM trigger_history AS trigger
                 JOIN jobs ON jobs.id = trigger.job_id
-                WHERE trigger.schedule_id = ? AND jobs.status IN (?, ?, ?, ?)
+                WHERE trigger.schedule_id = ? AND jobs.status IN (?, ?, ?, ?, ?)
                 LIMIT 1
                 """,
                 (
@@ -1951,6 +1982,7 @@ class JobStore:
                     JobStatus.QUEUED,
                     JobStatus.RUNNING,
                     JobStatus.WAITING_APPROVAL,
+                    JobStatus.WAITING_CHILDREN,
                     JobStatus.INTERRUPTED,
                 ),
             ).fetchone()

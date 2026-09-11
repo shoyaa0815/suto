@@ -99,6 +99,17 @@ the saved permission profile, never broader permissions.
 /pause <schedule_id> pause a schedule
 /automation ...      manage and run reusable automations
 /skill ...           manage reusable instruction skills
+/health              check database health and worker readiness
+/diagnostics         show runtime configuration and diagnostics
+/metrics             show queue/run time, success rate, tokens and tool errors
+/logs [job_id]       show structured JSON logs
+/backup <new.db>     create a consistent database snapshot
+/cleanup [days]      preview retention cleanup; add --apply to execute
+/limits [key=value]  inspect or change persistent runtime limits
+/memory ...          enable, inspect and manage workspace semantic memory
+/knowledge ...       index and search project files
+/subtasks <job_id>   inspect child jobs and their results
+/notifications       list unread local notifications
 /status <job_id>    show job status and pending approval
 /plan <job_id>      show the job plan
 /commands <job_id>  show command results
@@ -160,3 +171,34 @@ secrets:
 /automation export fix-bug ./fix-bug.bundle.json
 /automation import ./fix-bug.bundle.json
 ```
+
+## Production controls and advanced jobs
+
+Database upgrades are versioned and automatically back up an existing database
+before migration. One worker process owns each database; its pool can run
+multiple jobs while enforcing a separate workspace concurrency limit.
+
+```text
+/limits concurrency=2 workspace_concurrency=1
+/health
+/metrics
+/backup ./backups/suto-snapshot.db
+/cleanup 30
+```
+
+Advanced job capabilities remain off until explicitly enabled:
+
+```text
+/knowledge index /path/to/project
+/run --workspace /path/to/project --retrieval inspect the scheduler
+/run --workspace /path/to/project --subtasks compare the modules using child tasks
+/run --workspace /path/to/project --allow-command --sandbox bwrap run the tests
+```
+
+Semantic memory requires workspace opt-in with `/memory on <workspace>`, a
+configured Ollama embedding model (`SUTO_EMBED_MODEL`), and `--memory` on the
+job. `SUTO_NOTIFY_CLI=1` enables local live status notifications; the persistent
+inbox is also available through `/notifications`.
+
+See [operations and advanced features](docs/operations.md) for configuration,
+permissions, limits, deployment requirements and verification commands.

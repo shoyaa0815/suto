@@ -65,6 +65,9 @@ class ExecutionContext:
     change_guard_callback: object | None = None
     approval_callback: object | None = None
     limits: ExecutionLimits = ExecutionLimits()
+    sandbox: str = 'process'
+    budget_check: object | None = None
+    budget_seconds: object | None = None
 
     def __post_init__(self) -> None:
         resolved = self.workspace.expanduser().resolve()

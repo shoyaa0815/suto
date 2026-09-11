@@ -1,4 +1,6 @@
 import asyncio
+import sqlite3
+import time
 from pathlib import Path
 from typing import Any
 
@@ -7,6 +9,7 @@ from .models import Job, JobStatus
 from .runner import JobRunner
 from .scheduler import Scheduler
 from .store import JobStore
+from .locking import ProcessLock
 
 
 class AutomationWorker:
@@ -24,6 +27,10 @@ class AutomationWorker:
         self._active_task: asyncio.Task | None = None
         self._stopping = False
         self._wake = asyncio.Event()
+        self._tasks: dict[str, asyncio.Task] = {}
+        self._lock = ProcessLock(store.path.with_suffix(store.path.suffix + '.worker.lock'))
+        self._done = asyncio.Event()
+        self._started = False
 
     def submit(
         self,
@@ -33,15 +40,17 @@ class AutomationWorker:
         workspace: str | Path = ".",
         allow_write: bool = False,
         allow_command: bool = False,
+        options: dict | None = None,
     ) -> Job:
         job = self.store.create_job(
             prompt,
             mode="agent",
             source=source,
             source_ref=source_ref,
-            workspace=str(workspace),
+            workspace=str(Path(workspace).expanduser().resolve()),
             allow_write=allow_write,
             allow_command=allow_command,
+            options=options,
         )
         self._wake.set()
         return job
@@ -70,11 +79,15 @@ class AutomationWorker:
             JobStatus.QUEUED,
             JobStatus.RUNNING,
             JobStatus.WAITING_APPROVAL,
+            JobStatus.WAITING_CHILDREN,
+            JobStatus.INTERRUPTED,
         }:
             return False
         cancelled = self.store.cancel_job(job_id)
-        if cancelled and self.active_job_id == job_id and self._active_task:
-            self._active_task.cancel()
+        if cancelled:
+            for active_id, task in self._tasks.items():
+                if self.store.get_job(active_id).status == JobStatus.CANCELLED:
+                    task.cancel()
         self._wake.set()
         return cancelled
 
@@ -100,38 +113,71 @@ class AutomationWorker:
         return decided, message
 
     async def start(self) -> None:
-        self.store.recover_interrupted_jobs()
-        while not self._stopping:
-            self.scheduler.tick()
-            job = self.store.claim_next_job()
-            if job is None:
+        self._started = True
+        try:
+            if not self._lock.acquire():
+                raise RuntimeError('another worker already owns this database')
+            self.store.recover_interrupted_jobs()
+            last_heartbeat = 0.0
+            last_cleanup = 0.0
+            while not self._stopping:
                 self._wake.clear()
+                if time.monotonic() - last_heartbeat >= 5:
+                    self.store.heartbeat('running')
+                    last_heartbeat = time.monotonic()
+                self.store.reconcile_children()
+                for job_id, task in list(self._tasks.items()):
+                    if self.store.get_job(job_id).status == JobStatus.CANCELLED:
+                        task.cancel()
+                    if task.done():
+                        try:
+                            task.result()
+                        except asyncio.CancelledError:
+                            pass
+                        except Exception as error:
+                            self.store.fail_job(job_id, f'worker runner failed: {error}')
+                        del self._tasks[job_id]
+                try:
+                    self.scheduler.tick()
+                except sqlite3.IntegrityError as error:
+                    if 'quota' not in str(error) and 'rate limit' not in str(error):
+                        raise
+                capacity = self.store.settings()['concurrency']
+                retention = self.store.settings()['retention_days']
+                if retention and time.monotonic() - last_cleanup >= 3600:
+                    self.store.cleanup(retention, dry_run=False)
+                    last_cleanup = time.monotonic()
+                while len(self._tasks) < capacity and (job := self.store.claim_next_job()):
+                    task = asyncio.create_task(self.runner.run(job))
+                    task.add_done_callback(lambda _: self._wake.set())
+                    self._tasks[job.id] = task
+                self.active_job_id = next(iter(self._tasks), None)
+                self._active_task = self._tasks.get(self.active_job_id)
                 try:
                     await asyncio.wait_for(
                         self._wake.wait(),
-                        timeout=self.poll_interval,
+                        timeout=min(self.poll_interval, 1.0),
                     )
                 except TimeoutError:
                     pass
-                continue
-
-            self.active_job_id = job.id
-            self._active_task = asyncio.create_task(self.runner.run(job))
-            try:
-                await self._active_task
-            except asyncio.CancelledError:
-                if not self._stopping:
-                    continue
-            finally:
-                self.active_job_id = None
-                self._active_task = None
+        finally:
+            for task in self._tasks.values():
+                task.cancel()
+            await asyncio.gather(*self._tasks.values(), return_exceptions=True)
+            self._tasks.clear()
+            self.active_job_id = None
+            self._active_task = None
+            if self._lock.fd is not None:
+                try:
+                    self.store.heartbeat('stopped')
+                finally:
+                    self._lock.release()
+                    self._done.set()
+            else:
+                self._done.set()
 
     async def stop(self) -> None:
         self._stopping = True
         self._wake.set()
-        if self._active_task is not None:
-            self._active_task.cancel()
-            try:
-                await self._active_task
-            except asyncio.CancelledError:
-                pass
+        if self._started:
+            await self._done.wait()

@@ -13,6 +13,8 @@ from automation.context import (
 from core.language import ReplyLanguage, choose_reply_language
 from core.modes import DEFAULT_MODE, get_mode_policy
 from tools import (
+    ADVANCED_TOOL_NAMES,
+    build_advanced_tools,
     COMMAND_TOOL_NAMES,
     PLANNING_TOOL_NAMES,
     build_attachment_tools,
@@ -77,10 +79,14 @@ async def execute_local_ai(
             elapsed_seconds=time.perf_counter() - request_started,
         )
 
-    def execution_limit_reason(tool_calls: int = 0) -> str | None:
+    def execution_limit_reason(tool_calls: int = 0, *, pending_tool: bool = False,
+                               pending_model: bool = False) -> str | None:
         if execution_context is None:
             return None
         limits = execution_context.limits
+        if execution_context.budget_check is not None:
+            if reason := execution_context.budget_check(pending_tool=pending_tool, pending_model=pending_model):
+                return reason
         elapsed = time.perf_counter() - request_started
         if elapsed >= limits.max_elapsed_seconds:
             return (
@@ -103,6 +109,8 @@ async def execute_local_ai(
             return await awaitable
         limit = execution_context.limits.max_elapsed_seconds
         remaining = limit - (time.perf_counter() - request_started)
+        if execution_context.budget_seconds is not None:
+            remaining = min(remaining, execution_context.budget_seconds())
         if remaining <= 0:
             if inspect.iscoroutine(awaitable):
                 awaitable.close()
@@ -112,7 +120,8 @@ async def execute_local_ai(
         try:
             return await asyncio.wait_for(awaitable, timeout=remaining)
         except TimeoutError as error:
-            if time.perf_counter() - request_started >= limit:
+            if (time.perf_counter() - request_started >= limit or
+                    (execution_context.budget_seconds is not None and execution_context.budget_seconds() <= 0)):
                 raise ExecutionLimitExceeded(
                     f"job elapsed-time limit reached ({limit:g} seconds)"
                 ) from error
@@ -125,14 +134,14 @@ async def execute_local_ai(
     if not attachments:
         allowed_tools = allowed_tools - config.ATTACHMENT_TOOL_NAMES
     job_scoped_tools = (
-        ALL_WORKSPACE_TOOLS | PLANNING_TOOL_NAMES | COMMAND_TOOL_NAMES
+        ALL_WORKSPACE_TOOLS | PLANNING_TOOL_NAMES | COMMAND_TOOL_NAMES | ADVANCED_TOOL_NAMES
     )
     if execution_context is None:
         allowed_tools = allowed_tools - job_scoped_tools
     else:
         allowed_job_tools = job_scoped_tools & execution_context.allowed_tools
         if execution_context.plan_store is None:
-            allowed_job_tools = allowed_job_tools - PLANNING_TOOL_NAMES
+            allowed_job_tools = allowed_job_tools - PLANNING_TOOL_NAMES - ADVANCED_TOOL_NAMES
         if execution_context.command_event_callback is None:
             allowed_job_tools = allowed_job_tools - COMMAND_TOOL_NAMES
         allowed_tools = (allowed_tools - job_scoped_tools) | allowed_job_tools
@@ -178,6 +187,7 @@ async def execute_local_ai(
                     )
                 )
                 progress.record_usage(data)
+                await progress.emit()
                 return data.get("message", {}).get("content", "").strip()
 
             runtime_handlers = build_attachment_tools(
@@ -192,6 +202,7 @@ async def execute_local_ai(
                     )
                 )
                 if execution_context.plan_store is not None:
+                    runtime_handlers.update(build_advanced_tools(execution_context))
                     runtime_handlers.update(
                         build_planning_tools(
                             execution_context,
@@ -209,7 +220,7 @@ async def execute_local_ai(
             tool_call_count = 0
             tool_call_counts: dict[str, int] = {}
             for round_number in range(1, max_tool_rounds + 1):
-                if reason := execution_limit_reason(tool_call_count):
+                if reason := execution_limit_reason(tool_call_count, pending_model=True):
                     return blocked_result(reason)
                 await progress.emit(
                     "model",
@@ -220,6 +231,7 @@ async def execute_local_ai(
                     client.chat(session, messages, tool_schemas, think)
                 )
                 progress.record_usage(data)
+                await progress.emit()
                 if reason := execution_limit_reason(tool_call_count):
                     return blocked_result(reason)
                 message = data.get("message", {})
@@ -251,7 +263,7 @@ async def execute_local_ai(
                     name = call["function"]["name"]
                     args = call["function"].get("arguments") or {}
                     tool_call_count += 1
-                    if reason := execution_limit_reason(tool_call_count):
+                    if reason := execution_limit_reason(tool_call_count, pending_tool=True):
                         return blocked_result(reason)
                     signature = tool_call_signature(name, args)
                     repeated = tool_call_counts.get(signature, 0) + 1
@@ -284,7 +296,7 @@ async def execute_local_ai(
                         f"running {detail}",
                         round_number,
                     )
-                    if reason := execution_limit_reason(tool_call_count):
+                    if reason := execution_limit_reason(tool_call_count, pending_tool=True):
                         return blocked_result(reason)
                     if name in tools:
                         func = tools[name]

@@ -11,6 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from automation.context import ExecutionContext
+from automation.sandbox import sandbox_command
 
 
 COMMAND_TOOL_NAMES = frozenset({"run_workspace_command"})
@@ -278,12 +279,14 @@ def build_command_tools(
                 "tool": "run_workspace_command",
                 "command": requested,
                 "timeout_seconds": timeout,
+                "sandbox": context.sandbox,
             },
             f"run workspace command: {command_preview}",
             (
                 f"command: {command_preview}\n"
                 f"workspace: {context.workspace}\n"
                 f"timeout_seconds: {timeout}"
+                f"\nsandbox: {context.sandbox}"
             ),
         )
         started = time.perf_counter()
@@ -308,7 +311,7 @@ def build_command_tools(
                 "PYTHONDONTWRITEBYTECODE": "1",
             }
             process = await asyncio.create_subprocess_exec(
-                *prepared,
+                *sandbox_command(context, prepared, temp_dir, timeout),
                 cwd=context.workspace,
                 env=environment,
                 stdout=asyncio.subprocess.PIPE,
@@ -341,8 +344,8 @@ def build_command_tools(
                         saved = event_callback(event)
                         if inspect.isawaitable(saved):
                             await saved
-                    except Exception:
-                        pass
+                    except Exception as error:
+                        event["audit_error"] = type(error).__name__
                 raise
 
             stdout, stdout_truncated = await stdout_task

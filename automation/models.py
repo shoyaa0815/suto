@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 
@@ -11,6 +11,7 @@ class JobStatus(StrEnum):
     BLOCKED = "blocked"
     INTERRUPTED = "interrupted"
     WAITING_APPROVAL = "waiting_approval"
+    WAITING_CHILDREN = "waiting_children"
 
 
 class ApprovalStatus(StrEnum):
@@ -113,6 +114,8 @@ class Job:
     created_at: str
     started_at: str | None
     finished_at: str | None
+    parent_id: str | None = None
+    options: dict = field(default_factory=dict)
 
     @property
     def total_tokens(self) -> int:

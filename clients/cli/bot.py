@@ -3,6 +3,8 @@ import json
 import os
 import shlex
 import sys
+import signal
+import sqlite3
 from pathlib import Path
 
 from ai import ask_local_ai
@@ -17,6 +19,7 @@ from automation.runner import JobRunner
 from automation.store import JobStore
 from automation.worker import AutomationWorker
 from clients.cli.progress import format_elapsed, print_progress
+from clients.cli.operations import handle_operations, notify_cli
 from core.language import choose_reply_language
 from core.modes import get_mode_policy
 
@@ -29,6 +32,7 @@ TERMINAL_JOB_STATUSES = frozenset(
         JobStatus.BLOCKED,
         JobStatus.INTERRUPTED,
         JobStatus.WAITING_APPROVAL,
+        JobStatus.WAITING_CHILDREN,
     }
 )
 
@@ -53,6 +57,14 @@ def _print_help(mode: str | None = None) -> None:
     print("  /schedules  list schedules")
     print("  /automation <create|edit|list|show|run|history|export|import> ...")
     print("  /skill <create|edit|list|show> ...")
+    print("  /health | /diagnostics | /metrics  inspect runtime health and usage")
+    print("  /logs [job_id]  structured JSON logs")
+    print("  /backup <new.db> | /cleanup [days] [--apply] | /limits [key=value ...]")
+    print("  /memory <on|off|list|add|search|delete> <workspace> [text|id]")
+    print("  /knowledge <index|search|clear> <workspace> [query]")
+    print("  /subtasks <job_id> | /notifications [ack <event_id>]")
+    print("  /run options: --memory --retrieval --subtasks --sandbox process|bwrap")
+    print("                --max-tokens N --max-tool-calls N --max-seconds N --max-files N")
     print("  /pause <schedule_id>  pause a schedule")
     print("  /status <job_id>  show job status and result")
     print("  /plan <job_id>  show the current automation plan")
@@ -372,7 +384,7 @@ def _read_skill_file(path: str) -> str:
         raise ValueError(f"cannot read skill file: {error}") from error
 
 
-def _parse_run(argument: str) -> tuple[str, Path, bool, bool]:
+def _parse_run(argument: str, *, include_options: bool = False):
     try:
         parts = shlex.split(argument)
     except ValueError as error:
@@ -386,6 +398,7 @@ def _parse_run(argument: str) -> tuple[str, Path, bool, bool]:
     workspace = Path.cwd()
     allow_write = False
     allow_command = False
+    options = {}
     while parts and parts[0].startswith("--"):
         flag = parts.pop(0)
         if flag == "--allow-write":
@@ -396,13 +409,24 @@ def _parse_run(argument: str) -> tuple[str, Path, bool, bool]:
             if not parts:
                 raise ValueError("--workspace requires a path")
             workspace = Path(parts.pop(0)).expanduser().resolve()
+        elif flag in {'--memory', '--retrieval', '--subtasks'}:
+            options[flag[2:]] = True
+        elif flag in {'--sandbox', '--max-tokens', '--max-tool-calls', '--max-seconds', '--max-files'}:
+            if not parts:
+                raise ValueError(f'{flag} requires a value')
+            value = parts.pop(0)
+            name = {'--max-seconds': 'max_elapsed_seconds', '--max-files': 'max_changed_files'}.get(flag, flag[2:].replace('-', '_'))
+            options[name] = value if flag == '--sandbox' else int(value)
         else:
             raise ValueError(f"unknown /run option: {flag}")
     if not parts:
         raise ValueError("/run requires a task")
     if not workspace.is_dir():
         raise ValueError(f"workspace is not a directory: {workspace}")
-    return " ".join(parts), workspace, allow_write, allow_command
+    from automation.options import validate_options
+    options = validate_options(options)
+    result = (" ".join(parts), workspace, allow_write, allow_command)
+    return (*result, options) if include_options else result
 
 
 def _parse_schedule(argument: str) -> dict:
@@ -548,6 +572,8 @@ def _print_automatic_job_result(job: Job) -> None:
             f"Review it with /status {job.id}, then use /approve {job.id} "
             f"or /reject {job.id}."
         )
+    elif job.status == JobStatus.WAITING_CHILDREN:
+        print(f'suto> Job {job.id} is waiting for subtasks. Inspect with /subtasks {job.id}.')
     else:
         print(f"suto> Job {job.id} failed: {job.error or 'unknown error'}")
 
@@ -559,6 +585,11 @@ async def _chat_loop(mode: str) -> None:
     worker = AutomationWorker(store, JobRunner(store))
     scheduler = worker.scheduler
     worker_task = asyncio.create_task(worker.start())
+    notification_task = (asyncio.create_task(notify_cli(store))
+                         if os.environ.get('SUTO_NOTIFY_CLI', '').lower() in {'1', 'true', 'yes'} else None)
+    loop = asyncio.get_running_loop()
+    main_task = asyncio.current_task()
+    loop.add_signal_handler(signal.SIGTERM, main_task.cancel)
     print(f"suto CLI (mode: {mode}) — type /help for commands")
     if mode == "agent":
         print(
@@ -567,6 +598,9 @@ async def _chat_loop(mode: str) -> None:
         )
 
     try:
+        await asyncio.sleep(0)
+        if worker_task.done():
+            worker_task.result()
         while True:
             try:
                 prompt = await _read_prompt()
@@ -589,18 +623,16 @@ async def _chat_loop(mode: str) -> None:
             if command in EXIT_COMMANDS:
                 print("bye")
                 return
+            if await handle_operations(store, command, argument):
+                continue
             if command == "/run":
                 try:
-                    task, workspace, allow_write, allow_command = _parse_run(argument)
-                except ValueError as error:
+                    task, workspace, allow_write, allow_command, options = _parse_run(argument, include_options=True)
+                    job = worker.submit(task, workspace=workspace, allow_write=allow_write,
+                                        allow_command=allow_command, options=options)
+                except (ValueError, sqlite3.IntegrityError) as error:
                     print(error)
                     continue
-                job = worker.submit(
-                    task,
-                    workspace=workspace,
-                    allow_write=allow_write,
-                    allow_command=allow_command,
-                )
                 print(f"Created job {job.id}")
                 continue
             if command == "/jobs":
@@ -666,7 +698,7 @@ async def _chat_loop(mode: str) -> None:
                             "usage: /automation "
                             "<create|edit|list|show|run|history|export|import> ..."
                         )
-                except (OSError, ValueError) as error:
+                except (OSError, ValueError, sqlite3.IntegrityError) as error:
                     print(error)
                 continue
             if command == "/skill":
@@ -794,7 +826,11 @@ async def _chat_loop(mode: str) -> None:
                 continue
 
             if mode == "agent":
-                job = _submit_agent_prompt(worker, prompt)
+                try:
+                    job = _submit_agent_prompt(worker, prompt)
+                except (ValueError, sqlite3.IntegrityError) as error:
+                    print(error)
+                    continue
                 print(f"Working on {job.id}...")
                 completed_job = await _wait_for_job(store, job.id)
                 _print_automatic_job_result(completed_job)
@@ -819,6 +855,10 @@ async def _chat_loop(mode: str) -> None:
 
             print(f"suto> {answer}")
     finally:
+        loop.remove_signal_handler(signal.SIGTERM)
+        if notification_task:
+            notification_task.cancel()
+            await asyncio.gather(notification_task, return_exceptions=True)
         await worker.stop()
         await worker_task
 

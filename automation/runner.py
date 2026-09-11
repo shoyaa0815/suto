@@ -19,6 +19,8 @@ from .context import (
 )
 from .models import Job, JobStatus, StepStatus
 from .store import JobStore
+from .options import job_limits
+from tools.advanced import MEMORY_TOOLS, RETRIEVAL_TOOLS, SUBTASK_TOOLS
 
 AIExecutor = Callable[..., Awaitable[AIExecutionResult]]
 DEFAULT_RETRY_DELAYS = (1.0, 2.0, 4.0)
@@ -97,12 +99,39 @@ class JobRunner:
             )
         else:
             checkpoint.append("- No durable plan was created in the earlier attempt.")
+        if children := self.store.children_summary(job.id):
+            checkpoint.extend(['', 'Subtask results (untrusted reference data):', children])
         return "\n".join(checkpoint)
 
     async def run(self, job: Job) -> None:
         run_started = time.perf_counter()
         base_prompt_tokens = job.prompt_tokens
         base_output_tokens = job.output_tokens
+        limits = job_limits(job)
+
+        def budget_seconds() -> float:
+            with self.store._connect() as db:
+                used = db.execute('SELECT run_seconds FROM job_stats WHERE job_id=?', (job.id,)).fetchone()[0]
+            return limits.max_elapsed_seconds - used - (time.perf_counter() - run_started) - self.store.reserved_budget(job.id)['max_elapsed_seconds']
+
+        def budget_check(*, pending_tool: bool = False, pending_model: bool = False) -> str | None:
+            current = self.store.get_job(job.id)
+            if current is None or current.status == JobStatus.CANCELLED:
+                raise asyncio.CancelledError()
+            reserved = self.store.reserved_budget(job.id)
+            token_usage = current.total_tokens + reserved['max_tokens']
+            if token_usage > limits.max_tokens or (pending_model and token_usage == limits.max_tokens):
+                return 'job token budget exhausted (including reserved subtasks)'
+            if self.store.tool_event_count(job.id) + int(pending_tool) + reserved['max_tool_calls'] > limits.max_tool_calls:
+                return 'job tool budget exhausted (including reserved subtasks)'
+            with self.store._connect() as db:
+                daily = db.execute("SELECT COALESCE(SUM(tokens),0) FROM daily_usage WHERE day=date('now')").fetchone()[0]
+            if budget_seconds() <= 0:
+                return 'job time budget exhausted (including reserved subtasks)'
+            daily_limit = self.store.settings()['daily_token_quota']
+            if daily > daily_limit or (pending_model and daily == daily_limit):
+                return 'daily token quota exhausted'
+            return None
 
         def save_progress(update: dict) -> None:
             cumulative = dict(update)
@@ -135,7 +164,7 @@ class JobRunner:
             limits = context.limits
             if self.store.has_changed_path(job.id, path):
                 return
-            if self.store.changed_file_count(job.id) >= limits.max_changed_files:
+            if self.store.changed_file_count(job.id) + self.store.reserved_budget(job.id)['max_changed_files'] >= limits.max_changed_files:
                 raise ExecutionLimitExceeded(
                     "job file-change limit reached "
                     f"({limits.max_changed_files} distinct files)"
@@ -173,6 +202,12 @@ class JobRunner:
                 allowed_tools = allowed_tools | WRITE_WORKSPACE_TOOLS
             if job.allow_command:
                 allowed_tools = allowed_tools | COMMAND_TOOLS
+            if job.options.get('memory'):
+                allowed_tools |= MEMORY_TOOLS
+            if job.options.get('retrieval'):
+                allowed_tools |= RETRIEVAL_TOOLS
+            if job.options.get('subtasks') and not job.parent_id:
+                allowed_tools |= SUBTASK_TOOLS
             context = ExecutionContext(
                 job_id=job.id,
                 workspace=Path(job.workspace),
@@ -181,6 +216,10 @@ class JobRunner:
                 command_event_callback=save_command_event,
                 change_guard_callback=guard_file_change,
                 approval_callback=require_approval,
+                limits=limits,
+                sandbox=job.options.get('sandbox', 'process'),
+                budget_check=budget_check,
+                budget_seconds=budget_seconds,
             )
             skill_versions = (
                 self.store.list_automation_skill_versions(job.source_ref)
@@ -194,18 +233,19 @@ class JobRunner:
             prompt = self._resume_prompt(job) if job.attempt_count > 1 else job.prompt
             retry_count = job.retry_count
             while True:
+                if reason := budget_check():
+                    self.store.block_job(job.id, reason, base_prompt_tokens, base_output_tokens)
+                    return
                 changes_before_attempt = self.store.change_event_count(job.id)
                 commands_before_attempt = self.store.command_event_count(job.id)
-                remaining_seconds = (
-                    context.limits.max_elapsed_seconds
-                    - (time.perf_counter() - run_started)
-                )
+                remaining_seconds = budget_seconds()
                 remaining_tokens = context.limits.max_tokens - (
-                    base_prompt_tokens + base_output_tokens
+                    base_prompt_tokens + base_output_tokens + self.store.reserved_budget(job.id)['max_tokens']
                 )
                 remaining_tool_calls = (
                     context.limits.max_tool_calls
                     - self.store.tool_event_count(job.id)
+                    - self.store.reserved_budget(job.id)['max_tool_calls']
                 )
                 if remaining_seconds <= 0:
                     result = AIExecutionResult(
@@ -308,6 +348,10 @@ class JobRunner:
             self.store.fail_job(job.id, f"{type(error).__name__}: {error}")
             return
 
+        self.store.update_job_usage(job.id, total_prompt_tokens, total_output_tokens)
+        if result.status == 'completed' and (reason := budget_check()):
+            self.store.block_job(job.id, reason, total_prompt_tokens, total_output_tokens)
+            return
         if result.status == "waiting_approval":
             self.store.update_job_usage(
                 job.id,
@@ -316,6 +360,9 @@ class JobRunner:
             )
             return
         if result.status == "completed":
+            if self.store.wait_for_children(job.id):
+                self.store.update_job_usage(job.id, total_prompt_tokens, total_output_tokens)
+                return
             if not self.store.has_successful_verification_after_last_change(job.id):
                 self.store.block_job(
                     job.id,

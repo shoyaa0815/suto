@@ -79,6 +79,29 @@ def test_schedule_skips_overlap_and_advances(tmp_path):
     assert len(store.list_jobs()) == 1
 
 
+def test_schedule_skips_overlap_while_parent_waits_for_subtasks(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    scheduler = Scheduler(store)
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    schedule = scheduler.create(
+        kind="interval",
+        expression="60",
+        prompt="delegated task",
+        now=start,
+    )
+    assert scheduler.tick(start + timedelta(seconds=60)) == 1
+    job = store.claim_next_job()
+    with store._connect() as connection:
+        connection.execute(
+            "UPDATE jobs SET status = ? WHERE id = ?",
+            (JobStatus.WAITING_CHILDREN, job.id),
+        )
+
+    assert scheduler.tick(start + timedelta(seconds=120)) == 0
+    assert len(store.list_jobs()) == 1
+    assert store.list_trigger_history(schedule.id)[0].status == TriggerStatus.SKIPPED
+
+
 def test_skip_missed_run_collapses_backlog_without_creating_job(tmp_path):
     store = JobStore(tmp_path / "suto.db")
     scheduler = Scheduler(store)
