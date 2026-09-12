@@ -1,6 +1,6 @@
 from automation.models import MissedRunPolicy, ScheduleKind
 from automation.store import JobStore
-from clients.cli.bot import (
+from clients.tui.backend import (
     _parse_run,
     _parse_schedule,
     _print_commands,
@@ -9,7 +9,7 @@ from clients.cli.bot import (
     _print_plan,
     _submit_agent_prompt,
 )
-from clients.cli.progress import format_elapsed, print_progress
+from clients.tui.progress import format_elapsed, print_progress
 
 
 def test_format_elapsed_uses_minutes_and_seconds():

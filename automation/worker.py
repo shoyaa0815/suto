@@ -35,7 +35,7 @@ class AutomationWorker:
     def submit(
         self,
         prompt: str,
-        source: str = "cli",
+        source: str = "tui",
         source_ref: str | None = None,
         workspace: str | Path = ".",
         allow_write: bool = False,
@@ -100,13 +100,13 @@ class AutomationWorker:
     def wake(self) -> None:
         self._wake.set()
 
-    def approve(self, job_id: str, actor: str = "cli") -> tuple[bool, str]:
+    def approve(self, job_id: str, actor: str = "tui") -> tuple[bool, str]:
         decided, message = self.store.decide_approval(job_id, True, actor)
         if decided or "queued" in message:
             self._wake.set()
         return decided, message
 
-    def reject(self, job_id: str, actor: str = "cli") -> tuple[bool, str]:
+    def reject(self, job_id: str, actor: str = "tui") -> tuple[bool, str]:
         decided, message = self.store.decide_approval(job_id, False, actor)
         if decided:
             self._wake.set()

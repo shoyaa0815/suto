@@ -3,6 +3,8 @@ import json
 import shlex
 import sqlite3
 
+from clients.tui.output import write as print
+
 
 def print_json(value):
     print(json.dumps(value, ensure_ascii=False, indent=2, default=str))
@@ -91,7 +93,7 @@ async def handle_operations(store, command: str, argument: str) -> bool:
     return True
 
 
-async def notify_cli(store):
+async def notify_tui(store):
     """Opt-in local delivery; acknowledgement follows printing (at least once)."""
     while True:
         for event in reversed(store.notifications()):

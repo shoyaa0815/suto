@@ -10,7 +10,7 @@ from automation.options import validate_options
 from automation.runner import JobRunner
 from automation.store import JobStore
 from automation.worker import AutomationWorker
-from clients.cli.bot import _parse_run
+from clients.tui.backend import _parse_run
 from tests.test_hardening import eventually
 from tools.advanced import TOOL_NAMES, build_advanced_tools
 

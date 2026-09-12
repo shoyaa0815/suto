@@ -7,7 +7,7 @@ from automation.models import JobStatus
 from automation.runner import JobRunner
 from automation.store import JobStore
 from automation.worker import AutomationWorker
-from clients.cli.bot import _parse_automation_run
+from clients.tui.backend import _parse_automation_run
 
 
 def test_automation_versions_pin_skill_versions(tmp_path):

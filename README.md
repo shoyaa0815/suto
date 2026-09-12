@@ -197,7 +197,7 @@ Advanced job capabilities remain off until explicitly enabled:
 
 Semantic memory requires workspace opt-in with `/memory on <workspace>`, a
 configured Ollama embedding model (`SUTO_EMBED_MODEL`), and `--memory` on the
-job. `SUTO_NOTIFY_CLI=1` enables local live status notifications; the persistent
+job. `SUTO_NOTIFY_TUI=1` enables local live status notifications; the persistent
 inbox is also available through `/notifications`.
 
 See [operations and advanced features](docs/operations.md) for configuration,

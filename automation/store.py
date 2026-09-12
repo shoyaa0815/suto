@@ -573,7 +573,7 @@ class JobStore(OperationsStore, SubtaskStore, KnowledgeStore):
         self,
         prompt: str,
         mode: str = "agent",
-        source: str = "cli",
+        source: str = "tui",
         source_ref: str | None = None,
         workspace: str = ".",
         allow_write: bool = False,

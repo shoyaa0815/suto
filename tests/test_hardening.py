@@ -14,7 +14,7 @@ from automation.migrations import SCHEMA_VERSION
 from automation.runner import JobRunner
 from automation.store import JobStore
 from automation.worker import AutomationWorker
-from clients.cli.operations import handle_operations
+from clients.tui.operations import handle_operations
 
 
 async def eventually(predicate, timeout=3):

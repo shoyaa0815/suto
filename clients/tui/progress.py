@@ -1,3 +1,6 @@
+from clients.tui.output import write as print
+
+
 def format_elapsed(seconds: float) -> str:
     total_seconds = max(0, round(seconds))
     minutes, seconds = divmod(total_seconds, 60)

@@ -29,7 +29,7 @@ def main():
     # Imported here rather than at module level so that starting one client
     # never requires the other one's dependencies or credentials to be present.
     if name == "cli":
-        from clients.cli import run
+        from clients.tui import run
     elif name == "discord":
         from clients.discord import run
     else:

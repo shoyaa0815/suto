@@ -62,7 +62,7 @@ Completed metrics are retained even after detailed logs are cleaned up.
 
 Defaults: one running job, one running job per canonical workspace, 1,000 queued
 jobs, 120 submissions/minute, and 10,000,000 reported tokens per UTC day. The
-queue and submission checks run transactionally for CLI, automation, schedule
+queue and submission checks run transactionally for TUI, automation, schedule
 and subtask inserts. Workspace aliases resolve to the same concurrency scope.
 
 Daily token quota gates admission and continued execution. Token usage is known
@@ -210,7 +210,7 @@ waiting_approval create a durable local inbox item in the same transaction.
 /notifications ack 42
 ```
 
-`SUTO_NOTIFY_CLI=1` prints live CLI notifications and acknowledges them after
+`SUTO_NOTIFY_TUI=1` prints live TUI notifications and acknowledges them after
 printing. Delivery is at least once: a crash between printing and acknowledgement
 can repeat a message. External Discord/LINE/email/webhook delivery is not included.
 

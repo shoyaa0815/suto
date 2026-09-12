@@ -2,10 +2,10 @@ import asyncio
 import json
 import os
 import shlex
-import sys
-import signal
 import sqlite3
+import threading
 from pathlib import Path
+from collections.abc import Awaitable, Callable
 
 from ai import ask_local_ai
 from automation.bundles import import_bundle, write_bundle
@@ -18,10 +18,10 @@ from automation.models import Job, JobStatus, MissedRunPolicy, ScheduleKind
 from automation.runner import JobRunner
 from automation.store import JobStore
 from automation.worker import AutomationWorker
-from clients.cli.progress import format_elapsed, print_progress
-from clients.cli.operations import handle_operations, notify_cli
+from clients.tui.output import write as print
+from clients.tui.progress import format_elapsed, print_progress
+from clients.tui.operations import handle_operations, notify_tui
 from core.language import choose_reply_language
-from core.modes import get_mode_policy
 
 EXIT_COMMANDS = frozenset({"/exit", "/quit"})
 TERMINAL_JOB_STATUSES = frozenset(
@@ -35,6 +35,34 @@ TERMINAL_JOB_STATUSES = frozenset(
         JobStatus.WAITING_CHILDREN,
     }
 )
+
+
+async def _choose_reply_language_async(
+    prompt: str,
+    previous_code: str | None,
+):
+    """Run Lingua off the UI event loop; its first detection can be expensive."""
+    loop = asyncio.get_running_loop()
+    result = loop.create_future()
+
+    def detect() -> None:
+        try:
+            choice = choose_reply_language(prompt, previous_code=previous_code)
+        except BaseException as error:
+            loop.call_soon_threadsafe(deliver, None, error)
+        else:
+            loop.call_soon_threadsafe(deliver, choice, None)
+
+    def deliver(choice, error: BaseException | None) -> None:
+        if result.done():
+            return
+        if error is not None:
+            result.set_exception(error)
+        else:
+            result.set_result(choice)
+
+    threading.Thread(target=detect, name="suto-language", daemon=True).start()
+    return await result
 
 
 def _print_help(mode: str | None = None) -> None:
@@ -76,33 +104,6 @@ def _print_help(mode: str | None = None) -> None:
     print("  /reject <job_id>  reject the pending action and block the job")
     print("  /exit  exit suto")
     print("  /quit  exit suto")
-
-
-async def _read_prompt() -> str:
-    """Read stdin without blocking the automation worker event loop."""
-    loop = asyncio.get_running_loop()
-    future = loop.create_future()
-
-    def read_ready() -> None:
-        try:
-            line = sys.stdin.readline()
-            if not future.done():
-                future.set_result(line)
-        except Exception as error:
-            if not future.done():
-                future.set_exception(error)
-        finally:
-            loop.remove_reader(sys.stdin)
-
-    print("> ", end="", flush=True)
-    loop.add_reader(sys.stdin, read_ready)
-    try:
-        line = await future
-    finally:
-        loop.remove_reader(sys.stdin)
-    if line == "":
-        raise EOFError
-    return line.strip()
 
 
 def _print_jobs(store: JobStore) -> None:
@@ -578,19 +579,19 @@ def _print_automatic_job_result(job: Job) -> None:
         print(f"suto> Job {job.id} failed: {job.error or 'unknown error'}")
 
 
-async def _chat_loop(mode: str) -> None:
+async def run_session(
+    mode: str,
+    read_prompt: Callable[[], Awaitable[str]],
+) -> None:
     previous_language_code: str | None = None
     database_path = os.environ.get("SUTO_DB_PATH", "data/suto.db")
     store = JobStore(database_path)
     worker = AutomationWorker(store, JobRunner(store))
     scheduler = worker.scheduler
     worker_task = asyncio.create_task(worker.start())
-    notification_task = (asyncio.create_task(notify_cli(store))
-                         if os.environ.get('SUTO_NOTIFY_CLI', '').lower() in {'1', 'true', 'yes'} else None)
-    loop = asyncio.get_running_loop()
-    main_task = asyncio.current_task()
-    loop.add_signal_handler(signal.SIGTERM, main_task.cancel)
-    print(f"suto CLI (mode: {mode}) — type /help for commands")
+    notification_task = (asyncio.create_task(notify_tui(store))
+                         if os.environ.get('SUTO_NOTIFY_TUI', '').lower() in {'1', 'true', 'yes'} else None)
+    print(f"Suto (mode: {mode}) — type /help for commands")
     if mode == "agent":
         print(
             "Type a task normally. Suto will work in the current directory "
@@ -603,7 +604,7 @@ async def _chat_loop(mode: str) -> None:
             worker_task.result()
         while True:
             try:
-                prompt = await _read_prompt()
+                prompt = await read_prompt()
             except EOFError:
                 print()
                 return
@@ -836,9 +837,10 @@ async def _chat_loop(mode: str) -> None:
                 _print_automatic_job_result(completed_job)
                 continue
 
-            reply_language = choose_reply_language(
+            print("Preparing request...")
+            reply_language = await _choose_reply_language_async(
                 prompt,
-                previous_code=previous_language_code,
+                previous_language_code,
             )
             previous_language_code = reply_language.code
 
@@ -855,15 +857,8 @@ async def _chat_loop(mode: str) -> None:
 
             print(f"suto> {answer}")
     finally:
-        loop.remove_signal_handler(signal.SIGTERM)
         if notification_task:
             notification_task.cancel()
             await asyncio.gather(notification_task, return_exceptions=True)
         await worker.stop()
         await worker_task
-
-
-def run(mode: str) -> None:
-    # Keep direct use of this client subject to the same validation as main.py.
-    get_mode_policy(mode)
-    asyncio.run(_chat_loop(mode))

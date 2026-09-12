@@ -1,0 +1,89 @@
+$black: #000000;
+$foreground: #e4e4e7;
+$muted: #71717a;
+$accent: #3b82f6;
+
+Screen {
+    background: $black;
+    color: $foreground;
+}
+
+#shell {
+    width: 100%;
+    height: 100%;
+    padding: 1 2 0 2;
+    background: $black;
+}
+
+#brand {
+    width: 100%;
+    height: 7;
+    background: $black;
+}
+
+#terminal {
+    width: 100%;
+    height: 1fr;
+    padding: 1 0;
+    background: $black;
+    color: $foreground;
+    border: none;
+    scrollbar-background: $black;
+    scrollbar-background-hover: $black;
+    scrollbar-background-active: $black;
+    scrollbar-color: #27272a;
+    scrollbar-color-hover: #3f3f46;
+    scrollbar-color-active: $accent;
+    scrollbar-corner-color: $black;
+}
+
+#prompt-row {
+    width: 100%;
+    height: 3;
+    margin-bottom: 1;
+    background: $black;
+}
+
+#prompt-marker {
+    width: 3;
+    height: 3;
+    padding: 1 0 0 1;
+    background: $black;
+    color: #d4d4d8;
+    text-style: bold;
+}
+
+#prompt {
+    width: 1fr;
+    height: 3;
+    padding: 0 1;
+    background: #18181b;
+    color: $foreground;
+    border: solid #52525b;
+}
+
+#prompt:focus {
+    border: solid #a1a1aa;
+    background: #27272a;
+    background-tint: transparent;
+}
+
+#prompt > .input--placeholder {
+    color: #a1a1aa;
+}
+
+#prompt > .input--cursor {
+    background: $foreground;
+    color: $black;
+}
+
+#prompt > .input--selection {
+    background: #52525b;
+}
+
+#shortcuts {
+    width: 100%;
+    height: 1;
+    background: $black;
+    color: $muted;
+}

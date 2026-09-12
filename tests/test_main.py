@@ -25,6 +25,7 @@ def test_parse_args_accepts_client_and_mode(args, expected):
         ["discord"],
         ["secret", "discord"],
         ["chat", "unknown"],
+        ["chat", "tui"],
         ["chat", "discord", "extra"],
     ],
 )
