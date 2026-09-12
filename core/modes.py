@@ -15,6 +15,19 @@ ASSISTANT_TOOLS = frozenset(
     }
 )
 
+PERSONAL_TASK_TOOLS = frozenset(
+    {
+        "create_task",
+        "list_tasks",
+        "complete_task",
+        "create_reminder_in",
+        "create_reminder_at",
+        "list_reminders",
+        "reschedule_reminder",
+        "cancel_reminder",
+    }
+)
+
 
 @dataclass(frozen=True)
 class ModePolicy:
@@ -43,7 +56,7 @@ MODE_POLICIES = {
             "before consequential actions and never claim to have taken an "
             "action when the required tool is unavailable."
         ),
-        allowed_tools=ASSISTANT_TOOLS,
+        allowed_tools=ASSISTANT_TOOLS | PERSONAL_TASK_TOOLS,
     ),
     "developer": ModePolicy(
         name="developer",

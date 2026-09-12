@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .locking import ProcessLock
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 HARDENING = """
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -96,6 +96,47 @@ CREATE TRIGGER job_notification AFTER UPDATE OF status ON jobs
 END;
 """
 
+PERSONAL_ASSISTANT = """
+CREATE TABLE users(
+ id TEXT PRIMARY KEY, display_name TEXT NOT NULL, timezone TEXT NOT NULL,
+ locale TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE channel_identities(
+ id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ channel TEXT NOT NULL, external_id TEXT NOT NULL, created_at TEXT NOT NULL,
+ UNIQUE(channel,external_id));
+CREATE INDEX channel_identities_user_idx ON channel_identities(user_id);
+CREATE TABLE user_preferences(
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ key TEXT NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL,
+ PRIMARY KEY(user_id,key));
+CREATE TABLE conversations(
+ id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ channel TEXT NOT NULL, external_thread_id TEXT NOT NULL,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ UNIQUE(user_id,channel,external_thread_id));
+CREATE INDEX conversations_user_updated_idx ON conversations(user_id,updated_at);
+CREATE TABLE messages(
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+ role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+ content TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE INDEX messages_conversation_idx ON messages(conversation_id,id);
+CREATE TABLE assistant_tasks(
+ id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ title TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '',
+ status TEXT NOT NULL CHECK(status IN ('open','completed','cancelled')),
+ due_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT);
+CREATE INDEX assistant_tasks_user_status_idx ON assistant_tasks(user_id,status,due_at);
+CREATE TABLE reminders(
+ id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ title TEXT NOT NULL, remind_at TEXT NOT NULL, timezone TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('scheduled','delivered','cancelled')),
+ channel_identity_id TEXT REFERENCES channel_identities(id) ON DELETE SET NULL,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX reminders_due_idx ON reminders(status,remind_at);
+CREATE INDEX reminders_user_idx ON reminders(user_id,status,remind_at);
+"""
+
 
 def backup_database(source: Path, destination: Path) -> Path:
     source, destination = source.resolve(), destination.expanduser().absolute()
@@ -137,7 +178,11 @@ def initialize_database(store) -> None:
                     f'{store.path.name}.v{version}.{uuid4().hex}.db')
             if version == 0:
                 store._initialize()
-            for number, script in ((1, HARDENING), (2, ADVANCED)):
+            for number, script in (
+                (1, HARDENING),
+                (2, ADVANCED),
+                (3, PERSONAL_ASSISTANT),
+            ):
                 if number <= version:
                     continue
                 with store._connect() as connection:

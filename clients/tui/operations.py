@@ -2,6 +2,8 @@ import asyncio
 import json
 import shlex
 import sqlite3
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from clients.tui.output import write as print
 
@@ -100,3 +102,50 @@ async def notify_tui(store):
             print(f"\n[suto notification #{event['id']}] {event['job_id']}: {event['status']}", flush=True)
             store.acknowledge_notification(event['id'])
         await asyncio.sleep(1)
+
+
+def _reminder_time(reminder) -> str:
+    instant = datetime.fromisoformat(reminder.remind_at)
+    try:
+        instant = instant.astimezone(ZoneInfo(reminder.timezone))
+    except ZoneInfoNotFoundError:
+        pass
+    return instant.strftime("%Y-%m-%d %H:%M %Z")
+
+
+def print_due_reminders(store, user_id: str, *, overdue: bool) -> int:
+    reminders = store.claim_due_reminders(user_id)
+    for reminder in reminders:
+        scheduled = _reminder_time(reminder)
+        if overdue:
+            print(
+                f"\n[suto reminder — เลยเวลาแล้ว] {reminder.title}\n"
+                f"ตั้งไว้เวลา {scheduled}",
+                flush=True,
+            )
+        else:
+            print(
+                f"\n[suto reminder] {reminder.title}\n"
+                f"ถึงเวลาแล้ว ({scheduled})",
+                flush=True,
+            )
+    return len(reminders)
+
+
+def print_pending_reminders(store, user_id: str) -> int:
+    reminders = store.list_reminders(user_id, limit=None)
+    if not reminders:
+        print("No pending reminders.")
+        return 0
+    print("Pending reminders:")
+    for reminder in reminders:
+        print(f"{reminder.id}  {_reminder_time(reminder)}  {reminder.title}")
+    return len(reminders)
+
+
+async def notify_personal_reminders(store, user_id: str) -> None:
+    """Deliver missed reminders on startup, then watch for newly due reminders."""
+    print_due_reminders(store, user_id, overdue=True)
+    while True:
+        await asyncio.sleep(1)
+        print_due_reminders(store, user_id, overdue=False)

@@ -4,6 +4,8 @@ import time
 import discord
 
 from ai import ask_local_ai, set_debug_logs
+from assistant import AssistantContext
+from automation.storage.store import JobStore
 from core.language import choose_reply_language
 from core.modes import DEFAULT_MODE, get_mode_policy
 from tools.file_reader import SUPPORTED_EXTENSIONS
@@ -17,6 +19,14 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 active_mode = DEFAULT_MODE
 reply_languages: dict[tuple[int, int], str] = {}
+assistant_store: JobStore | None = None
+
+
+def _get_assistant_store() -> JobStore:
+    global assistant_store
+    if assistant_store is None:
+        assistant_store = JobStore(os.environ.get("SUTO_DB_PATH", "data/suto.db"))
+    return assistant_store
 
 
 @client.event
@@ -37,6 +47,22 @@ async def on_message(message: discord.Message):
         return
 
     prompt = message.content
+    store = _get_assistant_store()
+    user = store.resolve_channel_identity(
+        "discord",
+        str(message.author.id),
+        display_name=message.author.display_name,
+        timezone=os.environ.get("SUTO_TIMEZONE", "UTC"),
+        locale=os.environ.get("SUTO_LOCALE", "th"),
+    )
+    conversation = store.get_or_create_conversation(
+        user.id,
+        "discord",
+        str(message.channel.id),
+    )
+    history = store.conversation_history(conversation.id)
+    if message.content.strip():
+        store.add_message(conversation.id, "user", message.content)
     language_key = (message.channel.id, message.author.id)
     reply_language = choose_reply_language(
         message.content,
@@ -77,7 +103,15 @@ async def on_message(message: discord.Message):
             mode=active_mode,
             attachments=attachment_data,
             reply_language=reply_language,
+            conversation_history=history,
+            assistant_context=(
+                AssistantContext(store, user.id, conversation.id)
+                if active_mode == "agent"
+                else None
+            ),
         )
+
+    store.add_message(conversation.id, "assistant", answer)
 
     for i in range(0, len(answer), MAX_MESSAGE_CHARS):
         await message.channel.send(answer[i:i + MAX_MESSAGE_CHARS])

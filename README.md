@@ -19,6 +19,9 @@ Create a `.env` file and configure an AI provider. Example for Ollama:
 AI_PROVIDER=ollama
 AI_BASE_URL=http://localhost:11434
 AI_MODEL=qwen3.5:9b
+SUTO_USER_NAME=Your name
+SUTO_TIMEZONE=Asia/Bangkok
+SUTO_LOCALE=th
 ```
 
 Example for OpenAI:
@@ -41,12 +44,16 @@ venv/bin/python main.py chat cli
 venv/bin/python main.py agent cli
 ```
 
-`chat` answers questions conversationally. `agent` is the personal-assistant
-mode and will gain task, reminder, and integration tools as they are developed.
+`chat` answers questions conversationally. `agent` keeps conversation history,
+uses the local user profile, and can create, list, complete, reschedule, or
+cancel personal tasks and reminders from natural-language requests.
 
-Type `/help` inside the terminal interface to inspect the currently available
-commands. The next development phase will add persistent conversations, user
-identity, personal memory, reminders, and personal-service integrations.
+Reminders are persisted and appear in the terminal when they become due. If
+Suto was closed at that time, it reports the missed reminder on the next start.
+
+The terminal interface exposes `/help`, `/setting` for profile settings,
+`/noti` for pending reminders, `/noti del <reminder_id>` to remove one, and
+`/exit`. Personal-service integrations are under active development.
 
 ## Parked developer capability
 

@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 import ai
-from tests.ai_helpers import FakeClientSession as _FakeClientSession
+from tests.support.ai_helpers import FakeClientSession as _FakeClientSession
 
 
 def test_write_tool_audit_redacts_file_content():

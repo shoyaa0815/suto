@@ -1,9 +1,15 @@
 import asyncio
 import inspect
+import json
 import time
 
 import aiohttp
 
+from assistant.context import AssistantContext
+from assistant.tasks.tools import (
+    REMINDER_CREATION_TOOL_NAMES,
+    reminder_creation_requested,
+)
 from automation.runtime.context import (
     ALL_WORKSPACE_TOOLS,
     ApprovalRequired,
@@ -14,7 +20,9 @@ from core.language import ReplyLanguage, choose_reply_language
 from core.modes import DEFAULT_MODE, get_mode_policy
 from tools import (
     ADVANCED_TOOL_NAMES,
+    TASK_TOOL_NAMES,
     build_advanced_tools,
+    build_task_tools,
     COMMAND_TOOL_NAMES,
     PLANNING_TOOL_NAMES,
     build_attachment_tools,
@@ -51,6 +59,8 @@ async def execute_local_ai(
     tool_event_callback: ToolEventCallback | None = None,
     change_event_callback: ChangeEventCallback | None = None,
     skill_instructions: str = "",
+    conversation_history: list[dict[str, str]] | None = None,
+    assistant_context: AssistantContext | None = None,
 ) -> AIExecutionResult:
     request_started = time.perf_counter()
     max_tool_rounds = (
@@ -133,6 +143,8 @@ async def execute_local_ai(
     allowed_tools = policy.allowed_tools
     if not attachments:
         allowed_tools = allowed_tools - config.ATTACHMENT_TOOL_NAMES
+    if assistant_context is None:
+        allowed_tools = allowed_tools - TASK_TOOL_NAMES
     job_scoped_tools = (
         ALL_WORKSPACE_TOOLS | PLANNING_TOOL_NAMES | COMMAND_TOOL_NAMES | ADVANCED_TOOL_NAMES
     )
@@ -152,6 +164,27 @@ async def execute_local_ai(
         connect=10,
         sock_read=config.AI_TIMEOUT_SECONDS,
     )
+    history = [
+        {"role": item["role"], "content": item["content"]}
+        for item in (conversation_history or [])[-20:]
+        if item.get("role") in {"user", "assistant"}
+        and isinstance(item.get("content"), str)
+        and item["content"]
+    ]
+    personal_context = ""
+    if assistant_context is not None:
+        user = assistant_context.store.get_user(assistant_context.user_id)
+        if user is not None:
+            personal_context = json.dumps(
+                {
+                    "display_name": user.display_name,
+                    "timezone": user.timezone,
+                    "locale": user.locale,
+                    "preferences": assistant_context.store.user_preferences(user.id),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
     messages = [
         {
             "role": "system",
@@ -160,8 +193,10 @@ async def execute_local_ai(
                 tool_guidance,
                 reply_language,
                 skill_instructions,
+                personal_context,
             ),
         },
+        *history,
         {"role": "user", "content": prompt},
     ]
     try:
@@ -194,6 +229,8 @@ async def execute_local_ai(
                 attachments,
                 complete_document_part,
             )
+            if assistant_context is not None:
+                runtime_handlers.update(build_task_tools(assistant_context))
             if execution_context is not None:
                 runtime_handlers.update(
                     build_workspace_tools(
@@ -219,6 +256,7 @@ async def execute_local_ai(
             tools, _, _ = get_tools(allowed_tools, runtime_handlers)
             tool_call_count = 0
             tool_call_counts: dict[str, int] = {}
+            completed_tools: set[str] = set()
             for round_number in range(1, max_tool_rounds + 1):
                 if reason := execution_limit_reason(tool_call_count, pending_model=True):
                     return blocked_result(reason)
@@ -246,6 +284,18 @@ async def execute_local_ai(
                             status="failed",
                             error=outcome,
                         )
+                    if (
+                        assistant_context is not None
+                        and reminder_creation_requested(prompt)
+                        and not completed_tools & REMINDER_CREATION_TOOL_NAMES
+                    ):
+                        outcome = "failed: reminder tool was not completed"
+                        text = (
+                            "สร้างการแจ้งเตือนไม่สำเร็จ กรุณาลองอีกครั้ง"
+                            if reply_language.code == "th"
+                            else "I couldn't create the reminder. Please try again."
+                        )
+                        return build_result(text, status="failed", error=outcome)
                     answer = await await_with_execution_deadline(
                         response.enforce_reply_language(
                             session,
@@ -320,6 +370,8 @@ async def execute_local_ai(
                             tool_error = f"{type(error).__name__}: {error}"
                             config.debug(f"[tool] name={name} error={error!r}")
                             result = f"tool failed: {name}: {error}"
+                        if tool_outcome == "finished":
+                            completed_tools.add(name)
                         elapsed_ms = round(
                             (time.perf_counter() - tool_started) * 1000
                         )
@@ -418,6 +470,8 @@ async def ask_local_ai(
     attachments: dict[str, tuple[str, bytes]] | None = None,
     reply_language: ReplyLanguage | None = None,
     progress_callback: ProgressCallback | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
+    assistant_context: AssistantContext | None = None,
 ) -> str:
     """Compatibility wrapper for chat clients that only need answer text."""
     result = await execute_local_ai(
@@ -427,5 +481,7 @@ async def ask_local_ai(
         attachments=attachments,
         reply_language=reply_language,
         progress_callback=progress_callback,
+        conversation_history=conversation_history,
+        assistant_context=assistant_context,
     )
     return result.text

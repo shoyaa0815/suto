@@ -8,6 +8,7 @@ from pathlib import Path
 from collections.abc import Awaitable, Callable
 
 from ai import ask_local_ai
+from assistant import AssistantContext
 from automation.library.bundles import import_bundle, write_bundle
 from automation.library.definitions import (
     automation_options,
@@ -20,10 +21,14 @@ from automation.storage.store import JobStore
 from automation.runtime.worker import AutomationWorker
 from clients.tui.output import write as print
 from clients.tui.progress import format_elapsed, print_progress
-from clients.tui.operations import handle_operations, notify_tui
+from clients.tui.operations import (
+    notify_personal_reminders,
+    notify_tui,
+    print_pending_reminders,
+)
 from core.language import choose_reply_language
 
-EXIT_COMMANDS = frozenset({"/exit", "/quit"})
+EXIT_COMMANDS = frozenset({"/exit"})
 TERMINAL_JOB_STATUSES = frozenset(
     {
         JobStatus.COMPLETED,
@@ -66,44 +71,12 @@ async def _choose_reply_language_async(
 
 
 def _print_help(mode: str | None = None) -> None:
-    if mode == "developer":
-        print(
-            "Type a task normally to run it in the current workspace with "
-            "file-write and verification-command access."
-        )
     print("Commands:")
     print("  /help  show available commands")
-    print(
-        "  /run [--workspace <path>] [--allow-write] [--allow-command] <task>  "
-        "create an automation job"
-    )
-    print("  /jobs  list recent automation jobs")
-    print(
-        "  /schedule (--at <ISO> | --every <seconds> | --cron <expr>) "
-        "[options] <task>  create a schedule"
-    )
-    print("  /schedules  list schedules")
-    print("  /automation <create|edit|list|show|run|history|export|import> ...")
-    print("  /skill <create|edit|list|show> ...")
-    print("  /health | /diagnostics | /metrics  inspect runtime health and usage")
-    print("  /logs [job_id]  structured JSON logs")
-    print("  /backup <new.db> | /cleanup [days] [--apply] | /limits [key=value ...]")
-    print("  /memory <on|off|list|add|search|delete> <workspace> [text|id]")
-    print("  /knowledge <index|search|clear> <workspace> [query]")
-    print("  /subtasks <job_id> | /notifications [ack <event_id>]")
-    print("  /run options: --memory --retrieval --subtasks --sandbox process|bwrap")
-    print("                --max-tokens N --max-tool-calls N --max-seconds N --max-files N")
-    print("  /pause <schedule_id>  pause a schedule")
-    print("  /status <job_id>  show job status and result")
-    print("  /plan <job_id>  show the current automation plan")
-    print("  /commands <job_id>  show commands executed by a job")
-    print("  /changes <job_id>  show files changed by a job")
-    print("  /cancel <job_id>  cancel a queued, running, or waiting job")
-    print("  /resume <job_id|schedule_id>  resume a job or schedule")
-    print("  /approve <job_id>  approve the pending exact action")
-    print("  /reject <job_id>  reject the pending action and block the job")
+    print("  /setting  open profile settings")
+    print("  /noti  show reminders that have not been delivered")
+    print("  /noti del <reminder_id>  remove a pending reminder")
     print("  /exit  exit suto")
-    print("  /quit  exit suto")
 
 
 def _print_jobs(store: JobStore) -> None:
@@ -572,11 +545,19 @@ async def run_session(
     previous_language_code: str | None = None
     database_path = os.environ.get("SUTO_DB_PATH", "data/suto.db")
     store = JobStore(database_path)
+    user = store.resolve_channel_identity(
+        "tui",
+        "local",
+        display_name=os.environ.get("SUTO_USER_NAME", "User"),
+        timezone=os.environ.get("SUTO_TIMEZONE", "UTC"),
+        locale=os.environ.get("SUTO_LOCALE", "th"),
+    )
+    conversation = store.get_or_create_conversation(user.id, "tui", "local")
     worker = AutomationWorker(store, JobRunner(store))
-    scheduler = worker.scheduler
     worker_task = asyncio.create_task(worker.start())
     notification_task = (asyncio.create_task(notify_tui(store))
                          if os.environ.get('SUTO_NOTIFY_TUI', '').lower() in {'1', 'true', 'yes'} else None)
+    reminder_task = asyncio.create_task(notify_personal_reminders(store, user.id))
     print("Type /help for commands")
     try:
         await asyncio.sleep(0)
@@ -604,7 +585,22 @@ async def run_session(
             if command in EXIT_COMMANDS:
                 print("bye")
                 return
-            if await handle_operations(store, command, argument):
+            if command == "/noti":
+                if not argument:
+                    print_pending_reminders(store, user.id)
+                else:
+                    parts = argument.split()
+                    if len(parts) != 2 or parts[0].casefold() != "del":
+                        print("usage: /noti [del <reminder_id>]")
+                    else:
+                        reminder = store.cancel_reminder(user.id, parts[1])
+                        if reminder is None:
+                            print(f"Reminder not found: {parts[1]}")
+                        else:
+                            print(f"Reminder removed: {reminder.id}")
+                continue
+            if prompt.startswith("/"):
+                print(f"Unknown command: {command}. Type /help for commands.")
                 continue
             if command == "/run":
                 try:
@@ -807,6 +803,8 @@ async def run_session(
                 continue
 
             print("Preparing request...")
+            history = store.conversation_history(conversation.id)
+            store.add_message(conversation.id, "user", prompt)
             reply_language = await _choose_reply_language_async(
                 prompt,
                 previous_language_code,
@@ -819,13 +817,22 @@ async def run_session(
                     mode=mode,
                     reply_language=reply_language,
                     progress_callback=print_progress,
+                    conversation_history=history,
+                    assistant_context=(
+                        AssistantContext(store, user.id, conversation.id)
+                        if mode == "agent"
+                        else None
+                    ),
                 )
             except KeyboardInterrupt:
                 print("\nrequest cancelled")
                 continue
 
+            store.add_message(conversation.id, "assistant", answer)
             print(f"suto> {answer}")
     finally:
+        reminder_task.cancel()
+        await asyncio.gather(reminder_task, return_exceptions=True)
         if notification_task:
             notification_task.cancel()
             await asyncio.gather(notification_task, return_exceptions=True)

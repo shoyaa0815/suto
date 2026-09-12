@@ -7,6 +7,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
+from assistant.conversations.store import ConversationStore
+from assistant.identity.store import IdentityStore
+from assistant.tasks.store import TaskStore
 from ..models import (
     ActionType,
     ApprovalEvent,
@@ -49,7 +52,14 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-class JobStore(OperationsStore, SubtaskStore, KnowledgeStore):
+class JobStore(
+    OperationsStore,
+    SubtaskStore,
+    KnowledgeStore,
+    IdentityStore,
+    ConversationStore,
+    TaskStore,
+):
     def __init__(self, path: str | Path = "data/suto.db") -> None:
         self.path = Path(path).expanduser().resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)

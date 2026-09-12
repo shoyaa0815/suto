@@ -10,6 +10,10 @@
 # outside this package needs to change. The AI executor asks this registry for tools
 # allowed by the active mode instead of exposing every tool globally.
 from .datetime_tool import get_current_datetime
+from assistant.tasks.tools import build_task_tools
+from assistant.tasks.tools import PROMPT as TASK_PROMPT
+from assistant.tasks.tools import SCHEMAS as TASK_SCHEMAS
+from assistant.tasks.tools import TOOL_NAMES as TASK_TOOL_NAMES
 from .advanced import SCHEMAS as ADVANCED_SCHEMAS, TOOL_NAMES as ADVANCED_TOOL_NAMES
 from .advanced import PROMPT as ADVANCED_PROMPT, build_advanced_tools
 from .datetime_tool import PROMPT as DATETIME_PROMPT
@@ -47,8 +51,13 @@ _EMPTY_ATTACHMENT_TOOLS = build_attachment_tools({})
 def _workspace_unavailable(**kwargs) -> str:
     return "workspace tools are unavailable outside an automation job"
 
+
+def _assistant_unavailable(**kwargs) -> str:
+    return "personal assistant tools are unavailable without a user identity"
+
 ALL_TOOLS = {
     **{name: _workspace_unavailable for name in ADVANCED_TOOL_NAMES},
+    **{name: _assistant_unavailable for name in TASK_TOOL_NAMES},
     "get_current_datetime": get_current_datetime,
     "search_web": search_web,
     "fetch_url": fetch_url,
@@ -70,6 +79,7 @@ ALL_TOOL_SCHEMAS = {
     schema["function"]["name"]: schema
     for schema in [
         *ADVANCED_SCHEMAS,
+        *TASK_SCHEMAS,
         DATETIME_SCHEMA,
         SEARCH_SCHEMA,
         FETCH_SCHEMA,
@@ -89,6 +99,7 @@ ALL_TOOL_SCHEMAS = {
 
 ALL_TOOL_GUIDANCE = {
     **{name: ADVANCED_PROMPT for name in ADVANCED_TOOL_NAMES},
+    **{name: TASK_PROMPT for name in TASK_TOOL_NAMES},
     "get_current_datetime": DATETIME_PROMPT,
     "search_web": SEARCH_PROMPT,
     "fetch_url": FETCH_PROMPT,

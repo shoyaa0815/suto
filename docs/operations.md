@@ -216,7 +216,7 @@ can repeat a message. External Discord/LINE/email/webhook delivery is not includ
 
 ```bash
 venv/bin/pytest -q
-venv/bin/pytest tests/test_sandbox.py -q
+venv/bin/pytest tests/tools/test_sandbox.py -q
 ```
 
 Tests cover migration rollback/backup, process locks, quotas, shutdown,

@@ -20,20 +20,24 @@ def test_print_help_lists_exit_commands(capsys):
 
     output = capsys.readouterr().out
     assert "/help" in output
+    assert "/setting" in output
+    assert "/noti" in output
+    assert "/noti del <reminder_id>" in output
     assert "/exit" in output
-    assert "/quit" in output
-    assert "/plan" in output
-    assert "/resume" in output
-    assert "/approve" in output
-    assert "/reject" in output
+    assert "/quit" not in output
+    assert "/plan" not in output
+    assert "/resume" not in output
+    assert "/approve" not in output
+    assert "/reject" not in output
 
 
-def test_developer_help_explains_workspace_access(capsys):
+def test_developer_help_only_lists_public_commands(capsys):
     _print_help("developer")
 
     output = capsys.readouterr().out
-    assert "Type a task normally" in output
-    assert "file-write" in output
+    assert "/help" in output
+    assert "/exit" in output
+    assert "file-write" not in output
 
 
 def test_job_status_labels_blocked_reason(tmp_path, capsys):

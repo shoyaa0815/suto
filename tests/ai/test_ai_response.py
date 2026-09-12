@@ -1,5 +1,5 @@
 import ai
-from tests.ai_helpers import FakeClientSession as _FakeClientSession
+from tests.support.ai_helpers import FakeClientSession as _FakeClientSession
 
 
 async def test_attached_file_tool_is_scoped_to_current_request(monkeypatch):
@@ -171,4 +171,3 @@ async def test_summary_tool_uses_chunk_completion_without_tools(monkeypatch):
     assert "search_attachment" in observed["schema_names"]
     assert observed["chunk_tools"] == []
     assert observed["chunk_output_limit"] == 140
-

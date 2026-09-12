@@ -1,7 +1,7 @@
 import ai
 from automation.runtime.context import COMMAND_TOOLS, PLANNING_TOOLS, ExecutionContext
 from automation.storage.store import JobStore
-from tests.ai_helpers import FakeClientSession as _FakeClientSession
+from tests.support.ai_helpers import FakeClientSession as _FakeClientSession
 
 
 async def test_developer_job_exposes_workspace_tools_and_audits_calls(

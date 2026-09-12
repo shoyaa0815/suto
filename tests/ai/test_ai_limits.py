@@ -2,7 +2,7 @@ import asyncio
 
 import ai
 from automation.runtime.context import ExecutionContext, ExecutionLimits
-from tests.ai_helpers import FakeClientSession as _FakeClientSession
+from tests.support.ai_helpers import FakeClientSession as _FakeClientSession
 
 
 async def test_developer_job_is_blocked_when_token_budget_is_exceeded(

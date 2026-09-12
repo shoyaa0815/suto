@@ -11,7 +11,7 @@ from automation.runtime.runner import JobRunner
 from automation.storage.store import JobStore
 from automation.runtime.worker import AutomationWorker
 from clients.tui.backend import _parse_run
-from tests.test_hardening import eventually
+from tests.automation.test_hardening import eventually
 from tools.advanced import TOOL_NAMES, build_advanced_tools
 
 
@@ -274,7 +274,7 @@ def test_cli_opt_in_and_invalid_limits(tmp_path):
 
 
 async def test_advanced_tools_not_exposed_without_job_opt_in(tmp_path, monkeypatch):
-    from tests.ai_helpers import FakeClientSession
+    from tests.support.ai_helpers import FakeClientSession
     observed = []
 
     async def fake_chat(session, messages, schemas, think=False):

@@ -16,8 +16,12 @@ def test_chat_mode_has_current_tools():
 def test_agent_mode_has_personal_assistant_tools():
     policy = get_mode_policy("agent")
 
-    assert policy.allowed_tools == get_mode_policy("chat").allowed_tools
+    assert policy.allowed_tools > get_mode_policy("chat").allowed_tools
     assert "search_web" in policy.allowed_tools
+    assert "create_task" in policy.allowed_tools
+    assert "create_reminder_in" in policy.allowed_tools
+    assert "create_reminder_at" in policy.allowed_tools
+    assert "create_reminder" not in policy.allowed_tools
     assert "apply_workspace_patch" not in policy.allowed_tools
 
 
