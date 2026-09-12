@@ -1,8 +1,8 @@
 from datetime import UTC, datetime, timedelta
 
 from automation.models import JobStatus, MissedRunPolicy, ScheduleKind, TriggerStatus
-from automation.scheduler import CronExpression, Scheduler
-from automation.store import JobStore
+from automation.runtime.scheduler import CronExpression, Scheduler
+from automation.storage.store import JobStore
 
 
 def test_schedule_persists_across_store_restart(tmp_path):

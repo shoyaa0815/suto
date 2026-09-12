@@ -4,7 +4,7 @@ import time
 
 import aiohttp
 
-from automation.context import (
+from automation.runtime.context import (
     ALL_WORKSPACE_TOOLS,
     ApprovalRequired,
     ExecutionContext,

@@ -4,12 +4,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .definitions import render_automation_prompt
-from .models import Job, JobStatus
+from ..library.definitions import render_automation_prompt
+from ..models import Job, JobStatus
 from .runner import JobRunner
 from .scheduler import Scheduler
-from .store import JobStore
-from .locking import ProcessLock
+from ..storage.store import JobStore
+from ..storage.locking import ProcessLock
 
 
 class AutomationWorker:

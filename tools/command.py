@@ -10,8 +10,8 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from automation.context import ExecutionContext
-from automation.sandbox import sandbox_command
+from automation.runtime.context import ExecutionContext
+from automation.runtime.sandbox import sandbox_command
 
 
 COMMAND_TOOL_NAMES = frozenset({"run_workspace_command"})

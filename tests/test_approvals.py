@@ -5,7 +5,7 @@ import ai.client
 import ai.executor
 import pytest
 from ai import AIExecutionResult
-from automation.context import (
+from automation.runtime.context import (
     ACTION_POLICIES,
     COMMAND_TOOLS,
     WRITE_WORKSPACE_TOOLS,
@@ -13,10 +13,10 @@ from automation.context import (
     ExecutionContext,
 )
 from automation.models import ActionType, ApprovalStatus, JobStatus
-from automation.redaction import REDACTED
-from automation.runner import JobRunner
-from automation.store import JobStore
-from automation.worker import AutomationWorker
+from automation.storage.redaction import REDACTED
+from automation.runtime.runner import JobRunner
+from automation.storage.store import JobStore
+from automation.runtime.worker import AutomationWorker
 from tools.command import build_command_tools
 from tools.workspace import build_workspace_tools
 

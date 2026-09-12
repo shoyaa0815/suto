@@ -1,12 +1,12 @@
 import pytest
 
 from ai import AIExecutionResult
-from automation.bundles import export_bundle, import_bundle, write_bundle
-from automation.definitions import render_automation_prompt
+from automation.library.bundles import export_bundle, import_bundle, write_bundle
+from automation.library.definitions import render_automation_prompt
 from automation.models import JobStatus
-from automation.runner import JobRunner
-from automation.store import JobStore
-from automation.worker import AutomationWorker
+from automation.runtime.runner import JobRunner
+from automation.storage.store import JobStore
+from automation.runtime.worker import AutomationWorker
 from clients.tui.backend import _parse_automation_run
 
 

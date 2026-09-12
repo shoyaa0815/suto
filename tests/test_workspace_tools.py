@@ -3,7 +3,7 @@ import stat
 
 import pytest
 
-from automation.context import (
+from automation.runtime.context import (
     READ_ONLY_WORKSPACE_TOOLS,
     WRITE_WORKSPACE_TOOLS,
     ExecutionContext,

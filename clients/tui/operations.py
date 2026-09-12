@@ -88,7 +88,7 @@ async def handle_operations(store, command: str, argument: str) -> bool:
             else:
                 raise ValueError('invalid knowledge action or arguments')
     except (OSError, ValueError, RuntimeError, sqlite3.Error) as error:
-        from automation.redaction import redact_text
+        from automation.storage.redaction import redact_text
         print(redact_text(error))
     return True
 

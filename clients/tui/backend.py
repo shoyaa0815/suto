@@ -8,16 +8,16 @@ from pathlib import Path
 from collections.abc import Awaitable, Callable
 
 from ai import ask_local_ai
-from automation.bundles import import_bundle, write_bundle
-from automation.definitions import (
+from automation.library.bundles import import_bundle, write_bundle
+from automation.library.definitions import (
     automation_options,
     load_definition_file,
     parse_parameter_value,
 )
 from automation.models import Job, JobStatus, MissedRunPolicy, ScheduleKind
-from automation.runner import JobRunner
-from automation.store import JobStore
-from automation.worker import AutomationWorker
+from automation.runtime.runner import JobRunner
+from automation.storage.store import JobStore
+from automation.runtime.worker import AutomationWorker
 from clients.tui.output import write as print
 from clients.tui.progress import format_elapsed, print_progress
 from clients.tui.operations import handle_operations, notify_tui
@@ -424,7 +424,7 @@ def _parse_run(argument: str, *, include_options: bool = False):
         raise ValueError("/run requires a task")
     if not workspace.is_dir():
         raise ValueError(f"workspace is not a directory: {workspace}")
-    from automation.options import validate_options
+    from automation.runtime.options import validate_options
     options = validate_options(options)
     result = (" ".join(parts), workspace, allow_write, allow_command)
     return (*result, options) if include_options else result

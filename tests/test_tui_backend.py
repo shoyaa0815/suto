@@ -1,5 +1,5 @@
 from automation.models import MissedRunPolicy, ScheduleKind
-from automation.store import JobStore
+from automation.storage.store import JobStore
 from clients.tui.backend import (
     _parse_run,
     _parse_schedule,

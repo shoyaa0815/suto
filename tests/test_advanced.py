@@ -5,11 +5,11 @@ import pytest
 
 import ai
 from ai import AIExecutionResult
-from automation.context import ApprovalRequired, ExecutionContext
-from automation.options import validate_options
-from automation.runner import JobRunner
-from automation.store import JobStore
-from automation.worker import AutomationWorker
+from automation.runtime.context import ApprovalRequired, ExecutionContext
+from automation.runtime.options import validate_options
+from automation.runtime.runner import JobRunner
+from automation.storage.store import JobStore
+from automation.runtime.worker import AutomationWorker
 from clients.tui.backend import _parse_run
 from tests.test_hardening import eventually
 from tools.advanced import TOOL_NAMES, build_advanced_tools
@@ -63,7 +63,7 @@ async def test_memory_disable_during_embedding_and_invalid_vectors(tmp_path):
     with pytest.raises(PermissionError, match='disabled while'):
         await store.remember(tmp_path, 'note', embedder=DisablingEmbedder())
     assert not store.list_memories(tmp_path)
-    from automation.knowledge import normalized_vector
+    from automation.storage.knowledge import normalized_vector
     for value in ([float('nan')], [0., 0.], [float('inf')], [], [True]):
         with pytest.raises(ValueError):
             normalized_vector(value)
@@ -122,7 +122,7 @@ def test_project_index_incremental_citations_secrets_and_staleness(tmp_path):
 
 
 def test_index_quota_rolls_back_and_query_is_not_sql(tmp_path, monkeypatch):
-    import automation.knowledge as knowledge
+    import automation.storage.knowledge as knowledge
     store = JobStore(tmp_path / 'jobs.db')
     (tmp_path / 'a.py').write_text('original')
     store.index_workspace(tmp_path)
@@ -290,7 +290,7 @@ async def test_advanced_tools_not_exposed_without_job_opt_in(tmp_path, monkeypat
 
 
 async def test_ollama_embedding_protocol_handles_fragmented_response(monkeypatch):
-    from automation.knowledge import OllamaEmbeddings
+    from automation.storage.knowledge import OllamaEmbeddings
     observed = {}
 
     class Body:
@@ -318,7 +318,7 @@ async def test_ollama_embedding_protocol_handles_fragmented_response(monkeypatch
 
     monkeypatch.setenv('SUTO_EMBED_MODEL', 'test-model')
     monkeypatch.setenv('SUTO_EMBED_URL', 'http://localhost:11434')
-    monkeypatch.setattr('automation.knowledge.aiohttp.ClientSession', Session)
+    monkeypatch.setattr('automation.storage.knowledge.aiohttp.ClientSession', Session)
     assert await OllamaEmbeddings().embed('vehicle') == [.6, .8]
     assert observed['url'] == 'http://localhost:11434/api/embed'
     assert observed['payload'] == {'model': 'test-model', 'input': 'vehicle', 'truncate': False}

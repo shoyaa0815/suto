@@ -3,11 +3,11 @@ import hashlib
 import sqlite3
 
 from ai import AIExecutionResult
-from automation.context import COMMAND_TOOLS, PLANNING_TOOLS, WRITE_WORKSPACE_TOOLS
+from automation.runtime.context import COMMAND_TOOLS, PLANNING_TOOLS, WRITE_WORKSPACE_TOOLS
 from automation.models import JobStatus, StepStatus
-from automation.runner import JobRunner
-from automation.store import JobStore
-from automation.worker import AutomationWorker
+from automation.runtime.runner import JobRunner
+from automation.storage.store import JobStore
+from automation.runtime.worker import AutomationWorker
 
 
 def test_job_store_persists_lifecycle_and_events(tmp_path):

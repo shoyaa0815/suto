@@ -3,7 +3,7 @@ from pathlib import Path
 
 from core.settings import env_float, env_int
 
-from .models import ActionType
+from ..models import ActionType
 
 
 READ_ONLY_WORKSPACE_TOOLS = frozenset(

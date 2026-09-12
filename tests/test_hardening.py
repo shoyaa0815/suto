@@ -9,11 +9,11 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from ai import AIExecutionResult
-from automation.locking import ProcessLock
-from automation.migrations import SCHEMA_VERSION
-from automation.runner import JobRunner
-from automation.store import JobStore
-from automation.worker import AutomationWorker
+from automation.storage.locking import ProcessLock
+from automation.storage.migrations import SCHEMA_VERSION
+from automation.runtime.runner import JobRunner
+from automation.storage.store import JobStore
+from automation.runtime.worker import AutomationWorker
 from clients.tui.operations import handle_operations
 
 
@@ -48,7 +48,7 @@ def test_migration_backup_and_newer_schema_refusal(tmp_path):
 
 
 def test_migration_rolls_back_failed_version(tmp_path, monkeypatch):
-    import automation.migrations as migrations
+    import automation.storage.migrations as migrations
     path = tmp_path / 'broken.db'
     monkeypatch.setattr(migrations, 'ADVANCED', migrations.ADVANCED + '\nINVALID SQL;')
     with pytest.raises(sqlite3.OperationalError):
@@ -168,7 +168,7 @@ def test_worker_lock_excludes_another_process(tmp_path):
     path = tmp_path / 'worker.lock'
     lock = ProcessLock(path)
     assert lock.acquire()
-    script = ('from pathlib import Path; from automation.locking import ProcessLock; '
+    script = ('from pathlib import Path; from automation.storage.locking import ProcessLock; '
               'import sys; lock=ProcessLock(Path(sys.argv[1])); '
               'sys.exit(0 if lock.acquire() else 7)')
     try:
@@ -244,7 +244,7 @@ async def test_operator_cli_validation_and_preview(tmp_path, capsys):
 
 
 async def test_worker_write_approve_verify_complete(tmp_path):
-    from automation.context import ApprovalRequired
+    from automation.runtime.context import ApprovalRequired
     from tools.command import build_command_tools
     from tools.workspace import build_workspace_tools
     store = JobStore(tmp_path / 'jobs.db')

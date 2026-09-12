@@ -1,6 +1,6 @@
 from typing import Protocol
 
-from automation.context import ExecutionContext
+from automation.runtime.context import ExecutionContext
 from automation.models import JobStep, StepStatus
 
 

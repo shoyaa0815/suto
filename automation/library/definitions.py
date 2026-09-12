@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .models import AutomationVersion
+from ..models import AutomationVersion
 
 
 NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
