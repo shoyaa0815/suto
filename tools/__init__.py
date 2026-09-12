@@ -14,10 +14,10 @@ from .advanced import SCHEMAS as ADVANCED_SCHEMAS, TOOL_NAMES as ADVANCED_TOOL_N
 from .advanced import PROMPT as ADVANCED_PROMPT, build_advanced_tools
 from .datetime_tool import PROMPT as DATETIME_PROMPT
 from .datetime_tool import SCHEMA as DATETIME_SCHEMA
-from .command import build_command_tools
-from .command import COMMAND_TOOL_NAMES
-from .command import PROMPT as COMMAND_PROMPT
-from .command import SCHEMA as COMMAND_SCHEMA
+from capabilities.developer.command import build_command_tools
+from capabilities.developer.command import COMMAND_TOOL_NAMES
+from capabilities.developer.command import PROMPT as COMMAND_PROMPT
+from capabilities.developer.command import SCHEMA as COMMAND_SCHEMA
 from .fetch import fetch_url
 from .fetch import PROMPT as FETCH_PROMPT
 from .fetch import SCHEMA as FETCH_SCHEMA
@@ -29,17 +29,17 @@ from .file_reader import SUMMARY_SCHEMA as FILE_SUMMARY_SCHEMA
 from .search import search_web
 from .search import PROMPT as SEARCH_PROMPT
 from .search import SCHEMA as SEARCH_SCHEMA
-from .planning import build_planning_tools
-from .planning import CREATE_PLAN_SCHEMA
-from .planning import PLANNING_TOOL_NAMES
-from .planning import PROMPT as PLANNING_PROMPT
-from .planning import REVISE_PLAN_SCHEMA, UPDATE_STEP_SCHEMA
-from .workspace import build_workspace_tools
-from .workspace import PATCH_SCHEMA as WORKSPACE_PATCH_SCHEMA
-from .workspace import LIST_SCHEMA as WORKSPACE_LIST_SCHEMA
-from .workspace import PROMPT as WORKSPACE_PROMPT
-from .workspace import READ_SCHEMA as WORKSPACE_READ_SCHEMA
-from .workspace import SEARCH_SCHEMA as WORKSPACE_SEARCH_SCHEMA
+from capabilities.developer.planning import build_planning_tools
+from capabilities.developer.planning import CREATE_PLAN_SCHEMA
+from capabilities.developer.planning import PLANNING_TOOL_NAMES
+from capabilities.developer.planning import PROMPT as PLANNING_PROMPT
+from capabilities.developer.planning import REVISE_PLAN_SCHEMA, UPDATE_STEP_SCHEMA
+from capabilities.developer.workspace import build_workspace_tools
+from capabilities.developer.workspace import PATCH_SCHEMA as WORKSPACE_PATCH_SCHEMA
+from capabilities.developer.workspace import LIST_SCHEMA as WORKSPACE_LIST_SCHEMA
+from capabilities.developer.workspace import PROMPT as WORKSPACE_PROMPT
+from capabilities.developer.workspace import READ_SCHEMA as WORKSPACE_READ_SCHEMA
+from capabilities.developer.workspace import SEARCH_SCHEMA as WORKSPACE_SEARCH_SCHEMA
 
 _EMPTY_ATTACHMENT_TOOLS = build_attachment_tools({})
 

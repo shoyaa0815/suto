@@ -2,21 +2,21 @@ import sys
 
 from dotenv import load_dotenv
 
-from core.modes import MODE_POLICIES
+from core.modes import PUBLIC_MODES
 
 CLIENTS = ("cli", "discord", "line")
 
 
 def _parse_args(args: list[str]) -> tuple[str, str]:
     usage = (
-        f"usage: python3 main.py <{'|'.join(MODE_POLICIES)}> "
+        f"usage: python3 main.py <{'|'.join(PUBLIC_MODES)}> "
         f"<{'|'.join(CLIENTS)}>"
     )
     if len(args) != 2:
         raise SystemExit(usage)
 
     mode, client_name = args
-    if client_name not in CLIENTS or mode not in MODE_POLICIES:
+    if client_name not in CLIENTS or mode not in PUBLIC_MODES:
         raise SystemExit(usage)
     return client_name, mode
 

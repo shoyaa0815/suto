@@ -3,7 +3,7 @@ import pytest
 from automation.runtime.context import PLANNING_TOOLS, ExecutionContext
 from automation.models import StepStatus
 from automation.storage.store import JobStore
-from tools.planning import build_planning_tools
+from capabilities.developer.planning import build_planning_tools
 
 
 def _planning_context(tmp_path, store, job_id):

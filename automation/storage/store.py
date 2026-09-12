@@ -572,7 +572,7 @@ class JobStore(OperationsStore, SubtaskStore, KnowledgeStore):
     def create_job(
         self,
         prompt: str,
-        mode: str = "agent",
+        mode: str = "developer",
         source: str = "tui",
         source_ref: str | None = None,
         workspace: str = ".",

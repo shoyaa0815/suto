@@ -13,8 +13,16 @@ def test_chat_mode_has_current_tools():
     assert "read_attached_file" in policy.allowed_tools
 
 
-def test_agent_mode_has_restricted_workspace_tools():
+def test_agent_mode_has_personal_assistant_tools():
     policy = get_mode_policy("agent")
+
+    assert policy.allowed_tools == get_mode_policy("chat").allowed_tools
+    assert "search_web" in policy.allowed_tools
+    assert "apply_workspace_patch" not in policy.allowed_tools
+
+
+def test_developer_mode_has_restricted_workspace_tools():
+    policy = get_mode_policy("developer")
 
     expected = {
         "list_workspace_files",

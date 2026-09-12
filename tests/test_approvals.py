@@ -17,8 +17,8 @@ from automation.storage.redaction import REDACTED
 from automation.runtime.runner import JobRunner
 from automation.storage.store import JobStore
 from automation.runtime.worker import AutomationWorker
-from tools.command import build_command_tools
-from tools.workspace import build_workspace_tools
+from capabilities.developer.command import build_command_tools
+from capabilities.developer.workspace import build_workspace_tools
 
 
 class _FakeClientSession:

@@ -7,7 +7,6 @@ from clients.tui.backend import (
     _print_help,
     _print_job_status,
     _print_plan,
-    _submit_agent_prompt,
 )
 from clients.tui.progress import format_elapsed, print_progress
 
@@ -29,35 +28,12 @@ def test_print_help_lists_exit_commands(capsys):
     assert "/reject" in output
 
 
-def test_agent_help_explains_conversational_tasks(capsys):
-    _print_help("agent")
+def test_developer_help_explains_workspace_access(capsys):
+    _print_help("developer")
 
     output = capsys.readouterr().out
     assert "Type a task normally" in output
     assert "file-write" in output
-
-
-def test_conversational_agent_prompt_gets_full_workspace_access(tmp_path):
-    class FakeWorker:
-        def __init__(self):
-            self.submission = None
-
-        def submit(self, prompt, **options):
-            self.submission = (prompt, options)
-            return object()
-
-    worker = FakeWorker()
-
-    _submit_agent_prompt(worker, "fix the failing tests", tmp_path)
-
-    assert worker.submission == (
-        "fix the failing tests",
-        {
-            "workspace": tmp_path.resolve(),
-            "allow_write": True,
-            "allow_command": True,
-        },
-    )
 
 
 def test_job_status_labels_blocked_reason(tmp_path, capsys):

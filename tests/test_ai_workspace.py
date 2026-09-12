@@ -4,7 +4,7 @@ from automation.storage.store import JobStore
 from tests.ai_helpers import FakeClientSession as _FakeClientSession
 
 
-async def test_agent_job_exposes_workspace_tools_and_audits_calls(
+async def test_developer_job_exposes_workspace_tools_and_audits_calls(
     monkeypatch,
     tmp_path,
 ):
@@ -46,7 +46,7 @@ async def test_agent_job_exposes_workspace_tools_and_audits_calls(
 
     result = await ai.execute_local_ai(
         "inspect workspace",
-        mode="agent",
+        mode="developer",
         reply_language=ai.ReplyLanguage("en", "English", "test"),
         execution_context=ExecutionContext("job_test", tmp_path),
         tool_event_callback=tool_events.append,
@@ -67,7 +67,7 @@ async def test_agent_job_exposes_workspace_tools_and_audits_calls(
     assert tool_events[0]["result_size"] > 0
 
 
-async def test_agent_job_can_create_a_persistent_plan(monkeypatch, tmp_path):
+async def test_developer_job_can_create_a_persistent_plan(monkeypatch, tmp_path):
     calls = 0
     observed_schemas = set()
     store = JobStore(tmp_path / "suto.db")
@@ -110,7 +110,7 @@ async def test_agent_job_can_create_a_persistent_plan(monkeypatch, tmp_path):
 
     result = await ai.execute_local_ai(
         "inspect and report",
-        mode="agent",
+        mode="developer",
         execution_context=context,
         reply_language=ai.ReplyLanguage("en", "English", "test"),
     )
@@ -123,7 +123,7 @@ async def test_agent_job_can_create_a_persistent_plan(monkeypatch, tmp_path):
     ]
 
 
-async def test_agent_job_runs_allowlisted_command_and_audits_it(
+async def test_developer_job_runs_allowlisted_command_and_audits_it(
     monkeypatch,
     tmp_path,
 ):
@@ -177,7 +177,7 @@ async def test_agent_job_runs_allowlisted_command_and_audits_it(
 
     result = await ai.execute_local_ai(
         "run checks",
-        mode="agent",
+        mode="developer",
         execution_context=context,
         reply_language=ai.ReplyLanguage("en", "English", "test"),
     )
@@ -221,7 +221,7 @@ async def test_disallowed_tool_call_is_not_executed(monkeypatch):
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
 
-    answer = await ai.ask_local_ai("question", mode="agent")
+    answer = await ai.ask_local_ai("question", mode="developer")
 
     assert answer == "blocked"
-    assert tool_results == ["tool is not allowed in agent mode: search_web"]
+    assert tool_results == ["tool is not allowed in developer mode: search_web"]

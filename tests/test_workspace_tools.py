@@ -9,7 +9,7 @@ from automation.runtime.context import (
     ExecutionContext,
     ExecutionLimitExceeded,
 )
-from tools.workspace import build_workspace_tools
+from capabilities.developer.workspace import build_workspace_tools
 
 
 def test_workspace_tools_list_read_and_search(tmp_path):

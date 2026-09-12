@@ -4,7 +4,7 @@ import pytest
 
 from automation.runtime.context import COMMAND_TOOLS, WRITE_WORKSPACE_TOOLS, ExecutionContext
 from automation.storage.store import JobStore
-from tools.command import _prepare_command, build_command_tools
+from capabilities.developer.command import _prepare_command, build_command_tools
 
 
 def _context(tmp_path, *, allow_write=False):

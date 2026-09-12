@@ -1,8 +1,8 @@
 # Suto
 
-Suto is a local-first AI agent for chatting with AI and working on projects. It
-can read files, update code, and run tests. File changes and commands require
-user approval before execution.
+Suto is a local-first personal assistant for chatting with AI, running scheduled
+workflows, remembering useful context, and delivering notifications. Personal
+assistant integrations are under active development.
 
 ## Installation
 
@@ -34,171 +34,26 @@ Never commit `.env` files or API keys to Git.
 
 ## Usage
 
-Start general chat mode:
+Start Suto:
 
 ```bash
 venv/bin/python main.py chat cli
-```
-
-Start agent mode for project work:
-
-```bash
 venv/bin/python main.py agent cli
 ```
 
-In agent mode, enter a task directly:
+`chat` answers questions conversationally. `agent` is the personal-assistant
+mode and will gain task, reminder, and integration tools as they are developed.
 
-```text
-> fix the failing validation and run the tests
-```
+Type `/help` inside the terminal interface to inspect the currently available
+commands. The next development phase will add persistent conversations, user
+identity, personal memory, reminders, and personal-service integrations.
 
-Use `/run` to create a background job:
+## Parked developer capability
 
-```text
-/run inspect this project
-/run --allow-write update the README
-/run --allow-write --allow-command fix the code and run tests
-/run --workspace /path/to/project inspect this project
-```
+Workspace editing, coding plans, verification commands, and command sandboxing
+have been moved to `capabilities/developer/`. They remain tested for future
+opt-in use, but the internal `developer` mode is not exposed by the main
+entrypoint.
 
-`--allow-write` lets the agent propose file changes. `--allow-command` lets it
-propose allowlisted commands. These flags grant capabilities but do not approve
-individual actions.
-
-When an action needs approval:
-
-```text
-/status <job_id>   review the proposed diff or command
-/approve <job_id>  approve the action and continue the job
-/reject <job_id>   reject the action and stop the job
-```
-
-An approval applies only to the displayed action, expires after a limited time,
-and can be used once.
-
-Create persistent schedules with an ISO-8601 time, an interval in seconds, or a
-standard five-field cron expression:
-
-```text
-/schedule --at 2026-09-09T09:00:00+07:00 prepare the daily report
-/schedule --every 3600 inspect this project
-/schedule --cron "0 9 * * 1-5" --timezone Asia/Bangkok update the report
-```
-
-Schedule options include `--workspace`, `--allow-write`, `--allow-command`,
-`--missed-run run_once|skip`, `--retry`, and `--retry-delay`. Scheduled jobs use
-the saved permission profile, never broader permissions.
-
-## Commands
-
-```text
-/help               show all commands
-/jobs               list jobs
-/schedule ...        create a one-time, interval, or cron schedule
-/schedules           list schedules
-/pause <schedule_id> pause a schedule
-/automation ...      manage and run reusable automations
-/skill ...           manage reusable instruction skills
-/health              check database health and worker readiness
-/diagnostics         show runtime configuration and diagnostics
-/metrics             show queue/run time, success rate, tokens and tool errors
-/logs [job_id]       show structured JSON logs
-/backup <new.db>     create a consistent database snapshot
-/cleanup [days]      preview retention cleanup; add --apply to execute
-/limits [key=value]  inspect or change persistent runtime limits
-/memory ...          enable, inspect and manage workspace semantic memory
-/knowledge ...       index and search project files
-/subtasks <job_id>   inspect child jobs and their results
-/notifications       list unread local notifications
-/status <job_id>    show job status and pending approval
-/plan <job_id>      show the job plan
-/commands <job_id>  show command results
-/changes <job_id>   show changed files and diffs
-/approve <job_id>   approve an action
-/reject <job_id>    reject an action
-/cancel <job_id>    cancel a job
-/resume <id>        resume an interrupted job or paused schedule
-/exit               exit Suto
-```
-
-## Reusable automations
-
-Create reusable skills from UTF-8 text files, then create an automation from a
-JSON definition:
-
-```text
-/skill create python-testing ./python-testing.txt
-/automation create ./fix-bug.json
-/automation run fix-bug issue_id=123 test_suite=unit
-/automation history fix-bug
-```
-
-Example `fix-bug.json`:
-
-```json
-{
-  "format_version": 1,
-  "name": "fix-bug",
-  "description": "Inspect, fix, and verify one issue",
-  "prompt_template": "Fix issue {{issue_id}} and run {{test_suite}} tests.",
-  "parameter_schema": {
-    "issue_id": {"type": "integer", "required": true},
-    "test_suite": {"type": "string", "default": "unit"}
-  },
-  "workspace": "/absolute/path/to/project",
-  "allow_write": true,
-  "allow_command": true,
-  "skills": ["python-testing"]
-}
-```
-
-Editing creates an immutable new version. Jobs retain the exact automation and
-skill versions they used:
-
-```text
-/automation edit fix-bug ./fix-bug-v2.json
-/skill edit python-testing ./python-testing-v2.txt
-/automation show fix-bug
-/automation list
-/skill show python-testing
-/skill list
-```
-
-Definitions can be moved between Suto installations without job data or
-secrets:
-
-```text
-/automation export fix-bug ./fix-bug.bundle.json
-/automation import ./fix-bug.bundle.json
-```
-
-## Production controls and advanced jobs
-
-Database upgrades are versioned and automatically back up an existing database
-before migration. One worker process owns each database; its pool can run
-multiple jobs while enforcing a separate workspace concurrency limit.
-
-```text
-/limits concurrency=2 workspace_concurrency=1
-/health
-/metrics
-/backup ./backups/suto-snapshot.db
-/cleanup 30
-```
-
-Advanced job capabilities remain off until explicitly enabled:
-
-```text
-/knowledge index /path/to/project
-/run --workspace /path/to/project --retrieval inspect the scheduler
-/run --workspace /path/to/project --subtasks compare the modules using child tasks
-/run --workspace /path/to/project --allow-command --sandbox bwrap run the tests
-```
-
-Semantic memory requires workspace opt-in with `/memory on <workspace>`, a
-configured Ollama embedding model (`SUTO_EMBED_MODEL`), and `--memory` on the
-job. `SUTO_NOTIFY_TUI=1` enables local live status notifications; the persistent
-inbox is also available through `/notifications`.
-
-See [operations and advanced features](docs/operations.md) for configuration,
-permissions, limits, deployment requirements and verification commands.
+See [developer capability](capabilities/developer/README.md) and
+[operations](docs/operations.md) for the retained implementation details.

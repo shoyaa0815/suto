@@ -44,7 +44,7 @@ class AutomationWorker:
     ) -> Job:
         job = self.store.create_job(
             prompt,
-            mode="agent",
+            mode="developer",
             source=source,
             source_ref=source_ref,
             workspace=str(Path(workspace).expanduser().resolve()),

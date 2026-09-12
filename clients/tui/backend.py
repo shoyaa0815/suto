@@ -66,7 +66,7 @@ async def _choose_reply_language_async(
 
 
 def _print_help(mode: str | None = None) -> None:
-    if mode == "agent":
+    if mode == "developer":
         print(
             "Type a task normally to run it in the current workspace with "
             "file-write and verification-command access."
@@ -523,20 +523,6 @@ def _parse_schedule(argument: str) -> dict:
     }
 
 
-def _submit_agent_prompt(
-    worker: AutomationWorker,
-    prompt: str,
-    workspace: Path | None = None,
-) -> Job:
-    """Submit a conversational agent prompt with full local-workspace access."""
-    return worker.submit(
-        prompt,
-        workspace=(workspace or Path.cwd()).resolve(),
-        allow_write=True,
-        allow_command=True,
-    )
-
-
 async def _wait_for_job(store: JobStore, job_id: str) -> Job:
     last_event_id: int | None = None
     while True:
@@ -592,12 +578,6 @@ async def run_session(
     notification_task = (asyncio.create_task(notify_tui(store))
                          if os.environ.get('SUTO_NOTIFY_TUI', '').lower() in {'1', 'true', 'yes'} else None)
     print("Type /help for commands")
-    if mode == "agent":
-        print(
-            "Type a task normally. Suto will work in the current directory "
-            "with file-write and verification-command access."
-        )
-
     try:
         await asyncio.sleep(0)
         if worker_task.done():
@@ -824,17 +804,6 @@ async def run_session(
 
             if prompt.startswith("/"):
                 print(f"Unknown command: {command}. Type /help for commands.")
-                continue
-
-            if mode == "agent":
-                try:
-                    job = _submit_agent_prompt(worker, prompt)
-                except (ValueError, sqlite3.IntegrityError) as error:
-                    print(error)
-                    continue
-                print(f"Working on {job.id}...")
-                completed_job = await _wait_for_job(store, job.id)
-                _print_automatic_job_result(completed_job)
                 continue
 
             print("Preparing request...")

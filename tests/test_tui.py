@@ -1,5 +1,6 @@
 import asyncio
 
+import pytest
 from textual.widgets import Input, RichLog, Static
 
 from clients.tui.app import SutoTUI
@@ -50,15 +51,20 @@ async def test_tui_input_echoes_like_a_terminal():
         assert any("suto> handled" in line.text for line in lines)
 
 
-async def test_tui_chat_runs_the_real_session_backend(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode", ["chat", "agent"])
+async def test_tui_runs_the_real_assistant_session_backend(
+    mode,
+    tmp_path,
+    monkeypatch,
+):
     async def fake_ask(prompt, **options):
         assert prompt == "hello"
-        assert options["mode"] == "chat"
+        assert options["mode"] == mode
         return "hello from the model"
 
     monkeypatch.setenv("SUTO_DB_PATH", str(tmp_path / "suto.db"))
     monkeypatch.setattr(backend, "ask_local_ai", fake_ask)
-    app = SutoTUI("chat")
+    app = SutoTUI(mode)
 
     async with app.run_test(size=(80, 24)) as pilot:
         prompt = app.query_one("#prompt", Input)

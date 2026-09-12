@@ -8,8 +8,8 @@ from dataclasses import replace
 import pytest
 
 from automation.runtime.context import COMMAND_TOOLS, WRITE_WORKSPACE_TOOLS, ExecutionContext
-from automation.runtime.sandbox import sandbox_command
-from tools.command import build_command_tools
+from capabilities.developer.sandbox import sandbox_command
+from capabilities.developer.command import build_command_tools
 
 
 def test_missing_namespace_backend_fails_closed(tmp_path, monkeypatch):

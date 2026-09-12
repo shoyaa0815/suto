@@ -2,6 +2,18 @@ from dataclasses import dataclass
 
 
 DEFAULT_MODE = "chat"
+PUBLIC_MODES = ("chat", "agent")
+
+ASSISTANT_TOOLS = frozenset(
+    {
+        "get_current_datetime",
+        "search_web",
+        "fetch_url",
+        "read_attached_file",
+        "search_attachment",
+        "summarize_attachment",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -20,22 +32,24 @@ MODE_POLICIES = {
             "You are in chat mode. You may use the tools made available to "
             "you when their guidance says they are needed."
         ),
-        allowed_tools=frozenset(
-            {
-                "get_current_datetime",
-                "search_web",
-                "fetch_url",
-                "read_attached_file",
-                "search_attachment",
-                "summarize_attachment",
-            }
-        ),
+        allowed_tools=ASSISTANT_TOOLS,
     ),
     "agent": ModePolicy(
         name="agent",
-        description="Automation agent with restricted workspace access",
+        description="Personal assistant for carrying out multi-step tasks",
         prompt=(
-            "You are in automation agent mode. Restricted workspace tools may "
+            "You are in personal assistant mode. Help the user complete tasks "
+            "proactively with the tools currently available. Ask for confirmation "
+            "before consequential actions and never claim to have taken an "
+            "action when the required tool is unavailable."
+        ),
+        allowed_tools=ASSISTANT_TOOLS,
+    ),
+    "developer": ModePolicy(
+        name="developer",
+        description="Optional coding capability with restricted workspace access",
+        prompt=(
+            "You are in developer capability mode. Restricted workspace tools may "
             "be available for a job. You may modify files only when that job "
             "explicitly grants write permission, and run verification commands "
             "only when command permission is granted. Exact writes and commands "

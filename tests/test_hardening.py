@@ -207,7 +207,7 @@ async def test_worker_concurrency_restart_and_shutdown(tmp_path):
 
 
 async def test_submit_to_completion_integration(tmp_path):
-    from tools.workspace import build_workspace_tools
+    from capabilities.developer.workspace import build_workspace_tools
     store = JobStore(tmp_path / 'jobs.db')
     (tmp_path / 'source.txt').write_text('verified input')
 
@@ -245,8 +245,8 @@ async def test_operator_cli_validation_and_preview(tmp_path, capsys):
 
 async def test_worker_write_approve_verify_complete(tmp_path):
     from automation.runtime.context import ApprovalRequired
-    from tools.command import build_command_tools
-    from tools.workspace import build_workspace_tools
+    from capabilities.developer.command import build_command_tools
+    from capabilities.developer.workspace import build_workspace_tools
     store = JobStore(tmp_path / 'jobs.db')
 
     async def execute(prompt, **kwargs):

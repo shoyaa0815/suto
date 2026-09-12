@@ -22,7 +22,7 @@ def test_write_tool_audit_redacts_file_content():
     assert arguments["path"] == "notes.txt"
 
 
-async def test_agent_mode_does_not_expose_tool_schemas(monkeypatch):
+async def test_agent_mode_exposes_assistant_but_not_developer_tools(monkeypatch):
     observed = {}
 
     async def fake_chat(session, messages, tool_schemas, think=False):
@@ -36,8 +36,10 @@ async def test_agent_mode_does_not_expose_tool_schemas(monkeypatch):
     answer = await ai.ask_local_ai("What is the answer?", mode="agent")
 
     assert answer == "agent answer"
-    assert observed["schemas"] == []
-    assert "No tools are available" in observed["system_prompt"]
+    names = {item["function"]["name"] for item in observed["schemas"]}
+    assert {"get_current_datetime", "search_web", "fetch_url"} <= names
+    assert "apply_workspace_patch" not in names
+    assert "personal assistant mode" in observed["system_prompt"]
 
 
 async def test_chat_mode_exposes_web_tool_schemas(monkeypatch):
