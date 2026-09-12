@@ -8,7 +8,7 @@ from clients.tui.backend import (
     _print_job_status,
     _print_plan,
 )
-from clients.tui.progress import format_elapsed, print_progress
+from clients.tui.progress import format_elapsed, print_progress, progress_style
 
 
 def test_format_elapsed_uses_minutes_and_seconds():
@@ -164,11 +164,11 @@ def test_parse_schedule_accepts_cron_permissions_and_retry(tmp_path):
     assert options["prompt"] == "update report"
 
 
-def test_print_progress_shows_activity_time_and_tokens(capsys):
+def test_print_progress_hides_heartbeat(capsys):
     print_progress(
         {
             "activity": "tool",
-            "detail": "running search_web (query=latest news)",
+            "detail": "search_web (query=latest news)",
             "elapsed_seconds": 65,
             "activity_elapsed_seconds": 12,
             "prompt_tokens": 100,
@@ -178,11 +178,76 @@ def test_print_progress_shows_activity_time_and_tokens(capsys):
         }
     )
 
+    assert capsys.readouterr().out == ""
+
+
+def test_print_progress_is_short_and_has_no_timing(capsys):
+    print_progress(
+        {
+            "activity": "tool",
+            "detail": "search_web (query=latest news)",
+            "elapsed_seconds": 65,
+            "activity_elapsed_seconds": 12,
+            "prompt_tokens": 100,
+            "output_tokens": 20,
+            "total_tokens": 120,
+            "heartbeat": False,
+        }
+    )
+
     output = capsys.readouterr().out
-    assert "[01:05]" in output
-    assert "active 00:12" in output
-    assert "tokens 120" in output
-    assert "search_web" in output
+    assert output == "search_web (query=latest news)\n"
+    assert "01:05" not in output
+    assert "00:12" not in output
+    assert "tokens" not in output
+    assert "→" not in output
+    assert "✓" not in output
+
+
+def test_print_progress_shows_tool_result_without_timing(capsys):
+    print_progress(
+        {
+            "activity": "tool_done",
+            "detail": "search_web (query=latest news): finished",
+            "elapsed_seconds": 65,
+            "activity_elapsed_seconds": 12,
+            "prompt_tokens": 100,
+            "output_tokens": 20,
+            "total_tokens": 120,
+            "heartbeat": False,
+        }
+    )
+
+    assert capsys.readouterr().out == (
+        "search_web (query=latest news): finished\n"
+    )
+
+
+def test_progress_uses_text_colors_for_tool_status():
+    assert progress_style({"activity": "tool", "detail": "search_web"}) == "#60a5fa"
+    assert progress_style(
+        {"activity": "tool_done", "detail": "search_web: finished"}
+    ) == "#4ade80"
+    assert progress_style(
+        {"activity": "tool_done", "detail": "search_web: failed"}
+    ) == "#f87171"
+
+
+def test_print_progress_hides_non_tool_activity(capsys):
+    print_progress(
+        {
+            "activity": "model",
+            "detail": "waiting for AI (loop 1/8)",
+            "elapsed_seconds": 1,
+            "activity_elapsed_seconds": 1,
+            "prompt_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "heartbeat": False,
+        }
+    )
+
+    assert capsys.readouterr().out == ""
 
 
 def test_print_progress_can_label_a_discord_request(capsys):
@@ -200,4 +265,6 @@ def test_print_progress_can_label_a_discord_request(capsys):
         prefix="discord:123:456",
     )
 
-    assert capsys.readouterr().out.startswith("[discord:123:456] [00:05]")
+    assert capsys.readouterr().out == (
+        "[discord:123:456] completed · 100 tokens\n"
+    )

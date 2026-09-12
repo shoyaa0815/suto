@@ -343,7 +343,7 @@ async def execute_local_ai(
                     detail = tool_detail(name, args)
                     await progress.emit(
                         "tool",
-                        f"running {detail}",
+                        detail,
                         round_number,
                     )
                     if reason := execution_limit_reason(tool_call_count, pending_tool=True):
@@ -405,7 +405,7 @@ async def execute_local_ai(
                     messages.append(tool_message)
                     await progress.emit(
                         "tool_done",
-                        f"{tool_outcome} {detail} in {elapsed_ms / 1000:.1f}s",
+                        f"{detail}: {tool_outcome}",
                         round_number,
                     )
 

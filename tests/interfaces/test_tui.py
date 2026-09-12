@@ -183,7 +183,7 @@ async def test_tui_runs_the_real_assistant_session_backend(
     async def fake_ask(prompt, **options):
         assert options["mode"] == mode
         calls.append((prompt, options["conversation_history"]))
-        return "hello from the model" if prompt == "hello" else "second answer"
+        return f"answer: {prompt}"
 
     monkeypatch.setenv("SUTO_DB_PATH", str(tmp_path / "suto.db"))
     monkeypatch.setattr(backend, "ask_local_ai", fake_ask)
@@ -196,7 +196,16 @@ async def test_tui_runs_the_real_assistant_session_backend(
 
         async with asyncio.timeout(2):
             while not any(
-                "suto> hello from the model" in line.text
+                "suto> answer: hello" in line.text
+                for line in app.query_one("#terminal", RichLog).lines
+            ):
+                await pilot.pause()
+
+        prompt.value = "/clear"
+        await pilot.press("enter")
+        async with asyncio.timeout(2):
+            while not any(
+                "Chat context cleared." in line.text
                 for line in app.query_one("#terminal", RichLog).lines
             ):
                 await pilot.pause()
@@ -205,18 +214,31 @@ async def test_tui_runs_the_real_assistant_session_backend(
         await pilot.press("enter")
         async with asyncio.timeout(2):
             while not any(
-                "suto> second answer" in line.text
+                "suto> answer: again" in line.text
+                for line in app.query_one("#terminal", RichLog).lines
+            ):
+                await pilot.pause()
+
+        prompt.value = "/reset all"
+        await pilot.press("enter")
+        async with asyncio.timeout(2):
+            while not any(
+                "All saved conversations deleted" in line.text
+                for line in app.query_one("#terminal", RichLog).lines
+            ):
+                await pilot.pause()
+
+        prompt.value = "third"
+        await pilot.press("enter")
+        async with asyncio.timeout(2):
+            while not any(
+                "suto> answer: third" in line.text
                 for line in app.query_one("#terminal", RichLog).lines
             ):
                 await pilot.pause()
 
         assert calls == [
             ("hello", []),
-            (
-                "again",
-                [
-                    {"role": "user", "content": "hello"},
-                    {"role": "assistant", "content": "hello from the model"},
-                ],
-            ),
+            ("again", []),
+            ("third", []),
         ]

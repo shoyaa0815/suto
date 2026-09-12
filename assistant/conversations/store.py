@@ -92,3 +92,18 @@ class ConversationStore:
             selected.append({"role": message.role, "content": message.content})
             used += len(message.content)
         return list(reversed(selected))
+
+    def clear_conversation(self, conversation_id: str) -> int:
+        """Delete the remembered messages for one conversation."""
+        with self._connect() as db:
+            cursor = db.execute(
+                "DELETE FROM messages WHERE conversation_id=?",
+                (conversation_id,),
+            )
+        return cursor.rowcount
+
+    def reset_conversations(self) -> int:
+        """Delete every conversation and its messages from the database."""
+        with self._connect() as db:
+            cursor = db.execute("DELETE FROM conversations")
+        return cursor.rowcount

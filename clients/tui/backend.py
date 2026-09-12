@@ -73,6 +73,8 @@ async def _choose_reply_language_async(
 def _print_help(mode: str | None = None) -> None:
     print("Commands:")
     print("  /help  show available commands")
+    print("  /clear  clear this chat context")
+    print("  /reset all  delete all saved conversations")
     print("  /setting  open profile settings")
     print("  /noti  show reminders that have not been delivered")
     print("  /noti del <reminder_id>  remove a pending reminder")
@@ -599,6 +601,27 @@ async def run_session(
                         else:
                             print(f"Reminder removed: {reminder.id}")
                 continue
+            if command == "/clear":
+                if argument:
+                    print("usage: /clear")
+                    continue
+                store.clear_conversation(conversation.id)
+                previous_language_code = None
+                print("Chat context cleared.")
+                continue
+            if command == "/reset":
+                if argument.casefold() != "all":
+                    print("usage: /reset all")
+                    continue
+                count = store.reset_conversations()
+                conversation = store.get_or_create_conversation(
+                    user.id,
+                    "tui",
+                    "local",
+                )
+                previous_language_code = None
+                print(f"All saved conversations deleted ({count}).")
+                continue
             if prompt.startswith("/"):
                 print(f"Unknown command: {command}. Type /help for commands.")
                 continue
@@ -802,7 +825,6 @@ async def run_session(
                 print(f"Unknown command: {command}. Type /help for commands.")
                 continue
 
-            print("Preparing request...")
             history = store.conversation_history(conversation.id)
             store.add_message(conversation.id, "user", prompt)
             reply_language = await _choose_reply_language_async(

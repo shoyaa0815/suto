@@ -43,6 +43,37 @@ def test_conversations_are_persistent_and_isolated(tmp_path):
     assert store.conversation_history(other.id) == []
 
 
+def test_clear_conversation_removes_only_its_messages(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    first = store.resolve_channel_identity("tui", "one")
+    second = store.resolve_channel_identity("tui", "two")
+    current = store.get_or_create_conversation(first.id, "tui", "main")
+    other = store.get_or_create_conversation(second.id, "tui", "main")
+    store.add_message(current.id, "user", "forget this")
+    store.add_message(other.id, "user", "keep this")
+
+    assert store.clear_conversation(current.id) == 1
+    assert store.conversation_history(current.id) == []
+    assert store.conversation_history(other.id) == [
+        {"role": "user", "content": "keep this"}
+    ]
+
+
+def test_reset_conversations_removes_every_saved_conversation(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    first = store.resolve_channel_identity("tui", "one")
+    second = store.resolve_channel_identity("discord", "two")
+    current = store.get_or_create_conversation(first.id, "tui", "main")
+    other = store.get_or_create_conversation(second.id, "discord", "channel")
+    store.add_message(current.id, "user", "first message")
+    store.add_message(other.id, "assistant", "second message")
+
+    assert store.reset_conversations() == 2
+    assert store.conversation_history(current.id) == []
+    assert store.conversation_history(other.id) == []
+    assert store.get_or_create_conversation(first.id, "tui", "main").id != current.id
+
+
 def test_tasks_and_reminders_are_owned_by_one_user(tmp_path):
     store = JobStore(tmp_path / "suto.db")
     owner = store.resolve_channel_identity("tui", "owner", timezone="Asia/Bangkok")

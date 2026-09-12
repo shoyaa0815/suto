@@ -171,8 +171,11 @@ class SutoTUI(App[None]):
         else:
             self.exit()
 
-    def _write_output(self, value: str) -> None:
+    def _write_output(self, value: str | Text) -> None:
         terminal = self.query_one("#terminal", RichLog)
+        if isinstance(value, Text):
+            terminal.write(value)
+            return
         for line in value.splitlines() or [""]:
             terminal.write(line)
 
