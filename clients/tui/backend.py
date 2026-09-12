@@ -591,7 +591,7 @@ async def run_session(
     worker_task = asyncio.create_task(worker.start())
     notification_task = (asyncio.create_task(notify_tui(store))
                          if os.environ.get('SUTO_NOTIFY_TUI', '').lower() in {'1', 'true', 'yes'} else None)
-    print(f"Suto (mode: {mode}) — type /help for commands")
+    print("Type /help for commands")
     if mode == "agent":
         print(
             "Type a task normally. Suto will work in the current directory "

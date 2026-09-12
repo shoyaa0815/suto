@@ -16,10 +16,15 @@ async def test_tui_starts_black_and_focuses_prompt():
 
     async with app.run_test(size=(100, 30)):
         assert app.screen.styles.background.hex == "#000000"
-        assert app.query_one("#prompt", Input).has_focus
+        prompt = app.query_one("#prompt", Input)
+        assert prompt.has_focus
+        assert prompt.styles.padding.top == 1
         brand = app.query_one("#brand", Static).render()
         assert brand.plain.startswith("███████")
         assert ">_" not in brand.plain
+        status = app.query_one("#status-bar", Static).render()
+        assert "agent" in status.plain
+        assert "Enter send" not in status.plain
 
 
 async def test_tui_input_echoes_like_a_terminal():

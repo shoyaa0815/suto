@@ -41,7 +41,7 @@ class SutoTUI(App[None]):
 
     CSS_PATH = "suto.tcss"
     TITLE = "Suto"
-    SUB_TITLE = "Local-first coding agent"
+    SUB_TITLE = ""
     ENABLE_COMMAND_PALETTE = False
 
     BINDINGS = [
@@ -79,27 +79,16 @@ class SutoTUI(App[None]):
                     placeholder="Ask super suto",
                 )
             yield Static(
-                "  Enter send   Ctrl+L clear   Ctrl+Q quit",
-                id="shortcuts",
+                f"  {config.AI_MODEL}  {self.mode}   Ctrl+Q exit",
+                id="status-bar",
             )
 
     def on_mount(self) -> None:
         self.screen.styles.background = "#000000"
         self.query_one("#brand", Static).update(
-            Text.assemble(
-                (SUTO_WORDMARK, "bold #f4f4f5"),
-                (f"\n{self.mode}", "#71717a"),
-            )
+            Text(SUTO_WORDMARK, style="bold #f4f4f5")
         )
         terminal = self.query_one("#terminal", RichLog)
-        terminal.write(Text("Local-first coding agent", style="#a1a1aa"))
-        terminal.write("")
-        terminal.write(
-            Text.assemble(
-                ("model      ", "#71717a"),
-                (config.AI_MODEL, "#d4d4d8"),
-            )
-        )
         terminal.write(
             Text.assemble(
                 ("directory  ", "#71717a"),
