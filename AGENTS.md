@@ -22,6 +22,8 @@ Run focused tests while developing, then the full suite for shared changes.
 - `ai/`, `tools/`: provider calls, prompting, execution, and assistant tools.
 - `assistant/`: identity, conversations, tasks, reminders, and briefings.
 - `interfaces/`: terminal and Discord integrations; the LINE scaffold is parked.
+  In `interfaces/tui/`, `backend.py` owns session lifecycle, `commands.py` owns
+  the public command registry, and `operations.py` owns background delivery.
 - `workflows/`: durable jobs, workers, scheduling, SQLite, and migrations;
   `capabilities/developer/` is tested but parked and not public.
 - `tests/`: pytest suites; `docs/operations.md`: operational lifecycle details.
@@ -85,6 +87,8 @@ flowchart LR
 - Trace flows end to end: entry point, validation, tool/business logic, storage,
   worker, side effect, failure handling, and user-visible result.
 - Preserve `chat`, `agent`, and parked `developer` separation.
+- Keep the TUI backend thin. Add public slash commands through the command
+  registry and keep background loops in operations, not in the session loop.
 - Keep LINE parked. Do not add LINE execution, webhook, delivery, configuration,
   dependencies, or tests unless the user explicitly changes its scope.
 - Expose a capability only when its interface has a working execution or delivery

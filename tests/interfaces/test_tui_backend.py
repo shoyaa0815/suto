@@ -1,13 +1,13 @@
 from workflows.models import MissedRunPolicy, ScheduleKind
 from workflows.storage.store import JobStore
-from interfaces.tui.backend import (
+from capabilities.developer.tui_cli import (
     _parse_run,
     _parse_schedule,
     _print_commands,
-    _print_help,
     _print_job_status,
     _print_plan,
 )
+from interfaces.tui.commands import print_help as _print_help
 from interfaces.tui.progress import (
     activity_text,
     format_elapsed,
