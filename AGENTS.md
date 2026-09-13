@@ -29,6 +29,8 @@ Run focused tests while developing, then the full suite for shared changes.
   the public command registry, and `operations.py` owns background delivery.
 - `workflows/`: durable jobs, workers, scheduling, SQLite, and migrations;
   `capabilities/developer/` is tested but parked and not public.
+  Its `workspace/` package separates schemas, read operations, approved writes,
+  and shared path-containment helpers behind one stable package API.
 - `tests/`: pytest suites; `docs/operations.md`: operational lifecycle details.
 
 ## Infrastructure architecture
