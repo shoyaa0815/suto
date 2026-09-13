@@ -15,7 +15,7 @@ from textual.widgets import Button, Input, Label, LoadingIndicator, RichLog, Sta
 from ai import config
 from clients.tui.backend import run_session
 from clients.tui.output import route_output
-from automation.storage.store import JobStore
+from workflows.storage.store import JobStore
 from core.modes import get_mode_policy
 
 

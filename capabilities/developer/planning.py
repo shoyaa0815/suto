@@ -1,7 +1,7 @@
 from typing import Protocol
 
-from automation.runtime.context import ExecutionContext
-from automation.models import JobStep, StepStatus
+from workflows.runtime.context import ExecutionContext
+from workflows.models import JobStep, StepStatus
 
 
 MAX_PLAN_STEPS = 20

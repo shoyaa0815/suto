@@ -8,7 +8,7 @@ from clients.tui.app import SettingsScreen, SutoTUI
 from clients.tui import backend
 from clients.tui.output import write
 from clients.tui.operations import print_due_reminders, print_pending_reminders
-from automation.storage.store import JobStore
+from workflows.storage.store import JobStore
 
 
 async def idle_session(mode, read_prompt):

@@ -10,7 +10,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from automation.runtime.context import ExecutionContext
+from workflows.runtime.context import ExecutionContext
 from .sandbox import sandbox_command
 
 

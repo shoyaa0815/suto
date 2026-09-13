@@ -15,16 +15,16 @@ from assistant.briefing import (
     disable_daily_briefing,
     set_daily_briefing_time,
 )
-from automation.library.bundles import import_bundle, write_bundle
-from automation.library.definitions import (
+from workflows.library.bundles import import_bundle, write_bundle
+from workflows.library.definitions import (
     automation_options,
     load_definition_file,
     parse_parameter_value,
 )
-from automation.models import Job, JobStatus, MissedRunPolicy, ScheduleKind
-from automation.runtime.runner import JobRunner
-from automation.storage.store import JobStore
-from automation.runtime.worker import AutomationWorker
+from workflows.models import Job, JobStatus, MissedRunPolicy, ScheduleKind
+from workflows.runtime.runner import JobRunner
+from workflows.storage.store import JobStore
+from workflows.runtime.worker import AutomationWorker
 from clients.tui.output import set_activity, write as print
 from clients.tui.progress import format_elapsed, print_progress
 from clients.tui.operations import (
@@ -409,7 +409,7 @@ def _parse_run(argument: str, *, include_options: bool = False):
         raise ValueError("/run requires a task")
     if not workspace.is_dir():
         raise ValueError(f"workspace is not a directory: {workspace}")
-    from automation.runtime.options import validate_options
+    from workflows.runtime.options import validate_options
     options = validate_options(options)
     result = (" ".join(parts), workspace, allow_write, allow_command)
     return (*result, options) if include_options else result

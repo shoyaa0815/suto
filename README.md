@@ -53,6 +53,14 @@ current user's open tasks and scheduled reminders.
 Reminders are persisted and appear in the terminal when they become due. If
 Suto was closed at that time, it reports the missed reminder on the next start.
 
+In Discord servers, Suto processes a message only when the bot is directly
+mentioned. Direct messages do not require a mention. In agent mode, reminders
+default to a private Discord message; requests that say "this channel" or
+mention an accessible text channel are delivered there instead. The bot and
+requesting user must both be able to view the target channel, and the bot must
+have permission to send messages. Discord reminders are retried while the bot
+is running and remain persisted across restarts.
+
 The terminal interface exposes `/help`, `/setting` for profile settings,
 `/noti` for pending reminders, `/noti del <reminder_id>` to remove one, and
 `/exit`. Use `/brief` for an immediate briefing, `/brief at 08:30` to deliver

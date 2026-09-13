@@ -1,6 +1,6 @@
 import ai
-from automation.runtime.context import COMMAND_TOOLS, PLANNING_TOOLS, ExecutionContext
-from automation.storage.store import JobStore
+from workflows.runtime.context import COMMAND_TOOLS, PLANNING_TOOLS, ExecutionContext
+from workflows.storage.store import JobStore
 from tests.support.ai_helpers import FakeClientSession as _FakeClientSession
 
 

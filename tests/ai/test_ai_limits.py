@@ -1,7 +1,7 @@
 import asyncio
 
 import ai
-from automation.runtime.context import ExecutionContext, ExecutionLimits
+from workflows.runtime.context import ExecutionContext, ExecutionLimits
 from tests.support.ai_helpers import FakeClientSession as _FakeClientSession
 
 

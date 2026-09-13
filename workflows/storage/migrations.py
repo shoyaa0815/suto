@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .locking import ProcessLock
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 HARDENING = """
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -144,6 +144,27 @@ CREATE TABLE briefing_deliveries(
  PRIMARY KEY(user_id,local_date));
 """
 
+REMINDER_DELIVERY = """
+CREATE TABLE delivery_targets(
+ id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ platform TEXT NOT NULL, destination_id TEXT NOT NULL,
+ destination_type TEXT NOT NULL CHECK(destination_type IN ('dm','guild_channel')),
+ display_name TEXT NOT NULL, guild_id TEXT, requester_id TEXT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ UNIQUE(user_id,platform,destination_id));
+CREATE INDEX delivery_targets_user_idx ON delivery_targets(user_id,platform);
+ALTER TABLE reminders ADD COLUMN delivery_target_id TEXT
+ REFERENCES delivery_targets(id) ON DELETE SET NULL;
+CREATE INDEX reminders_delivery_target_idx ON reminders(delivery_target_id,status,remind_at);
+CREATE TABLE reminder_deliveries(
+ reminder_id TEXT PRIMARY KEY REFERENCES reminders(id) ON DELETE CASCADE,
+ status TEXT NOT NULL CHECK(status IN ('pending','sending','retrying','delivered','failed')),
+ attempt_count INTEGER NOT NULL DEFAULT 0, retry_at TEXT,
+ last_error TEXT, updated_at TEXT NOT NULL);
+CREATE INDEX reminder_deliveries_status_idx
+ ON reminder_deliveries(status,retry_at,updated_at);
+"""
+
 
 def backup_database(source: Path, destination: Path) -> Path:
     source, destination = source.resolve(), destination.expanduser().absolute()
@@ -190,6 +211,7 @@ def initialize_database(store) -> None:
                 (2, ADVANCED),
                 (3, PERSONAL_ASSISTANT),
                 (4, DAILY_BRIEFING),
+                (5, REMINDER_DELIVERY),
             ):
                 if number <= version:
                     continue

@@ -8,7 +8,7 @@ from assistant.briefing import (
 )
 from assistant.context import AssistantContext
 from assistant.tasks.tools import build_task_tools
-from automation.storage.store import JobStore
+from workflows.storage.store import JobStore
 from clients.tui.operations import claim_due_daily_briefing
 
 

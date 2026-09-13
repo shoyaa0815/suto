@@ -1,8 +1,8 @@
 import pytest
 
-from automation.runtime.context import PLANNING_TOOLS, ExecutionContext
-from automation.models import StepStatus
-from automation.storage.store import JobStore
+from workflows.runtime.context import PLANNING_TOOLS, ExecutionContext
+from workflows.models import StepStatus
+from workflows.storage.store import JobStore
 from capabilities.developer.planning import build_planning_tools
 
 

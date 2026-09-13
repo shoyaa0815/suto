@@ -1,11 +1,13 @@
+import asyncio
 import os
+import re
 import time
 
 import discord
 
 from ai import ask_local_ai, set_debug_logs
-from assistant import AssistantContext
-from automation.storage.store import JobStore
+from assistant import AssistantContext, DeliveryTargetContext
+from workflows.storage.store import JobStore
 from core.language import choose_reply_language
 from core.modes import DEFAULT_MODE, get_mode_policy
 from tools.file_reader import SUPPORTED_EXTENSIONS
@@ -20,6 +22,7 @@ client = discord.Client(intents=intents)
 active_mode = DEFAULT_MODE
 reply_languages: dict[tuple[int, int], str] = {}
 assistant_store: JobStore | None = None
+delivery_worker_task: asyncio.Task | None = None
 
 
 def _get_assistant_store() -> JobStore:
@@ -29,24 +32,145 @@ def _get_assistant_store() -> JobStore:
     return assistant_store
 
 
+def should_process_message(message, bot_user) -> bool:
+    """Guild messages require a direct bot mention; DMs address the bot directly."""
+    if message.author.bot:
+        return False
+    if message.guild is None:
+        return True
+    return bot_user is not None and bot_user in message.mentions
+
+
+def _without_bot_mention(content: str, bot_user_id: int) -> str:
+    pattern = rf"<@!?{re.escape(str(bot_user_id))}>"
+    return re.sub(pattern, "", content).strip()
+
+
+def _discord_delivery_context(message):
+    requester_id = str(message.author.id)
+    default = DeliveryTargetContext(
+        platform="discord",
+        destination_id=requester_id,
+        destination_type="dm",
+        display_name=f"DM with {message.author.display_name}",
+        requester_id=requester_id,
+    )
+    if message.guild is None or message.guild.me is None:
+        return default, None, ()
+
+    guild_id = str(message.guild.id)
+    available = []
+    for channel in message.guild.text_channels:
+        bot_permissions = channel.permissions_for(message.guild.me)
+        user_permissions = channel.permissions_for(message.author)
+        if not (
+            bot_permissions.view_channel
+            and bot_permissions.send_messages
+            and user_permissions.view_channel
+        ):
+            continue
+        category = f"{channel.category.name} / " if channel.category else ""
+        available.append(
+            DeliveryTargetContext(
+                platform="discord",
+                destination_id=str(channel.id),
+                destination_type="guild_channel",
+                display_name=f"{category}#{channel.name}",
+                guild_id=guild_id,
+                requester_id=requester_id,
+            )
+        )
+    current = next(
+        (
+            target
+            for target in available
+            if target.destination_id == str(message.channel.id)
+        ),
+        None,
+    )
+    return default, current, tuple(available)
+
+
+async def _send_reminder(delivery) -> None:
+    allowed_mentions = discord.AllowedMentions.none()
+    if delivery.destination_type == "dm":
+        user = client.get_user(int(delivery.destination_id))
+        if user is None:
+            user = await client.fetch_user(int(delivery.destination_id))
+        await user.send(delivery.title, allowed_mentions=allowed_mentions)
+        return
+
+    channel = client.get_channel(int(delivery.destination_id))
+    if channel is None:
+        channel = await client.fetch_channel(int(delivery.destination_id))
+    guild = getattr(channel, "guild", None)
+    if guild is None or str(guild.id) != delivery.guild_id:
+        raise RuntimeError("delivery channel is not in the recorded server")
+    bot_member = guild.me
+    if bot_member is None:
+        raise RuntimeError("bot membership is unavailable")
+    permissions = channel.permissions_for(bot_member)
+    if not permissions.view_channel or not permissions.send_messages:
+        raise PermissionError("bot cannot view or send to the delivery channel")
+    if delivery.requester_id:
+        requester = guild.get_member(int(delivery.requester_id))
+        if requester is None:
+            try:
+                requester = await guild.fetch_member(int(delivery.requester_id))
+            except discord.NotFound as error:
+                raise PermissionError("requester is no longer in the server") from error
+        if not channel.permissions_for(requester).view_channel:
+            raise PermissionError("requester can no longer view the delivery channel")
+    await channel.send(delivery.title, allowed_mentions=allowed_mentions)
+
+
+async def deliver_discord_reminders() -> None:
+    """Deliver persistent Discord reminders and retry transient failures."""
+    store = _get_assistant_store()
+    while not client.is_closed():
+        try:
+            deliveries = store.claim_due_reminder_deliveries("discord")
+            for delivery in deliveries:
+                try:
+                    await _send_reminder(delivery)
+                except Exception as error:
+                    status = store.fail_reminder_delivery(
+                        delivery.reminder_id,
+                        f"{type(error).__name__}: {error}",
+                    )
+                    print(
+                        f"[discord reminder] id={delivery.reminder_id} "
+                        f"status={status} error={type(error).__name__}: {error}"
+                    )
+                else:
+                    store.complete_reminder_delivery(delivery.reminder_id)
+        except Exception as error:
+            print(f"[discord reminder worker] {type(error).__name__}: {error}")
+        await asyncio.sleep(3)
+
+
 @client.event
 async def on_ready():
+    global delivery_worker_task
+
     print(f"bot is online now: {client.user} (mode: {active_mode})")
+    if delivery_worker_task is None or delivery_worker_task.done():
+        delivery_worker_task = asyncio.create_task(deliver_discord_reminders())
 
 
 @client.event
 async def on_message(message: discord.Message):
-    if message.author.bot:
+    if not should_process_message(message, client.user):
         return
 
     attachments = [
         a for a in message.attachments
         if a.filename.rsplit(".", 1)[-1].lower() in SUPPORTED_EXTENSIONS
     ]
-    if not message.content.strip() and not attachments:
+    prompt = _without_bot_mention(message.content, client.user.id)
+    if not prompt and not attachments:
         return
 
-    prompt = message.content
     store = _get_assistant_store()
     user = store.resolve_channel_identity(
         "discord",
@@ -61,8 +185,8 @@ async def on_message(message: discord.Message):
         str(message.channel.id),
     )
     history = store.conversation_history(conversation.id)
-    if message.content.strip():
-        store.add_message(conversation.id, "user", message.content)
+    if prompt:
+        store.add_message(conversation.id, "user", prompt)
     language_key = (message.channel.id, message.author.id)
     reply_language = choose_reply_language(
         message.content,
@@ -97,6 +221,10 @@ async def on_message(message: discord.Message):
     if attachment_lines:
         prompt += "\n\nAttached files available:\n" + "\n".join(attachment_lines)
 
+    default_target, current_target, available_targets = _discord_delivery_context(
+        message
+    )
+
     async with message.channel.typing():
         answer = await ask_local_ai(
             prompt,
@@ -105,7 +233,14 @@ async def on_message(message: discord.Message):
             reply_language=reply_language,
             conversation_history=history,
             assistant_context=(
-                AssistantContext(store, user.id, conversation.id)
+                AssistantContext(
+                    store,
+                    user.id,
+                    conversation.id,
+                    default_delivery_target=default_target,
+                    current_delivery_target=current_target,
+                    available_delivery_targets=available_targets,
+                )
                 if active_mode == "agent"
                 else None
             ),
@@ -114,7 +249,10 @@ async def on_message(message: discord.Message):
     store.add_message(conversation.id, "assistant", answer)
 
     for i in range(0, len(answer), MAX_MESSAGE_CHARS):
-        await message.channel.send(answer[i:i + MAX_MESSAGE_CHARS])
+        await message.channel.send(
+            answer[i:i + MAX_MESSAGE_CHARS],
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 def run(mode: str):

@@ -7,7 +7,7 @@ from dataclasses import replace
 
 import pytest
 
-from automation.runtime.context import COMMAND_TOOLS, WRITE_WORKSPACE_TOOLS, ExecutionContext
+from workflows.runtime.context import COMMAND_TOOLS, WRITE_WORKSPACE_TOOLS, ExecutionContext
 from capabilities.developer.sandbox import sandbox_command
 from capabilities.developer.command import build_command_tools
 

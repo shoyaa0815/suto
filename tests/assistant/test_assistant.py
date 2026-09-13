@@ -1,7 +1,8 @@
 import ai
 import pytest
-from assistant import AssistantContext
-from automation.storage.store import JobStore
+from assistant import AssistantContext, DeliveryTargetContext
+from assistant.tasks.tools import build_task_tools
+from workflows.storage.store import JobStore
 from tests.support.ai_helpers import FakeClientSession
 
 
@@ -131,6 +132,69 @@ def test_due_reminders_are_claimed_once_and_future_reminders_are_left_scheduled(
         owner.id,
         now="2026-09-12T10:00:00+07:00",
     ) == []
+
+
+def test_discord_reminder_delivery_is_persistent_and_completed_after_send(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    owner = store.resolve_channel_identity("discord", "10")
+    target = store.get_or_create_delivery_target(
+        owner.id,
+        "discord",
+        "100",
+        "guild_channel",
+        "#team",
+        guild_id="50",
+        requester_id="10",
+    )
+    reminder = store.create_reminder(
+        owner.id,
+        "Standup",
+        "2026-09-13T09:00:00+07:00",
+        timezone="Asia/Bangkok",
+        delivery_target_id=target.id,
+        now="2026-09-13T08:00:00+07:00",
+    )
+
+    assert store.claim_due_reminders(
+        owner.id, now="2026-09-13T10:00:00+07:00"
+    ) == []
+    claimed = store.claim_due_reminder_deliveries(
+        "discord", now="2026-09-13T10:00:00+07:00"
+    )
+
+    assert [item.reminder_id for item in claimed] == [reminder.id]
+    assert claimed[0].destination_id == "100"
+    assert store.get_reminder(owner.id, reminder.id).status == "scheduled"
+    assert store.complete_reminder_delivery(reminder.id) is True
+    assert store.get_reminder(owner.id, reminder.id).status == "delivered"
+
+
+def test_discord_task_tool_rejects_unavailable_delivery_channel(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    owner = store.resolve_channel_identity("discord", "10")
+    conversation = store.get_or_create_conversation(owner.id, "discord", "100")
+    dm = DeliveryTargetContext("discord", "10", "dm", "DM", requester_id="10")
+    channel = DeliveryTargetContext(
+        "discord", "100", "guild_channel", "#team", "50", "10"
+    )
+    handlers = build_task_tools(
+        AssistantContext(
+            store,
+            owner.id,
+            conversation.id,
+            default_delivery_target=dm,
+            current_delivery_target=channel,
+            available_delivery_targets=(channel,),
+        )
+    )
+
+    handlers["create_reminder_in"]("Standup", 10, channel_id="100")
+    reminder = store.list_reminders(owner.id)[0]
+    target = store.get_delivery_target(owner.id, reminder.delivery_target_id)
+    assert target.destination_id == "100"
+
+    with pytest.raises(ValueError, match="unavailable or not permitted"):
+        handlers["create_reminder_in"]("Secret", 10, channel_id="999")
 
 
 def test_python_calculates_relative_and_clock_reminder_times(tmp_path):

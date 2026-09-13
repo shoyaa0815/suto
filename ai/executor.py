@@ -10,7 +10,7 @@ from assistant.tasks.tools import (
     REMINDER_CREATION_TOOL_NAMES,
     reminder_creation_requested,
 )
-from automation.runtime.context import (
+from workflows.runtime.context import (
     ALL_WORKSPACE_TOOLS,
     ApprovalRequired,
     ExecutionContext,
@@ -181,6 +181,24 @@ async def execute_local_ai(
                     "timezone": user.timezone,
                     "locale": user.locale,
                     "preferences": assistant_context.store.user_preferences(user.id),
+                    "delivery": (
+                        {
+                            "platform": assistant_context.default_delivery_target.platform,
+                            "default_destination": "private_dm",
+                            "current_channel_id": (
+                                assistant_context.current_delivery_target.destination_id
+                                if assistant_context.current_delivery_target is not None
+                                else None
+                            ),
+                            "current_channel_name": (
+                                assistant_context.current_delivery_target.display_name
+                                if assistant_context.current_delivery_target is not None
+                                else None
+                            ),
+                        }
+                        if assistant_context.default_delivery_target is not None
+                        else None
+                    ),
                 },
                 ensure_ascii=False,
                 sort_keys=True,

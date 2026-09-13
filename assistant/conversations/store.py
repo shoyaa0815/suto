@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from automation.storage.redaction import redact_text
+from workflows.storage.redaction import redact_text
 
 from .models import Conversation, Message
 

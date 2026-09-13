@@ -6,7 +6,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-from automation.runtime.context import ExecutionContext
+from workflows.runtime.context import ExecutionContext
 
 MAX_LIST_ENTRIES = 200
 MAX_READ_BYTES = 100_000

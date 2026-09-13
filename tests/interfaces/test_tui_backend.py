@@ -1,5 +1,5 @@
-from automation.models import MissedRunPolicy, ScheduleKind
-from automation.storage.store import JobStore
+from workflows.models import MissedRunPolicy, ScheduleKind
+from workflows.storage.store import JobStore
 from clients.tui.backend import (
     _parse_run,
     _parse_schedule,

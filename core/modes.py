@@ -28,6 +28,7 @@ PERSONAL_TASK_TOOLS = frozenset(
         "get_daily_briefing",
         "set_daily_briefing",
         "disable_daily_briefing",
+        "list_delivery_channels",
     }
 )
 

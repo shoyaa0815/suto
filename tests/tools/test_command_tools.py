@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from automation.runtime.context import COMMAND_TOOLS, WRITE_WORKSPACE_TOOLS, ExecutionContext
-from automation.storage.store import JobStore
+from workflows.runtime.context import COMMAND_TOOLS, WRITE_WORKSPACE_TOOLS, ExecutionContext
+from workflows.storage.store import JobStore
 from capabilities.developer.command import _prepare_command, build_command_tools
 
 

@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from automation.storage.redaction import redact_text
+from workflows.storage.redaction import redact_text
 
 from .models import ChannelIdentity, User
 
