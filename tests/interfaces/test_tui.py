@@ -4,10 +4,10 @@ import pytest
 from textual.containers import Horizontal
 from textual.widgets import Input, RichLog, Static
 
-from clients.tui.app import SettingsScreen, SutoTUI
-from clients.tui import backend
-from clients.tui.output import write
-from clients.tui.operations import print_due_reminders, print_pending_reminders
+from interfaces.tui.app import SettingsScreen, SutoTUI
+from interfaces.tui import backend
+from interfaces.tui.output import write
+from interfaces.tui.operations import print_due_reminders, print_pending_reminders
 from workflows.storage.store import JobStore
 
 

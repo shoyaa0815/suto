@@ -2,23 +2,23 @@ import sys
 
 from dotenv import load_dotenv
 
-from core.modes import PUBLIC_MODES
+from application.modes import PUBLIC_MODES
 
-CLIENTS = ("cli", "discord", "line")
+INTERFACES = ("cli", "discord", "line")
 
 
 def _parse_args(args: list[str]) -> tuple[str, str]:
     usage = (
         f"usage: python3 main.py <{'|'.join(PUBLIC_MODES)}> "
-        f"<{'|'.join(CLIENTS)}>"
+        f"<{'|'.join(INTERFACES)}>"
     )
     if len(args) != 2:
         raise SystemExit(usage)
 
-    mode, client_name = args
-    if client_name not in CLIENTS or mode not in PUBLIC_MODES:
+    mode, interface_name = args
+    if interface_name not in INTERFACES or mode not in PUBLIC_MODES:
         raise SystemExit(usage)
-    return client_name, mode
+    return interface_name, mode
 
 
 def main():
@@ -26,14 +26,14 @@ def main():
 
     load_dotenv()
 
-    # Imported here rather than at module level so that starting one client
+    # Imported here rather than at module level so that starting one interface
     # never requires the other one's dependencies or credentials to be present.
     if name == "cli":
-        from clients.tui import run
+        from interfaces.tui import run
     elif name == "discord":
-        from clients.discord import run
+        from interfaces.discord import run
     else:
-        from clients.line import run
+        from interfaces.line import run
     run(mode)
 
 

@@ -7,7 +7,7 @@ from workflows.models import JobStatus
 from workflows.runtime.runner import JobRunner
 from workflows.storage.store import JobStore
 from workflows.runtime.worker import AutomationWorker
-from clients.tui.backend import _parse_automation_run
+from interfaces.tui.backend import _parse_automation_run
 
 
 def test_automation_versions_pin_skill_versions(tmp_path):

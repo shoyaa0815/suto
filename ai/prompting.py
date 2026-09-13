@@ -1,4 +1,4 @@
-from core.language import ReplyLanguage
+from application.language import ReplyLanguage
 
 
 BASE_PROMPT = """You are a concise, accurate assistant in a chat.

@@ -14,7 +14,7 @@ from main import _parse_args
         (["agent", "line"], ("line", "agent")),
     ],
 )
-def test_parse_args_accepts_client_and_mode(args, expected):
+def test_parse_args_accepts_interface_and_mode(args, expected):
     assert _parse_args(args) == expected
 
 

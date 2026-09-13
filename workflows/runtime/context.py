@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.settings import env_float, env_int
+from application.settings import env_float, env_int
 
 from ..models import ActionType
 

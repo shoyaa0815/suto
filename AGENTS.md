@@ -1,14 +1,16 @@
 # AGENTS.md
 
 Applies repository-wide. Suto is a Python 3.12+ local-first assistant with
-`chat` and `agent` modes. CLI and Discord are implemented; LINE is incomplete.
+`chat` and `agent` modes. CLI and Discord are implemented. The LINE scaffold is
+parked and intentionally outside the current product scope; do not implement or
+extend it unless the user explicitly reopens that work.
 
 ## Commands
 
 ```bash
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
-venv/bin/python main.py <chat|agent> <cli|discord|line>
+venv/bin/python main.py <chat|agent> <cli|discord>
 venv/bin/pytest -q
 ```
 
@@ -16,10 +18,10 @@ Run focused tests while developing, then the full suite for shared changes.
 
 ## Repository map
 
-- `main.py`, `core/`: dispatch, modes, configuration, and language handling.
+- `main.py`, `application/`: dispatch, modes, configuration, and language handling.
 - `ai/`, `tools/`: provider calls, prompting, execution, and assistant tools.
 - `assistant/`: identity, conversations, tasks, reminders, and briefings.
-- `clients/`: terminal, Discord, and incomplete LINE integrations.
+- `interfaces/`: terminal and Discord integrations; the LINE scaffold is parked.
 - `workflows/`: durable jobs, workers, scheduling, SQLite, and migrations;
   `capabilities/developer/` is tested but parked and not public.
 - `tests/`: pytest suites; `docs/operations.md`: operational lifecycle details.
@@ -39,7 +41,7 @@ flowchart LR
         Main[main.py]
         CLI[CLI / Textual]
         Discord[discord.py]
-        Line[LINE webhook<br/>incomplete]
+        Line[LINE scaffold<br/>parked / out of scope]
         AI[AI executor + tools]
         Service[Assistant services]
         Worker[Automation + delivery workers]
@@ -73,7 +75,8 @@ flowchart LR
 - SQLite, WAL, locks, and active backups belong on one durable host filesystem;
   they are not a multi-host coordination mechanism.
 - One advisory-lock owner runs automation for a database. The CLI owns local
-  automation and briefing delivery; Discord owns Discord reminder delivery.
+  automation and briefing delivery; Discord owns Discord reminder and briefing
+  delivery.
 - AI, search, fetch, and platform integrations cross a network trust boundary.
   See `docs/operations.md` for migration, recovery, backup, and worker semantics.
 
@@ -82,7 +85,9 @@ flowchart LR
 - Trace flows end to end: entry point, validation, tool/business logic, storage,
   worker, side effect, failure handling, and user-visible result.
 - Preserve `chat`, `agent`, and parked `developer` separation.
-- Expose a capability only when its client has a working execution or delivery
+- Keep LINE parked. Do not add LINE execution, webhook, delivery, configuration,
+  dependencies, or tests unless the user explicitly changes its scope.
+- Expose a capability only when its interface has a working execution or delivery
   path. Never claim a mutation succeeded without confirmed tool state.
 - Preserve clarification questions when required information is missing.
 - Revalidate claimed reminders immediately before delivery; stale attempts must
@@ -90,7 +95,7 @@ flowchart LR
 - Keep SQLite transitions atomic and retain migration, backup, locking, and
   restart-recovery safeguards.
 - Use timezone-aware datetimes and profile timezones for schedules.
-- Preserve identity isolation across users, channels, clients, and workspaces.
+- Preserve identity isolation across users, channels, interfaces, and workspaces.
 - Document changes to public commands, configuration, or lifecycle behavior.
 
 ## Security and privacy

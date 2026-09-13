@@ -25,15 +25,15 @@ from workflows.models import Job, JobStatus, MissedRunPolicy, ScheduleKind
 from workflows.runtime.runner import JobRunner
 from workflows.storage.store import JobStore
 from workflows.runtime.worker import AutomationWorker
-from clients.tui.output import set_activity, write as print
-from clients.tui.progress import format_elapsed, print_progress
-from clients.tui.operations import (
+from interfaces.tui.output import set_activity, write as print
+from interfaces.tui.progress import format_elapsed, print_progress
+from interfaces.tui.operations import (
     notify_personal_reminders,
     notify_daily_briefing,
     notify_tui,
     print_pending_reminders,
 )
-from core.language import choose_reply_language
+from application.language import choose_reply_language
 
 EXIT_COMMANDS = frozenset({"/exit"})
 TERMINAL_JOB_STATUSES = frozenset(

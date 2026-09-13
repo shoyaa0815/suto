@@ -1,6 +1,6 @@
 import pytest
 
-from core.settings import env_float, env_int, env_text
+from application.settings import env_float, env_int, env_text
 
 
 def test_environment_settings_use_defaults(monkeypatch):

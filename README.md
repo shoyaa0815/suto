@@ -61,6 +61,13 @@ requesting user must both be able to view the target channel, and the bot must
 have permission to send messages. Discord reminders are retried while the bot
 is running and remain persisted across restarts.
 
+Discord agent mode also supports `/noti`, `/noti del <reminder_id>`, `/brief`,
+`/brief at <HH:MM>`, `/brief status`, and `/brief off`. In a server, directly
+mention the bot before the command; in a DM, send the command normally.
+Scheduled Discord briefings are delivered by DM in the profile timezone. A
+briefing missed while the bot was offline is delivered once after restart, and
+transient send failures are retried.
+
 The terminal interface exposes `/help`, `/setting` for profile settings,
 `/noti` for pending reminders, `/noti del <reminder_id>` to remove one, and
 `/exit`. Use `/brief` for an immediate briefing, `/brief at 08:30` to deliver

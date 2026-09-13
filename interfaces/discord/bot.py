@@ -2,14 +2,20 @@ import asyncio
 import os
 import re
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import discord
 
 from ai import ask_local_ai, set_debug_logs
 from assistant import AssistantContext, DeliveryTargetContext
+from assistant.briefing import (
+    briefing_schedule_status,
+    build_daily_briefing,
+)
 from workflows.storage.store import JobStore
-from core.language import choose_reply_language
-from core.modes import DEFAULT_MODE, get_mode_policy
+from application.language import choose_reply_language
+from application.modes import DEFAULT_MODE, get_mode_policy
 from tools.file_reader import SUPPORTED_EXTENSIONS
 
 # Discord's own limit on one message. Longer answers are split across several.
@@ -91,13 +97,17 @@ def _discord_delivery_context(message):
     return default, current, tuple(available)
 
 
-async def _send_reminder(delivery) -> None:
+async def _send_to_target(delivery, content: str) -> None:
     allowed_mentions = discord.AllowedMentions.none()
     if delivery.destination_type == "dm":
         user = client.get_user(int(delivery.destination_id))
         if user is None:
             user = await client.fetch_user(int(delivery.destination_id))
-        await user.send(delivery.title, allowed_mentions=allowed_mentions)
+        for index in range(0, len(content), MAX_MESSAGE_CHARS):
+            await user.send(
+                content[index:index + MAX_MESSAGE_CHARS],
+                allowed_mentions=allowed_mentions,
+            )
         return
 
     channel = client.get_channel(int(delivery.destination_id))
@@ -121,31 +131,166 @@ async def _send_reminder(delivery) -> None:
                 raise PermissionError("requester is no longer in the server") from error
         if not channel.permissions_for(requester).view_channel:
             raise PermissionError("requester can no longer view the delivery channel")
-    await channel.send(delivery.title, allowed_mentions=allowed_mentions)
+    for index in range(0, len(content), MAX_MESSAGE_CHARS):
+        await channel.send(
+            content[index:index + MAX_MESSAGE_CHARS],
+            allowed_mentions=allowed_mentions,
+        )
+
+
+async def _send_reminder(delivery) -> None:
+    await _send_to_target(delivery, delivery.title)
+
+
+def _reminder_time(reminder) -> str:
+    instant = datetime.fromisoformat(reminder.remind_at)
+    try:
+        instant = instant.astimezone(ZoneInfo(reminder.timezone))
+    except ZoneInfoNotFoundError:
+        pass
+    return instant.strftime("%Y-%m-%d %H:%M %Z")
+
+
+def _get_or_create_default_target(store, user_id: str, target):
+    return store.get_or_create_delivery_target(
+        user_id,
+        target.platform,
+        target.destination_id,
+        target.destination_type,
+        target.display_name,
+        guild_id=target.guild_id,
+        requester_id=target.requester_id,
+    )
+
+
+def handle_personal_command(store, user, prompt: str, default_target) -> str | None:
+    """Handle Discord text equivalents of the TUI's personal commands."""
+    parts = prompt.split()
+    if not parts or parts[0] not in {"/noti", "/brief"}:
+        return None
+
+    if active_mode != "agent":
+        return "Personal commands are available only in agent mode."
+
+    if parts[0] == "/noti":
+        if len(parts) == 1:
+            reminders = store.list_reminders(user.id, limit=None)
+            if not reminders:
+                return "No pending reminders."
+            lines = ["Pending reminders:"]
+            lines.extend(
+                f"{item.id}  {_reminder_time(item)}  {item.title}"
+                for item in reminders
+            )
+            return "\n".join(lines)
+        if len(parts) == 3 and parts[1].casefold() == "del":
+            reminder = store.cancel_reminder(user.id, parts[2])
+            if reminder is None:
+                return f"Reminder not found: {parts[2]}"
+            return f"Reminder removed: {reminder.id}"
+        return "usage: /noti [del <reminder_id>]"
+
+    if len(parts) == 1:
+        return build_daily_briefing(store, user.id)
+    action = parts[1].casefold()
+    if len(parts) == 3 and action == "at":
+        target = _get_or_create_default_target(store, user.id, default_target)
+        clock_time = store.configure_external_briefing(
+            user.id,
+            parts[2],
+            target.id,
+        )
+        return (
+            f"Daily briefing scheduled for {clock_time} {user.timezone} "
+            "and will be sent by Discord DM."
+        )
+    if len(parts) == 2 and action == "status":
+        clock_time = briefing_schedule_status(store, user.id)
+        if clock_time is None:
+            return "Daily briefing is off."
+        preferences = store.user_preferences(user.id)
+        target_id = preferences.get("briefing_delivery_target_id")
+        target = (
+            store.get_delivery_target(user.id, target_id) if target_id else None
+        )
+        if target is None or target.platform != "discord":
+            return (
+                f"Daily briefing: {clock_time} {user.timezone}; automatic Discord "
+                "delivery is not configured. Use /brief at <HH:MM>."
+            )
+        return (
+            f"Daily briefing: {clock_time} {user.timezone} via "
+            f"{target.display_name}."
+        )
+    if len(parts) == 2 and action == "off":
+        store.disable_external_briefing(user.id)
+        return "Daily briefing disabled."
+    return "usage: /brief [at <HH:MM>|status|off]"
+
+
+async def deliver_discord_notifications_once(store, *, now: str | None = None) -> None:
+    deliveries = store.claim_due_reminder_deliveries("discord", now=now)
+    for delivery in deliveries:
+        if not store.reminder_delivery_is_current(delivery):
+            continue
+        try:
+            await _send_reminder(delivery)
+        except Exception as error:
+            status = store.fail_reminder_delivery(
+                delivery.reminder_id,
+                f"{type(error).__name__}: {error}",
+            )
+            print(
+                f"[discord reminder] id={delivery.reminder_id} "
+                f"status={status} error={type(error).__name__}: {error}"
+            )
+        else:
+            store.complete_reminder_delivery(delivery.reminder_id)
+
+    briefings = store.claim_due_briefing_deliveries("discord", now=now)
+    for delivery in briefings:
+        if not store.briefing_delivery_is_current(delivery, now=now):
+            store.fail_briefing_delivery(
+                delivery.user_id,
+                delivery.local_date,
+                "briefing schedule changed before delivery",
+                max_attempts=1,
+            )
+            continue
+        try:
+            briefing_now = datetime.fromisoformat(now) if now else None
+            briefing = build_daily_briefing(
+                store,
+                delivery.user_id,
+                now=briefing_now,
+            )
+            await _send_to_target(delivery, briefing)
+        except Exception as error:
+            status = store.fail_briefing_delivery(
+                delivery.user_id,
+                delivery.local_date,
+                f"{type(error).__name__}: {error}",
+            )
+            print(
+                f"[discord briefing] user={delivery.user_id} "
+                f"date={delivery.local_date} status={status} "
+                f"error={type(error).__name__}: {error}"
+            )
+        else:
+            store.complete_briefing_delivery(
+                delivery.user_id,
+                delivery.local_date,
+            )
 
 
 async def deliver_discord_reminders() -> None:
-    """Deliver persistent Discord reminders and retry transient failures."""
+    """Deliver persistent Discord reminders and daily briefings."""
     store = _get_assistant_store()
     while not client.is_closed():
         try:
-            deliveries = store.claim_due_reminder_deliveries("discord")
-            for delivery in deliveries:
-                try:
-                    await _send_reminder(delivery)
-                except Exception as error:
-                    status = store.fail_reminder_delivery(
-                        delivery.reminder_id,
-                        f"{type(error).__name__}: {error}",
-                    )
-                    print(
-                        f"[discord reminder] id={delivery.reminder_id} "
-                        f"status={status} error={type(error).__name__}: {error}"
-                    )
-                else:
-                    store.complete_reminder_delivery(delivery.reminder_id)
+            await deliver_discord_notifications_once(store)
         except Exception as error:
-            print(f"[discord reminder worker] {type(error).__name__}: {error}")
+            print(f"[discord delivery worker] {type(error).__name__}: {error}")
         await asyncio.sleep(3)
 
 
@@ -185,8 +330,6 @@ async def on_message(message: discord.Message):
         str(message.channel.id),
     )
     history = store.conversation_history(conversation.id)
-    if prompt:
-        store.add_message(conversation.id, "user", prompt)
     language_key = (message.channel.id, message.author.id)
     reply_language = choose_reply_language(
         message.content,
@@ -225,6 +368,25 @@ async def on_message(message: discord.Message):
         message
     )
 
+    try:
+        command_answer = handle_personal_command(
+            store,
+            user,
+            prompt,
+            default_target,
+        )
+    except ValueError as error:
+        command_answer = str(error)
+    if command_answer is not None:
+        for i in range(0, len(command_answer), MAX_MESSAGE_CHARS):
+            await message.channel.send(
+                command_answer[i:i + MAX_MESSAGE_CHARS],
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        return
+
+    if prompt:
+        store.add_message(conversation.id, "user", prompt)
     async with message.channel.typing():
         answer = await ask_local_ai(
             prompt,

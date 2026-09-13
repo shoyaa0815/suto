@@ -1,6 +1,6 @@
 import os
 
-from core.settings import env_float, env_int, env_text
+from application.settings import env_float, env_int, env_text
 
 
 AI_PROVIDER = env_text("AI_PROVIDER", "ollama")

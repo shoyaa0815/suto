@@ -16,8 +16,8 @@ from workflows.runtime.context import (
     ExecutionContext,
     ExecutionLimitExceeded,
 )
-from core.language import ReplyLanguage, choose_reply_language
-from core.modes import DEFAULT_MODE, get_mode_policy
+from application.language import ReplyLanguage, choose_reply_language
+from application.modes import DEFAULT_MODE, get_mode_policy
 from tools import (
     ADVANCED_TOOL_NAMES,
     TASK_TOOL_NAMES,

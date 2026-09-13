@@ -3,7 +3,7 @@ import unicodedata
 
 import aiohttp
 
-from core.language import ReplyLanguage, detect_language_code
+from application.language import ReplyLanguage, detect_language_code
 
 from . import client, config
 from .progress import RequestProgress

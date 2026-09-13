@@ -5,9 +5,11 @@ from .service import (
     set_daily_briefing_time,
 )
 from .store import BriefingStore
+from .models import DueBriefingDelivery
 
 __all__ = [
     "BriefingStore",
+    "DueBriefingDelivery",
     "briefing_schedule_status",
     "build_daily_briefing",
     "disable_daily_briefing",

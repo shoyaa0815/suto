@@ -1,4 +1,4 @@
-from core.language import ReplyLanguage
+from application.language import ReplyLanguage
 
 from .config import set_debug_logs
 from .executor import ask_local_ai, execute_local_ai

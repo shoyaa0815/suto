@@ -13,10 +13,10 @@ from textual.theme import Theme
 from textual.widgets import Button, Input, Label, LoadingIndicator, RichLog, Static
 
 from ai import config
-from clients.tui.backend import run_session
-from clients.tui.output import route_output
+from interfaces.tui.backend import run_session
+from interfaces.tui.output import route_output
 from workflows.storage.store import JobStore
-from core.modes import get_mode_policy
+from application.modes import get_mode_policy
 
 
 SUTO_THEME = Theme(

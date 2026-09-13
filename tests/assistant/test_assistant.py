@@ -169,6 +169,29 @@ def test_discord_reminder_delivery_is_persistent_and_completed_after_send(tmp_pa
     assert store.get_reminder(owner.id, reminder.id).status == "delivered"
 
 
+def test_claimed_discord_reminder_is_revalidated_before_delivery(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    owner = store.resolve_channel_identity("discord", "10")
+    target = store.get_or_create_delivery_target(
+        owner.id, "discord", "10", "dm", "DM", requester_id="10"
+    )
+    reminder = store.create_reminder(
+        owner.id,
+        "Standup",
+        "2026-09-13T09:00:00+07:00",
+        timezone="Asia/Bangkok",
+        delivery_target_id=target.id,
+        now="2026-09-13T08:00:00+07:00",
+    )
+    delivery = store.claim_due_reminder_deliveries(
+        "discord", now="2026-09-13T09:00:00+07:00"
+    )[0]
+
+    store.cancel_reminder(owner.id, reminder.id)
+
+    assert store.reminder_delivery_is_current(delivery) is False
+
+
 def test_discord_task_tool_rejects_unavailable_delivery_channel(tmp_path):
     store = JobStore(tmp_path / "suto.db")
     owner = store.resolve_channel_identity("discord", "10")

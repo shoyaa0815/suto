@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from assistant.briefing import build_daily_briefing
 from assistant.briefing.service import briefing_is_due
-from clients.tui.output import write as print
+from interfaces.tui.output import write as print
 
 
 def print_json(value):

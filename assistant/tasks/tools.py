@@ -5,7 +5,6 @@ from dataclasses import asdict
 from assistant.context import AssistantContext
 from assistant.briefing import (
     build_daily_briefing,
-    disable_daily_briefing as disable_daily_briefing_schedule,
     set_daily_briefing_time,
 )
 
@@ -281,14 +280,19 @@ def build_task_tools(context: AssistantContext) -> dict:
 
     def set_daily_briefing(time: str):
         user = store.get_user(user_id)
-        clock_time = set_daily_briefing_time(store, user_id, time)
+        target_id = delivery_target_id()
+        clock_time = (
+            store.configure_external_briefing(user_id, time, target_id)
+            if target_id is not None
+            else set_daily_briefing_time(store, user_id, time)
+        )
         return (
             f"daily briefing scheduled for {clock_time} "
             f"in timezone {user.timezone}"
         )
 
     def disable_daily_briefing():
-        disabled = disable_daily_briefing_schedule(store, user_id)
+        disabled = store.disable_external_briefing(user_id)
         return "daily briefing disabled" if disabled else "daily briefing was already disabled"
 
     return {

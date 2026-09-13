@@ -1,4 +1,4 @@
-from clients.tui.output import set_activity, write_styled
+from interfaces.tui.output import set_activity, write_styled
 
 
 MAX_PROGRESS_DETAIL_CHARS = 60
@@ -69,7 +69,7 @@ def activity_text(update: dict) -> str | None:
 def print_progress(update: dict, prefix: str = "") -> None:
     set_activity(activity_text(update))
     # Keep the terminal focused on tool usage and the final result. Heartbeats
-    # and internal model stages remain available to other clients.
+    # and internal model stages remain available to other interfaces.
     if update.get("heartbeat") or update["activity"] not in {
         "tool",
         "tool_done",

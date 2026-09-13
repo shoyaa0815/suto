@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from ai import AIExecutionResult, execute_local_ai
-from core.settings import env_int
+from application.settings import env_int
 
 from .context import (
     COMMAND_TOOLS,

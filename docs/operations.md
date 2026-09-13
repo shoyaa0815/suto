@@ -200,6 +200,15 @@ requests. It is not a VM, and per-process resource limits are not cgroup-wide
 aggregate accounting. Files legitimately exposed inside the selected workspace
 and runtime are in scope for the approved command.
 
+## Discord personal delivery
+
+Discord agent mode runs a persistent delivery loop for reminders and scheduled
+daily briefings. Briefings default to the user's DM, use the profile timezone,
+and are claimed once per local date. Failed sends retry up to three attempts;
+abandoned in-flight claims become eligible again after five minutes. The worker
+revalidates the current reminder or briefing schedule immediately before each
+send so cancelled, rescheduled, or disabled items are not delivered.
+
 ## Local notifications and verification
 
 Lifecycle transitions to completed, failed, blocked, interrupted, cancelled or
@@ -212,7 +221,8 @@ waiting_approval create a durable local inbox item in the same transaction.
 
 `SUTO_NOTIFY_TUI=1` prints live TUI notifications and acknowledges them after
 printing. Delivery is at least once: a crash between printing and acknowledgement
-can repeat a message. External Discord/LINE/email/webhook delivery is not included.
+can repeat a message. External delivery of these job-lifecycle notifications is
+not included.
 
 ```bash
 venv/bin/pytest -q

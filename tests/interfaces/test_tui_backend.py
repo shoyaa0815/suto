@@ -1,6 +1,6 @@
 from workflows.models import MissedRunPolicy, ScheduleKind
 from workflows.storage.store import JobStore
-from clients.tui.backend import (
+from interfaces.tui.backend import (
     _parse_run,
     _parse_schedule,
     _print_commands,
@@ -8,7 +8,7 @@ from clients.tui.backend import (
     _print_job_status,
     _print_plan,
 )
-from clients.tui.progress import (
+from interfaces.tui.progress import (
     activity_text,
     format_elapsed,
     print_progress,

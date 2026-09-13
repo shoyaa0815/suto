@@ -1,6 +1,6 @@
 import pytest
 
-from core.modes import MODE_POLICIES, get_mode_policy
+from application.modes import MODE_POLICIES, get_mode_policy
 from tools import get_tools
 
 

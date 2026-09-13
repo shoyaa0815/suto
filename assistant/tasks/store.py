@@ -411,6 +411,23 @@ class TaskStore:
             )
         return True
 
+    def reminder_delivery_is_current(self, delivery: DueReminderDelivery) -> bool:
+        """Revalidate a claimed reminder immediately before its external send."""
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT r.status,r.remind_at,r.delivery_target_id,d.status AS delivery_status "
+                "FROM reminders AS r JOIN reminder_deliveries AS d "
+                "ON d.reminder_id=r.id WHERE r.id=? AND r.user_id=?",
+                (delivery.reminder_id, delivery.user_id),
+            ).fetchone()
+        return bool(
+            row is not None
+            and row["status"] == "scheduled"
+            and row["delivery_status"] == "sending"
+            and row["remind_at"] == delivery.remind_at
+            and row["delivery_target_id"] == delivery.target_id
+        )
+
     def fail_reminder_delivery(
         self,
         reminder_id: str,
