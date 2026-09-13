@@ -10,7 +10,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.theme import Theme
-from textual.widgets import Button, Input, Label, RichLog, Static
+from textual.widgets import Button, Input, Label, LoadingIndicator, RichLog, Static
 
 from ai import config
 from clients.tui.backend import run_session
@@ -133,6 +133,9 @@ class SutoTUI(App[None]):
                 wrap=True,
                 auto_scroll=True,
             )
+            with Horizontal(id="activity-row"):
+                yield LoadingIndicator(id="activity-spinner")
+                yield Static("", id="activity-label")
             with Horizontal(id="prompt-row"):
                 yield Static("›", id="prompt-marker")
                 yield Input(
@@ -158,11 +161,12 @@ class SutoTUI(App[None]):
         )
         terminal.write("")
         self.query_one("#prompt", Input).focus()
+        self.query_one("#activity-row", Horizontal).display = False
         self._session_task = asyncio.create_task(self._run_session())
 
     async def _run_session(self) -> None:
         try:
-            with route_output(self._write_output):
+            with route_output(self._write_output, self._set_activity):
                 await self._session_runner(self.mode, self._prompts.get)
         except asyncio.CancelledError:
             raise
@@ -178,6 +182,15 @@ class SutoTUI(App[None]):
             return
         for line in value.splitlines() or [""]:
             terminal.write(line)
+
+    def _set_activity(self, value: str | None) -> None:
+        row = self.query_one("#activity-row", Horizontal)
+        if value is None:
+            row.display = False
+            self.query_one("#activity-label", Static).update("")
+            return
+        self.query_one("#activity-label", Static).update(value)
+        row.display = True
 
     def _profile(self):
         store = JobStore(os.environ.get("SUTO_DB_PATH", "data/suto.db"))
@@ -219,6 +232,8 @@ class SutoTUI(App[None]):
         terminal = self.query_one("#terminal", RichLog)
         terminal.write(Text.assemble(("› ", "bold #d4d4d8"), value))
         event.input.value = ""
+        if not value.startswith("/"):
+            self._set_activity("suto thinking…")
         self._prompts.put_nowait(value)
 
     async def on_unmount(self) -> None:

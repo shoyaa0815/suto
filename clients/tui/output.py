@@ -8,7 +8,11 @@ from rich.text import Text
 
 OutputValue = str | Text
 OutputWriter = Callable[[OutputValue], None]
+ActivityWriter = Callable[[str | None], None]
 _writer: ContextVar[OutputWriter | None] = ContextVar("tui_output_writer", default=None)
+_activity_writer: ContextVar[ActivityWriter | None] = ContextVar(
+    "tui_activity_writer", default=None
+)
 
 
 def write(*values: object, sep: str = " ", end: str = "\n", **_: object) -> None:
@@ -30,10 +34,22 @@ def write_styled(value: str, style: str) -> None:
         writer(Text(value, style=style))
 
 
+def set_activity(value: str | None) -> None:
+    """Update transient TUI activity without adding a permanent log line."""
+    writer = _activity_writer.get()
+    if writer is not None:
+        writer(value)
+
+
 @contextmanager
-def route_output(writer: OutputWriter) -> Iterator[None]:
+def route_output(
+    writer: OutputWriter,
+    activity_writer: ActivityWriter | None = None,
+) -> Iterator[None]:
     token = _writer.set(writer)
+    activity_token = _activity_writer.set(activity_writer)
     try:
         yield
     finally:
+        _activity_writer.reset(activity_token)
         _writer.reset(token)

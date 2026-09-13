@@ -25,7 +25,7 @@ from automation.models import Job, JobStatus, MissedRunPolicy, ScheduleKind
 from automation.runtime.runner import JobRunner
 from automation.storage.store import JobStore
 from automation.runtime.worker import AutomationWorker
-from clients.tui.output import write as print
+from clients.tui.output import set_activity, write as print
 from clients.tui.progress import format_elapsed, print_progress
 from clients.tui.operations import (
     notify_personal_reminders,
@@ -888,6 +888,8 @@ async def run_session(
             except KeyboardInterrupt:
                 print("\nrequest cancelled")
                 continue
+            finally:
+                set_activity(None)
 
             store.add_message(conversation.id, "assistant", answer)
             print(f"suto> {answer}")

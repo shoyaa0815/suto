@@ -8,7 +8,12 @@ from clients.tui.backend import (
     _print_job_status,
     _print_plan,
 )
-from clients.tui.progress import format_elapsed, print_progress, progress_style
+from clients.tui.progress import (
+    activity_text,
+    format_elapsed,
+    print_progress,
+    progress_style,
+)
 
 
 def test_format_elapsed_uses_minutes_and_seconds():
@@ -248,6 +253,19 @@ def test_print_progress_hides_non_tool_activity(capsys):
     )
 
     assert capsys.readouterr().out == ""
+
+
+def test_progress_activity_text_distinguishes_thinking_and_tool_work():
+    assert activity_text({"activity": "model", "detail": "waiting"}) == (
+        "suto thinking…"
+    )
+    assert activity_text(
+        {"activity": "tool", "detail": "search_web (query=news)"}
+    ) == "suto working: searching the web…"
+    assert activity_text({"activity": "tool_done", "detail": "done"}) == (
+        "suto thinking…"
+    )
+    assert activity_text({"activity": "finished", "detail": "completed"}) is None
 
 
 def test_print_progress_can_label_a_discord_request(capsys):

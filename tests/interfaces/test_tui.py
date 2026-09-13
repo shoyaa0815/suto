@@ -1,6 +1,7 @@
 import asyncio
 
 import pytest
+from textual.containers import Horizontal
 from textual.widgets import Input, RichLog, Static
 
 from clients.tui.app import SettingsScreen, SutoTUI
@@ -51,6 +52,32 @@ async def test_tui_input_echoes_like_a_terminal():
         lines = app.query_one("#terminal", RichLog).lines
         assert any("hello suto" in line.text for line in lines)
         assert any("suto> handled" in line.text for line in lines)
+
+
+async def test_tui_shows_spinner_while_request_is_running():
+    release = asyncio.Event()
+
+    async def session(mode, read_prompt):
+        await read_prompt()
+        await release.wait()
+
+    app = SutoTUI("agent", session_runner=session)
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        activity_row = app.query_one("#activity-row", Horizontal)
+        assert activity_row.display is False
+
+        prompt = app.query_one("#prompt", Input)
+        prompt.value = "ช่วยคิดหน่อย"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert activity_row.display is True
+        assert "suto thinking" in app.query_one(
+            "#activity-label", Static
+        ).render().plain
+
+        release.set()
 
 
 async def test_setting_modal_saves_profile_timezone(tmp_path, monkeypatch):
@@ -209,6 +236,7 @@ async def test_tui_runs_the_real_assistant_session_backend(
                 for line in app.query_one("#terminal", RichLog).lines
             ):
                 await pilot.pause()
+        assert app.query_one("#activity-row", Horizontal).display is False
 
         prompt.value = "/clear"
         await pilot.press("enter")
