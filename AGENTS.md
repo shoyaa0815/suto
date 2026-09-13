@@ -20,6 +20,9 @@ Run focused tests while developing, then the full suite for shared changes.
 
 - `main.py`, `application/`: dispatch, modes, configuration, and language handling.
 - `ai/`, `tools/`: provider calls, prompting, execution, and assistant tools.
+  In `ai/`, `executor.py` is the stable lifecycle façade; `execution/` owns
+  policy/context preparation, model/tool rounds, and limits; `tooling/` owns
+  handler assembly and audit events; `providers/` owns provider adapters.
 - `assistant/`: identity, conversations, tasks, reminders, and briefings.
 - `interfaces/`: terminal and Discord integrations; the LINE scaffold is parked.
   In `interfaces/tui/`, `backend.py` owns session lifecycle, `commands.py` owns
@@ -89,6 +92,9 @@ flowchart LR
 - Preserve `chat`, `agent`, and parked `developer` separation.
 - Keep the TUI backend thin. Add public slash commands through the command
   registry and keep background loops in operations, not in the session loop.
+- Keep the AI executor thin. Add request shaping, tool assembly, loop behavior,
+  and execution limits to their owning modules instead of growing the public
+  lifecycle function.
 - Keep LINE parked. Do not add LINE execution, webhook, delivery, configuration,
   dependencies, or tests unless the user explicitly changes its scope.
 - Expose a capability only when its interface has a working execution or delivery
