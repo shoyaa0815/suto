@@ -124,3 +124,14 @@ class IdentityStore:
                 (user_id,),
             ).fetchall()
         return {row["key"]: row["value"] for row in rows}
+
+    def delete_user_preference(self, user_id: str, key: str) -> bool:
+        key = key.strip().casefold()
+        if not key:
+            raise ValueError("invalid user preference")
+        with self._connect() as db:
+            cursor = db.execute(
+                "DELETE FROM user_preferences WHERE user_id=? AND key=?",
+                (user_id, key),
+            )
+        return cursor.rowcount == 1

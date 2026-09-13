@@ -9,6 +9,12 @@ from collections.abc import Awaitable, Callable
 
 from ai import ask_local_ai
 from assistant import AssistantContext
+from assistant.briefing import (
+    briefing_schedule_status,
+    build_daily_briefing,
+    disable_daily_briefing,
+    set_daily_briefing_time,
+)
 from automation.library.bundles import import_bundle, write_bundle
 from automation.library.definitions import (
     automation_options,
@@ -23,6 +29,7 @@ from clients.tui.output import write as print
 from clients.tui.progress import format_elapsed, print_progress
 from clients.tui.operations import (
     notify_personal_reminders,
+    notify_daily_briefing,
     notify_tui,
     print_pending_reminders,
 )
@@ -78,6 +85,9 @@ def _print_help(mode: str | None = None) -> None:
     print("  /setting  open profile settings")
     print("  /noti  show reminders that have not been delivered")
     print("  /noti del <reminder_id>  remove a pending reminder")
+    print("  /brief  show today's briefing")
+    print("  /brief at <HH:MM>  schedule a daily briefing")
+    print("  /brief status|off  show or disable the daily schedule")
     print("  /exit  exit suto")
 
 
@@ -560,6 +570,7 @@ async def run_session(
     notification_task = (asyncio.create_task(notify_tui(store))
                          if os.environ.get('SUTO_NOTIFY_TUI', '').lower() in {'1', 'true', 'yes'} else None)
     reminder_task = asyncio.create_task(notify_personal_reminders(store, user.id))
+    briefing_task = asyncio.create_task(notify_daily_briefing(store, user.id))
     print("Type /help for commands")
     try:
         await asyncio.sleep(0)
@@ -600,6 +611,34 @@ async def run_session(
                             print(f"Reminder not found: {parts[1]}")
                         else:
                             print(f"Reminder removed: {reminder.id}")
+                continue
+            if command == "/brief":
+                parts = argument.split()
+                try:
+                    if not parts:
+                        print(f"suto> {build_daily_briefing(store, user.id)}")
+                    elif len(parts) == 2 and parts[0].casefold() == "at":
+                        clock_time = set_daily_briefing_time(store, user.id, parts[1])
+                        print(
+                            f"Daily briefing scheduled for {clock_time} "
+                            f"({store.get_user(user.id).timezone})."
+                        )
+                    elif len(parts) == 1 and parts[0].casefold() == "status":
+                        clock_time = briefing_schedule_status(store, user.id)
+                        if clock_time:
+                            print(
+                                f"Daily briefing: {clock_time} "
+                                f"({store.get_user(user.id).timezone})"
+                            )
+                        else:
+                            print("Daily briefing is off.")
+                    elif len(parts) == 1 and parts[0].casefold() == "off":
+                        disable_daily_briefing(store, user.id)
+                        print("Daily briefing disabled.")
+                    else:
+                        print("usage: /brief [at <HH:MM>|status|off]")
+                except ValueError as error:
+                    print(error)
                 continue
             if command == "/clear":
                 if argument:
@@ -853,6 +892,8 @@ async def run_session(
             store.add_message(conversation.id, "assistant", answer)
             print(f"suto> {answer}")
     finally:
+        briefing_task.cancel()
+        await asyncio.gather(briefing_task, return_exceptions=True)
         reminder_task.cancel()
         await asyncio.gather(reminder_task, return_exceptions=True)
         if notification_task:

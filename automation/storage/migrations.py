@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .locking import ProcessLock
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 HARDENING = """
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -137,6 +137,13 @@ CREATE INDEX reminders_due_idx ON reminders(status,remind_at);
 CREATE INDEX reminders_user_idx ON reminders(user_id,status,remind_at);
 """
 
+DAILY_BRIEFING = """
+CREATE TABLE briefing_deliveries(
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ local_date TEXT NOT NULL, delivered_at TEXT NOT NULL,
+ PRIMARY KEY(user_id,local_date));
+"""
+
 
 def backup_database(source: Path, destination: Path) -> Path:
     source, destination = source.resolve(), destination.expanduser().absolute()
@@ -182,6 +189,7 @@ def initialize_database(store) -> None:
                 (1, HARDENING),
                 (2, ADVANCED),
                 (3, PERSONAL_ASSISTANT),
+                (4, DAILY_BRIEFING),
             ):
                 if number <= version:
                     continue

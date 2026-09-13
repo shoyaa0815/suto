@@ -46,14 +46,20 @@ venv/bin/python main.py agent cli
 
 `chat` answers questions conversationally. `agent` keeps conversation history,
 uses the local user profile, and can create, list, complete, reschedule, or
-cancel personal tasks and reminders from natural-language requests.
+cancel personal tasks and reminders from natural-language requests. In agent
+mode, requests such as `สรุปวันนี้ให้หน่อย` produce a daily briefing from the
+current user's open tasks and scheduled reminders.
 
 Reminders are persisted and appear in the terminal when they become due. If
 Suto was closed at that time, it reports the missed reminder on the next start.
 
 The terminal interface exposes `/help`, `/setting` for profile settings,
 `/noti` for pending reminders, `/noti del <reminder_id>` to remove one, and
-`/exit`. Personal-service integrations are under active development.
+`/exit`. Use `/brief` for an immediate briefing, `/brief at 08:30` to deliver
+one automatically each day in the profile timezone, `/brief status` to inspect
+the schedule, and `/brief off` to disable it. Automatic delivery occurs while
+the CLI is running; if it starts after the configured time, that day's briefing
+is delivered once. Personal-service integrations are under active development.
 
 ## Parked developer capability
 

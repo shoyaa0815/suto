@@ -25,6 +25,9 @@ PERSONAL_TASK_TOOLS = frozenset(
         "list_reminders",
         "reschedule_reminder",
         "cancel_reminder",
+        "get_daily_briefing",
+        "set_daily_briefing",
+        "disable_daily_briefing",
     }
 )
 

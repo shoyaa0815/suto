@@ -268,6 +268,50 @@ async def test_agent_can_create_task_for_current_user(tmp_path, monkeypatch):
     assert [task.title for task in store.list_tasks(user.id)] == ["Call the customer"]
 
 
+async def test_agent_can_request_daily_briefing(tmp_path, monkeypatch):
+    store = JobStore(tmp_path / "suto.db")
+    user = store.resolve_channel_identity(
+        "tui", "owner", timezone="Asia/Bangkok", locale="th"
+    )
+    conversation = store.get_or_create_conversation(user.id, "tui", "main")
+    calls = 0
+
+    async def fake_chat(session, messages, tool_schemas, think=False):
+        nonlocal calls
+        calls += 1
+        names = {item["function"]["name"] for item in tool_schemas}
+        assert "get_daily_briefing" in names
+        if calls == 1:
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "get_daily_briefing",
+                                "arguments": {},
+                            }
+                        }
+                    ],
+                }
+            }
+        assert "สรุปประจำวัน" in messages[-1]["content"]
+        return {"message": {"content": "วันนี้ยังไม่มีงานครับ"}}
+
+    monkeypatch.setattr(ai.client.aiohttp, "ClientSession", FakeClientSession)
+    monkeypatch.setattr(ai.client, "chat", fake_chat)
+
+    answer = await ai.ask_local_ai(
+        "สรุปวันนี้ให้หน่อย",
+        mode="agent",
+        assistant_context=AssistantContext(store, user.id, conversation.id),
+        reply_language=ai.ReplyLanguage("th", "Thai", "test"),
+    )
+
+    assert answer == "วันนี้ยังไม่มีงานครับ"
+
+
 async def test_agent_cannot_claim_uncreated_reminder(tmp_path, monkeypatch):
     store = JobStore(tmp_path / "suto.db")
     user = store.resolve_channel_identity("tui", "owner", timezone="Asia/Bangkok")

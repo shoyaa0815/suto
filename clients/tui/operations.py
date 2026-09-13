@@ -2,9 +2,11 @@ import asyncio
 import json
 import shlex
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from assistant.briefing import build_daily_briefing
+from assistant.briefing.service import briefing_is_due
 from clients.tui.output import write as print
 
 
@@ -149,3 +151,28 @@ async def notify_personal_reminders(store, user_id: str) -> None:
     while True:
         await asyncio.sleep(1)
         print_due_reminders(store, user_id, overdue=False)
+
+
+def claim_due_daily_briefing(store, user_id: str, *, now=None) -> str | None:
+    """Return today's scheduled briefing once, after its local delivery time."""
+    if not briefing_is_due(store, user_id, now=now):
+        return None
+    user = store.get_user(user_id)
+    current = now or datetime.now(UTC)
+    local_date = current.astimezone(ZoneInfo(user.timezone)).date().isoformat()
+    if not store.claim_briefing_delivery(
+        user_id,
+        local_date,
+        delivered_at=current.isoformat(),
+    ):
+        return None
+    return build_daily_briefing(store, user_id, now=current)
+
+
+async def notify_daily_briefing(store, user_id: str) -> None:
+    """Deliver the configured local-time briefing while the CLI is running."""
+    while True:
+        briefing = claim_due_daily_briefing(store, user_id)
+        if briefing:
+            print(f"\n[suto daily briefing]\n{briefing}", flush=True)
+        await asyncio.sleep(30)

@@ -7,3 +7,10 @@ data/*.db-wal
 data/*.db.worker.lock
 data/*.db.migration.lock
 data/backups/
+
+# Personal AI coding agnet files
+.agents/
+.codex/
+.claude/
+.gemini/
+.aider*
