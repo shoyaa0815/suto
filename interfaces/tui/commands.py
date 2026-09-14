@@ -41,9 +41,9 @@ def print_help(mode: str | None = None) -> None:
     print("  /setting  open profile settings")
     print("  /noti  show reminders that have not been delivered")
     print("  /noti del <reminder_id>  remove a pending reminder")
-    print("  /brief  show today's briefing")
-    print("  /brief at <HH:MM>  schedule a daily briefing")
-    print("  /brief status|off  show or disable the daily schedule")
+    print("  /daily  show today's briefing")
+    print("  /daily at <HH:MM>  schedule a daily briefing")
+    print("  /daily status|off  show or disable the daily schedule")
     print("  /exit  exit suto")
 
 
@@ -73,7 +73,7 @@ def _noti(context: CommandContext, argument: str) -> CommandOutcome:
     return CommandOutcome(handled=True)
 
 
-def _brief(context: CommandContext, argument: str) -> CommandOutcome:
+def _daily(context: CommandContext, argument: str) -> CommandOutcome:
     parts = argument.split()
     try:
         if not parts:
@@ -101,7 +101,7 @@ def _brief(context: CommandContext, argument: str) -> CommandOutcome:
             disable_daily_briefing(context.store, context.user.id)
             print("Daily briefing disabled.")
         else:
-            print("usage: /brief [at <HH:MM>|status|off]")
+            print("usage: /daily [at <HH:MM>|status|off]")
     except ValueError as error:
         print(error)
     return CommandOutcome(handled=True)
@@ -138,7 +138,7 @@ COMMAND_HANDLERS: dict[str, CommandHandler] = {
     "/help": _help,
     "/exit": _exit,
     "/noti": _noti,
-    "/brief": _brief,
+    "/daily": _daily,
     "/clear": _clear,
     "/reset": _reset,
 }

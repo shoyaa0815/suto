@@ -6,6 +6,7 @@ import interfaces.discord.bot as discord_bot
 from assistant import DeliveryTargetContext
 from interfaces.discord.bot import (
     _discord_delivery_context,
+    _send_to_target,
     _without_bot_mention,
     deliver_discord_notifications_once,
     handle_personal_command,
@@ -68,10 +69,13 @@ def test_delivery_context_only_exposes_channels_both_sides_can_use():
     user_cannot_view = _Channel(
         300, "secret", _permissions(), _permissions(view=False)
     )
+    user_cannot_send = _Channel(
+        400, "announcements", _permissions(), _permissions(send=False)
+    )
     guild = SimpleNamespace(
         id=50,
         me=bot_member,
-        text_channels=[usable, bot_cannot_send, user_cannot_view],
+        text_channels=[usable, bot_cannot_send, user_cannot_view, user_cannot_send],
     )
     message = _message(guild=guild)
     message.channel = usable
@@ -82,6 +86,56 @@ def test_delivery_context_only_exposes_channels_both_sides_can_use():
     assert default.destination_id == "10"
     assert current.destination_id == "100"
     assert [item.destination_id for item in available] == ["100"]
+
+
+@pytest.mark.asyncio
+async def test_channel_delivery_rechecks_requester_send_permission(monkeypatch):
+    bot_member = SimpleNamespace(is_bot_member=True)
+    requester = SimpleNamespace(id=10)
+    requester_permissions = _permissions()
+    channel = _Channel(
+        100,
+        "announcements",
+        _permissions(),
+        requester_permissions,
+    )
+    channel.guild = SimpleNamespace(
+        id=50,
+        me=bot_member,
+        get_member=lambda member_id: requester if member_id == 10 else None,
+    )
+    sent = []
+
+    async def send(content, **options):
+        sent.append((content, options))
+
+    channel.send = send
+    fake_client = SimpleNamespace(
+        get_channel=lambda channel_id: channel if channel_id == 100 else None,
+    )
+    monkeypatch.setattr(discord_bot, "client", fake_client)
+    delivery = SimpleNamespace(
+        destination_type="guild_channel",
+        destination_id="100",
+        guild_id="50",
+        requester_id="10",
+    )
+
+    await _send_to_target(delivery, "allowed reminder")
+    assert [content for content, _ in sent] == ["allowed reminder"]
+
+    sent.clear()
+    requester_permissions.send_messages = False
+    with pytest.raises(PermissionError, match="view or send"):
+        await _send_to_target(delivery, "private reminder")
+
+    assert sent == []
+
+    delivery.requester_id = None
+    with pytest.raises(PermissionError, match="identity is unavailable"):
+        await _send_to_target(delivery, "private reminder")
+
+    assert sent == []
 
 
 def _discord_user(tmp_path):
@@ -106,6 +160,7 @@ def _discord_user(tmp_path):
 def test_discord_noti_command_lists_and_cancels_reminders(tmp_path, monkeypatch):
     store, user, target = _discord_user(tmp_path)
     monkeypatch.setattr(discord_bot, "active_mode", "agent")
+    conversation = store.get_or_create_conversation(user.id, "discord", "10")
     reminder = store.create_reminder(
         user.id,
         "กินยา",
@@ -113,22 +168,50 @@ def test_discord_noti_command_lists_and_cancels_reminders(tmp_path, monkeypatch)
         timezone="Asia/Bangkok",
     )
 
-    listing = handle_personal_command(store, user, "/noti", target)
+    listing = handle_personal_command(
+        store,
+        user,
+        "!noti",
+        target,
+        conversation_id=conversation.id,
+        is_dm=True,
+    )
     assert reminder.id in listing
     assert "กินยา" in listing
     assert handle_personal_command(
-        store, user, f"/noti del {reminder.id}", target
+        store,
+        user,
+        f"!noti del {reminder.id}",
+        target,
+        conversation_id=conversation.id,
+        is_dm=True,
     ) == f"Reminder removed: {reminder.id}"
-    assert handle_personal_command(store, user, "/noti", target) == (
-        "No pending reminders."
+    assert (
+        handle_personal_command(
+            store,
+            user,
+            "!noti",
+            target,
+            conversation_id=conversation.id,
+            is_dm=True,
+        )
+        == "No pending reminders."
     )
 
 
-def test_discord_brief_command_manages_dm_schedule(tmp_path, monkeypatch):
+def test_discord_daily_command_manages_dm_schedule(tmp_path, monkeypatch):
     store, user, target = _discord_user(tmp_path)
     monkeypatch.setattr(discord_bot, "active_mode", "agent")
+    conversation = store.get_or_create_conversation(user.id, "discord", "10")
 
-    result = handle_personal_command(store, user, "/brief at 08:30", target)
+    result = handle_personal_command(
+        store,
+        user,
+        "!daily at 08:30",
+        target,
+        conversation_id=conversation.id,
+        is_dm=True,
+    )
     preferences = store.user_preferences(user.id)
 
     assert "Discord DM" in result
@@ -138,12 +221,133 @@ def test_discord_brief_command_manages_dm_schedule(tmp_path, monkeypatch):
     )
     assert delivery_target.destination_id == "10"
     assert "08:30" in handle_personal_command(
-        store, user, "/brief status", target
+        store,
+        user,
+        "!daily status",
+        target,
+        conversation_id=conversation.id,
+        is_dm=True,
     )
-    assert handle_personal_command(store, user, "/brief off", target) == (
-        "Daily briefing disabled."
+    assert (
+        handle_personal_command(
+            store,
+            user,
+            "!daily off",
+            target,
+            conversation_id=conversation.id,
+            is_dm=True,
+        )
+        == "Daily briefing disabled."
     )
     assert store.user_preferences(user.id) == {}
+
+
+def test_private_commands_are_rejected_in_guild_without_reading_or_mutating_data(
+    tmp_path,
+    monkeypatch,
+):
+    store, user, target = _discord_user(tmp_path)
+    monkeypatch.setattr(discord_bot, "active_mode", "agent")
+    conversation = store.get_or_create_conversation(user.id, "discord", "100")
+    store.add_message(conversation.id, "user", "keep this")
+    reminder = store.create_reminder(
+        user.id,
+        "private appointment",
+        "2099-09-13T09:00:00+07:00",
+        timezone="Asia/Bangkok",
+    )
+
+    for prompt in ("!noti", "!daily", "!help", "!clear", "!reset all"):
+        result = handle_personal_command(
+            store,
+            user,
+            prompt,
+            target,
+            conversation_id=conversation.id,
+            is_dm=False,
+        )
+        assert result == "This command is private. Please send it to me in Discord DM."
+
+    assert (
+        handle_personal_command(
+            store,
+            user,
+            "บ่ายสามวันนี้เข้าประชุม",
+            target,
+            conversation_id=conversation.id,
+            is_dm=False,
+        )
+        is None
+    )
+
+    assert [item.id for item in store.list_reminders(user.id)] == [reminder.id]
+    assert store.conversation_history(conversation.id) == [
+        {"role": "user", "content": "keep this"}
+    ]
+
+
+def test_discord_dm_help_clear_and_reset_are_user_scoped(tmp_path, monkeypatch):
+    store, user, target = _discord_user(tmp_path)
+    monkeypatch.setattr(discord_bot, "active_mode", "agent")
+    dm = store.get_or_create_conversation(user.id, "discord", "10")
+    guild = store.get_or_create_conversation(user.id, "discord", "100")
+    other = store.resolve_channel_identity("discord", "20")
+    other_dm = store.get_or_create_conversation(other.id, "discord", "20")
+    store.add_message(dm.id, "user", "start fresh")
+    store.add_message(guild.id, "user", "reset this later")
+    store.add_message(other_dm.id, "user", "do not touch")
+
+    help_text = handle_personal_command(
+        store,
+        user,
+        "!help",
+        target,
+        conversation_id=dm.id,
+        is_dm=True,
+    )
+    assert all(
+        command in help_text
+        for command in ("!noti", "!daily", "!clear", "!reset all")
+    )
+
+    assert "cleared" in handle_personal_command(
+        store,
+        user,
+        "!clear",
+        target,
+        conversation_id=dm.id,
+        is_dm=True,
+    )
+    assert store.conversation_history(dm.id) == []
+    assert store.conversation_history(guild.id) == [
+        {"role": "user", "content": "reset this later"}
+    ]
+    for retired_command in ("/clear", "!brief"):
+        assert (
+            handle_personal_command(
+                store,
+                user,
+                retired_command,
+                target,
+                conversation_id=dm.id,
+                is_dm=True,
+            )
+            is None
+        )
+
+    result = handle_personal_command(
+        store,
+        user,
+        "!reset all",
+        target,
+        conversation_id=dm.id,
+        is_dm=True,
+    )
+    assert "deleted (2)" in result
+    assert store.conversation_history(guild.id) == []
+    assert store.conversation_history(other_dm.id) == [
+        {"role": "user", "content": "do not touch"}
+    ]
 
 
 @pytest.mark.asyncio

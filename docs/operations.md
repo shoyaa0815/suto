@@ -208,6 +208,14 @@ and are claimed once per local date. Failed sends retry up to three attempts;
 abandoned in-flight claims become eligible again after five minutes. The worker
 revalidates the current reminder or briefing schedule immediately before each
 send so cancelled, rescheduled, or disabled items are not delivered.
+Server-channel reminders are available only when both the requester and bot can
+view and send to the target channel. Those permissions are checked when the
+target is selected and again immediately before delivery.
+
+`!noti`, `!daily`, `!help`, `!clear`, and `!reset all` are private Discord
+commands and run only in the bot's DM. If one is invoked in a server channel,
+the bot returns only a prompt to continue in DM. Normal mentioned requests in a
+server channel, including creating a reminder, remain available.
 
 ## Local notifications and verification
 

@@ -107,3 +107,12 @@ class ConversationStore:
         with self._connect() as db:
             cursor = db.execute("DELETE FROM conversations")
         return cursor.rowcount
+
+    def reset_user_conversations(self, user_id: str) -> int:
+        """Delete every saved conversation owned by one user."""
+        with self._connect() as db:
+            cursor = db.execute(
+                "DELETE FROM conversations WHERE user_id=?",
+                (user_id,),
+            )
+        return cursor.rowcount

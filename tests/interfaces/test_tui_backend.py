@@ -25,9 +25,13 @@ def test_print_help_lists_exit_commands(capsys):
 
     output = capsys.readouterr().out
     assert "/help" in output
+    assert "/clear" in output
+    assert "/new" not in output
     assert "/setting" in output
     assert "/noti" in output
     assert "/noti del <reminder_id>" in output
+    assert "/daily" in output
+    assert "/brief" not in output
     assert "/exit" in output
     assert "/quit" not in output
     assert "/plan" not in output

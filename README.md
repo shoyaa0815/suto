@@ -57,22 +57,24 @@ In Discord servers, Suto processes a message only when the bot is directly
 mentioned. Direct messages do not require a mention. In agent mode, reminders
 default to a private Discord message; requests that say "this channel" or
 mention an accessible text channel are delivered there instead. The bot and
-requesting user must both be able to view the target channel, and the bot must
-have permission to send messages. Discord reminders are retried while the bot
-is running and remain persisted across restarts.
+requesting user must both be able to view and send messages in the target
+channel. These permissions are checked again immediately before delivery.
+Discord reminders are retried while the bot is running and remain persisted
+across restarts.
 
-Discord agent mode also supports `/noti`, `/noti del <reminder_id>`, `/brief`,
-`/brief at <HH:MM>`, `/brief status`, and `/brief off`. In a server, directly
-mention the bot before the command; in a DM, send the command normally.
+Discord agent mode also supports `!noti`, `!noti del <reminder_id>`, `!daily`,
+`!daily at <HH:MM>`, `!daily status`, and `!daily off` in the bot's DM. Discord
+also provides `!help`, `!clear`, and `!reset all` there. These private commands
+are rejected in server channels.
 Scheduled Discord briefings are delivered by DM in the profile timezone. A
 briefing missed while the bot was offline is delivered once after restart, and
 transient send failures are retried.
 
 The terminal interface exposes `/help`, `/setting` for profile settings,
 `/noti` for pending reminders, `/noti del <reminder_id>` to remove one, and
-`/exit`. Use `/brief` for an immediate briefing, `/brief at 08:30` to deliver
-one automatically each day in the profile timezone, `/brief status` to inspect
-the schedule, and `/brief off` to disable it. Automatic delivery occurs while
+`/exit`. Use `/daily` for an immediate briefing, `/daily at 08:30` to deliver
+one automatically each day in the profile timezone, `/daily status` to inspect
+the schedule, and `/daily off` to disable it. Automatic delivery occurs while
 the CLI is running; if it starts after the configured time, that day's briefing
 is delivered once. Personal-service integrations are under active development.
 

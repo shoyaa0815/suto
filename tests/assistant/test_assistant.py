@@ -75,6 +75,25 @@ def test_reset_conversations_removes_every_saved_conversation(tmp_path):
     assert store.get_or_create_conversation(first.id, "tui", "main").id != current.id
 
 
+def test_reset_user_conversations_preserves_other_users(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    first = store.resolve_channel_identity("discord", "one")
+    second = store.resolve_channel_identity("discord", "two")
+    first_dm = store.get_or_create_conversation(first.id, "discord", "one")
+    first_guild = store.get_or_create_conversation(first.id, "discord", "shared")
+    second_guild = store.get_or_create_conversation(second.id, "discord", "shared")
+    store.add_message(first_dm.id, "user", "delete me")
+    store.add_message(first_guild.id, "user", "delete me too")
+    store.add_message(second_guild.id, "user", "keep me")
+
+    assert store.reset_user_conversations(first.id) == 2
+    assert store.conversation_history(first_dm.id) == []
+    assert store.conversation_history(first_guild.id) == []
+    assert store.conversation_history(second_guild.id) == [
+        {"role": "user", "content": "keep me"}
+    ]
+
+
 def test_tasks_and_reminders_are_owned_by_one_user(tmp_path):
     store = JobStore(tmp_path / "suto.db")
     owner = store.resolve_channel_identity("tui", "owner", timezone="Asia/Bangkok")

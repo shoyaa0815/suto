@@ -145,9 +145,10 @@ async def test_session_exposes_only_help_noti_and_exit(tmp_path, monkeypatch, ca
             "/jobs",
             "/quit",
             "/brief",
-            "/brief at 08:30",
-            "/brief status",
-            "/brief off",
+            "/daily",
+            "/daily at 08:30",
+            "/daily status",
+            "/daily off",
             "/noti",
             "/noti del resaldfj",
             f"/noti del {reminder.id}",
@@ -166,6 +167,7 @@ async def test_session_exposes_only_help_noti_and_exit(tmp_path, monkeypatch, ca
     output = capsys.readouterr().out
     assert "Unknown command: /jobs" in output
     assert "Unknown command: /quit" in output
+    assert "Unknown command: /brief" in output
     assert "สรุปประจำวัน" in output
     assert "Daily briefing scheduled for 08:30" in output
     assert "Daily briefing: 08:30" in output
@@ -179,7 +181,7 @@ async def test_session_exposes_only_help_noti_and_exit(tmp_path, monkeypatch, ca
     assert store.get_reminder(user.id, reminder.id).status == "cancelled"
     assert "  /help" in output
     assert "  /noti" in output
-    assert "  /brief" in output
+    assert "  /daily" in output
     assert "  /exit" in output
     assert "bye" in output
 

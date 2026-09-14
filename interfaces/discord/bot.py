@@ -73,6 +73,7 @@ def _discord_delivery_context(message):
             bot_permissions.view_channel
             and bot_permissions.send_messages
             and user_permissions.view_channel
+            and user_permissions.send_messages
         ):
             continue
         category = f"{channel.category.name} / " if channel.category else ""
@@ -122,15 +123,22 @@ async def _send_to_target(delivery, content: str) -> None:
     permissions = channel.permissions_for(bot_member)
     if not permissions.view_channel or not permissions.send_messages:
         raise PermissionError("bot cannot view or send to the delivery channel")
-    if delivery.requester_id:
-        requester = guild.get_member(int(delivery.requester_id))
-        if requester is None:
-            try:
-                requester = await guild.fetch_member(int(delivery.requester_id))
-            except discord.NotFound as error:
-                raise PermissionError("requester is no longer in the server") from error
-        if not channel.permissions_for(requester).view_channel:
-            raise PermissionError("requester can no longer view the delivery channel")
+    if not delivery.requester_id:
+        raise PermissionError("requester identity is unavailable")
+    requester = guild.get_member(int(delivery.requester_id))
+    if requester is None:
+        try:
+            requester = await guild.fetch_member(int(delivery.requester_id))
+        except discord.NotFound as error:
+            raise PermissionError("requester is no longer in the server") from error
+    requester_permissions = channel.permissions_for(requester)
+    if not (
+        requester_permissions.view_channel
+        and requester_permissions.send_messages
+    ):
+        raise PermissionError(
+            "requester can no longer view or send to the delivery channel"
+        )
     for index in range(0, len(content), MAX_MESSAGE_CHARS):
         await channel.send(
             content[index:index + MAX_MESSAGE_CHARS],
@@ -163,16 +171,65 @@ def _get_or_create_default_target(store, user_id: str, target):
     )
 
 
-def handle_personal_command(store, user, prompt: str, default_target) -> str | None:
+def _discord_help() -> str:
+    lines = [
+        "Discord DM commands:",
+        "!help — show available commands",
+        "!clear — clear this DM chat context",
+        "!reset all — delete all of your saved chat contexts",
+    ]
+    if active_mode == "agent":
+        lines.extend(
+            (
+                "!noti [del <reminder_id>] — list or remove reminders",
+                "!daily [at <HH:MM>|status|off] — show or schedule a daily briefing",
+            )
+        )
+    return "\n".join(lines)
+
+
+def handle_personal_command(
+    store,
+    user,
+    prompt: str,
+    default_target,
+    *,
+    conversation_id: str | None = None,
+    is_dm: bool = True,
+) -> str | None:
     """Handle Discord text equivalents of the TUI's personal commands."""
     parts = prompt.split()
-    if not parts or parts[0] not in {"/noti", "/brief"}:
+    if not parts:
         return None
+
+    command = parts[0].casefold()
+    if command not in {"!noti", "!daily", "!help", "!clear", "!reset"}:
+        return None
+
+    if not is_dm:
+        return "This command is private. Please send it to me in Discord DM."
+
+    if command == "!help":
+        return _discord_help() if len(parts) == 1 else "usage: !help"
+
+    if command == "!clear":
+        if len(parts) != 1:
+            return "usage: !clear"
+        if conversation_id is None:
+            raise ValueError("conversation context is unavailable")
+        store.clear_conversation(conversation_id)
+        return "This DM chat context has been cleared."
+
+    if command == "!reset":
+        if len(parts) != 2 or parts[1].casefold() != "all":
+            return "usage: !reset all"
+        count = store.reset_user_conversations(user.id)
+        return f"All your saved chat contexts have been deleted ({count})."
 
     if active_mode != "agent":
         return "Personal commands are available only in agent mode."
 
-    if parts[0] == "/noti":
+    if command == "!noti":
         if len(parts) == 1:
             reminders = store.list_reminders(user.id, limit=None)
             if not reminders:
@@ -188,7 +245,7 @@ def handle_personal_command(store, user, prompt: str, default_target) -> str | N
             if reminder is None:
                 return f"Reminder not found: {parts[2]}"
             return f"Reminder removed: {reminder.id}"
-        return "usage: /noti [del <reminder_id>]"
+        return "usage: !noti [del <reminder_id>]"
 
     if len(parts) == 1:
         return build_daily_briefing(store, user.id)
@@ -216,7 +273,7 @@ def handle_personal_command(store, user, prompt: str, default_target) -> str | N
         if target is None or target.platform != "discord":
             return (
                 f"Daily briefing: {clock_time} {user.timezone}; automatic Discord "
-                "delivery is not configured. Use /brief at <HH:MM>."
+                "delivery is not configured. Use !daily at <HH:MM>."
             )
         return (
             f"Daily briefing: {clock_time} {user.timezone} via "
@@ -225,7 +282,7 @@ def handle_personal_command(store, user, prompt: str, default_target) -> str | N
     if len(parts) == 2 and action == "off":
         store.disable_external_briefing(user.id)
         return "Daily briefing disabled."
-    return "usage: /brief [at <HH:MM>|status|off]"
+    return "usage: !daily [at <HH:MM>|status|off]"
 
 
 async def deliver_discord_notifications_once(store, *, now: str | None = None) -> None:
@@ -374,10 +431,18 @@ async def on_message(message: discord.Message):
             user,
             prompt,
             default_target,
+            conversation_id=conversation.id,
+            is_dm=message.guild is None,
         )
     except ValueError as error:
         command_answer = str(error)
     if command_answer is not None:
+        normalized_command = [part.casefold() for part in prompt.split()]
+        if message.guild is None and normalized_command in (
+            ["!clear"],
+            ["!reset", "all"],
+        ):
+            reply_languages.pop(language_key, None)
         for i in range(0, len(command_answer), MAX_MESSAGE_CHARS):
             await message.channel.send(
                 command_answer[i:i + MAX_MESSAGE_CHARS],

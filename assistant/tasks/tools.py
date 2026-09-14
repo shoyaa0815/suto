@@ -20,7 +20,8 @@ PROMPT = """- Personal task tools are available only in agent mode.
   "this channel" or equivalent, pass the current_channel_id from the delivery
   context. If the user mentions a channel, pass that mentioned channel ID.
   Use list_delivery_channels only when a channel was specified by name without
-  an ID. Never invent a channel ID.
+  an ID. Channel delivery requires both the user and bot to have view and send
+  permissions. Never invent a channel ID.
 - due_at must be an ISO-8601 value with a timezone offset.
 - Never invent task or reminder IDs. Use list_tasks or list_reminders before
   completing, rescheduling, or cancelling an item when its ID is unknown.
