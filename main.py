@@ -1,22 +1,24 @@
 import sys
 
-from dotenv import load_dotenv
-
 from application.modes import PUBLIC_MODES
 
 INTERFACES = ("cli", "discord", "line")
+INTERFACE_MODES = tuple(mode for mode in PUBLIC_MODES if mode != "home")
 
 
 def _parse_args(args: list[str]) -> tuple[str, str]:
     usage = (
-        f"usage: python3 main.py <{'|'.join(PUBLIC_MODES)}> "
+        "usage: python3 main.py home | "
+        f"python3 main.py <{'|'.join(INTERFACE_MODES)}> "
         f"<{'|'.join(INTERFACES)}>"
     )
+    if args == ["home"]:
+        return "home_terminal", "home"
     if len(args) != 2:
         raise SystemExit(usage)
 
     mode, interface_name = args
-    if interface_name not in INTERFACES or mode not in PUBLIC_MODES:
+    if interface_name not in INTERFACES or mode not in INTERFACE_MODES:
         raise SystemExit(usage)
     return interface_name, mode
 
@@ -24,10 +26,17 @@ def _parse_args(args: list[str]) -> tuple[str, str]:
 def main():
     name, mode = _parse_args(sys.argv[1:])
 
-    load_dotenv()
-
     # Imported here rather than at module level so that starting one interface
     # never requires the other one's dependencies or credentials to be present.
+    if name == "home_terminal":
+        from interfaces.home_terminal import run
+
+        run(mode)
+        return
+
+    from dotenv import load_dotenv
+
+    load_dotenv()
     if name == "cli":
         from interfaces.tui import run
     elif name == "discord":

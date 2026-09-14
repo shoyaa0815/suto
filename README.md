@@ -42,6 +42,7 @@ Start Suto:
 ```bash
 venv/bin/python main.py chat cli
 venv/bin/python main.py agent cli
+venv/bin/python main.py home
 ```
 
 `chat` answers questions conversationally. `agent` keeps conversation history,
@@ -49,6 +50,9 @@ uses the local user profile, and can create, list, complete, reschedule, or
 cancel personal tasks and reminders from natural-language requests. In agent
 mode, requests such as `สรุปวันนี้ให้หน่อย` produce a daily briefing from the
 current user's open tasks and scheduled reminders.
+
+`home` is currently a silent placeholder. It exits successfully without
+launching the Textual TUI, starting an AI session, or accessing hardware.
 
 Reminders are persisted and appear in the terminal when they become due. If
 Suto was closed at that time, it reports the missed reminder on the next start.

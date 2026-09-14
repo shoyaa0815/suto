@@ -487,6 +487,8 @@ def run(mode: str):
 
     # Validate before opening the Discord connection. main.py already checks
     # this, but keeping the boundary safe also protects direct callers.
+    if mode == "home":
+        raise ValueError("home mode is available only in the plain terminal")
     get_mode_policy(mode)
     active_mode = mode
     set_debug_logs(True)

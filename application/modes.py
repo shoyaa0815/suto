@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 
 DEFAULT_MODE = "chat"
-PUBLIC_MODES = ("chat", "agent")
+PUBLIC_MODES = ("chat", "agent", "home")
 
 ASSISTANT_TOOLS = frozenset(
     {
@@ -61,6 +61,12 @@ MODE_POLICIES = {
             "action when the required tool is unavailable."
         ),
         allowed_tools=ASSISTANT_TOOLS | PERSONAL_TASK_TOOLS,
+    ),
+    "home": ModePolicy(
+        name="home",
+        description="Reserved plain-terminal home mode",
+        prompt="Home mode is reserved and has no behavior yet.",
+        allowed_tools=frozenset(),
     ),
     "developer": ModePolicy(
         name="developer",

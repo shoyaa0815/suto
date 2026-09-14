@@ -116,6 +116,8 @@ class SutoTUI(App[None]):
         session_runner: Callable[[str, Callable[[], Awaitable[str]]], Awaitable[None]] = run_session,
     ) -> None:
         super().__init__()
+        if mode == "home":
+            raise ValueError("home mode does not use the Textual TUI")
         self.register_theme(SUTO_THEME)
         self.theme = SUTO_THEME.name
         self.mode = get_mode_policy(mode).name

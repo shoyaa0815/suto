@@ -217,6 +217,13 @@ commands and run only in the bot's DM. If one is invoked in a server channel,
 the bot returns only a prompt to continue in DM. Normal mentioned requests in a
 server channel, including creating a reminder, remain available.
 
+## Home mode placeholder
+
+`home` mode is launched with `python3 main.py home` and rejects an explicit
+interface argument. It is currently a silent placeholder that exits with status
+zero. It does not import or launch Textual, start an AI session or worker,
+initialize SQLite, contact Home Assistant, or expose hardware tools.
+
 ## Local notifications and verification
 
 Lifecycle transitions to completed, failed, blocked, interrupted, cancelled or

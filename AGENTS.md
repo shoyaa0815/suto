@@ -11,6 +11,7 @@ extend it unless the user explicitly reopens that work.
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 venv/bin/python main.py <chat|agent> <cli|discord>
+venv/bin/python main.py home
 venv/bin/pytest -q
 ```
 

@@ -25,6 +25,12 @@ def test_agent_mode_has_personal_assistant_tools():
     assert "apply_workspace_patch" not in policy.allowed_tools
 
 
+def test_home_mode_is_a_reserved_placeholder_without_tools():
+    policy = get_mode_policy("home")
+
+    assert policy.allowed_tools == frozenset()
+
+
 def test_developer_mode_has_restricted_workspace_tools():
     policy = get_mode_policy("developer")
 

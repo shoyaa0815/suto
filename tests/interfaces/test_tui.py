@@ -15,6 +15,11 @@ async def idle_session(mode, read_prompt):
     await asyncio.Future()
 
 
+def test_tui_rejects_home_mode():
+    with pytest.raises(ValueError, match="does not use the Textual TUI"):
+        SutoTUI("home")
+
+
 async def test_tui_starts_black_and_focuses_prompt():
     app = SutoTUI("agent", session_runner=idle_session)
 
@@ -220,6 +225,7 @@ async def test_tui_runs_the_real_assistant_session_backend(
 
     async def fake_ask(prompt, **options):
         assert options["mode"] == mode
+        assert (options["assistant_context"] is not None) == (mode == "agent")
         calls.append((prompt, options["conversation_history"]))
         return f"answer: {prompt}"
 

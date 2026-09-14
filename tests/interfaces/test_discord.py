@@ -40,6 +40,11 @@ def test_bot_mention_is_removed_before_sending_prompt_to_ai():
     assert _without_bot_mention("<@!123> hello", 123) == "hello"
 
 
+def test_discord_rejects_home_mode_before_connecting():
+    with pytest.raises(ValueError, match="only in the plain terminal"):
+        discord_bot.run("home")
+
+
 class _Channel:
     def __init__(self, channel_id, name, bot_permissions, user_permissions):
         self.id = channel_id
