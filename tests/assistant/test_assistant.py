@@ -335,6 +335,36 @@ def test_python_calculates_relative_and_clock_reminder_times(tmp_path):
     assert next_clock.remind_at == "2026-09-13T20:30:00+07:00"
 
 
+def test_multiple_clock_reminders_are_created_atomically(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    owner = store.resolve_channel_identity(
+        "tui", "owner", timezone="Asia/Bangkok"
+    )
+
+    reminders = store.create_clock_reminders(
+        owner.id,
+        "กินยา",
+        ["09:00", "18:00"],
+        timezone="Asia/Bangkok",
+        now="2026-09-13T10:00:00+07:00",
+    )
+
+    assert [item.remind_at for item in reminders] == [
+        "2026-09-14T09:00:00+07:00",
+        "2026-09-13T18:00:00+07:00",
+    ]
+    with pytest.raises(ValueError, match="HH:MM"):
+        store.create_clock_reminders(
+            owner.id,
+            "กินยา",
+            ["07:00", "not-a-time"],
+            timezone="Asia/Bangkok",
+        )
+    assert {item.id for item in store.list_reminders(owner.id)} == {
+        item.id for item in reminders
+    }
+
+
 def test_reminder_rejects_past_time(tmp_path):
     store = JobStore(tmp_path / "suto.db")
     owner = store.resolve_channel_identity("tui", "owner")
@@ -515,3 +545,54 @@ async def test_agent_relative_reminder_tool_persists_before_success_reply(
 
     assert result.status == "completed"
     assert [item.title for item in store.list_reminders(user.id)] == ["พักสายตา"]
+
+
+async def test_agent_multiple_clock_reminders_persist_before_success_reply(
+    tmp_path, monkeypatch
+):
+    store = JobStore(tmp_path / "suto.db")
+    user = store.resolve_channel_identity("tui", "owner", timezone="Asia/Bangkok")
+    conversation = store.get_or_create_conversation(user.id, "tui", "main")
+    calls = 0
+
+    async def fake_chat(session, messages, tool_schemas, think=False):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            assert "create_reminders_at" in {
+                schema["function"]["name"] for schema in tool_schemas
+            }
+            assert "create_reminders_at once" in messages[0]["content"]
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "create_reminders_at",
+                                "arguments": {
+                                    "title": "กินยา",
+                                    "times": ["09:00", "18:00"],
+                                },
+                            }
+                        }
+                    ],
+                }
+            }
+        return {"message": {"content": "สร้างการแจ้งเตือนแล้ว 2 รายการ"}}
+
+    monkeypatch.setattr(ai.client.aiohttp, "ClientSession", FakeClientSession)
+    monkeypatch.setattr(ai.client, "chat", fake_chat)
+
+    result = await ai.execute_local_ai(
+        "เตือนให้กินยา 09:00 และ 18:00",
+        mode="agent",
+        assistant_context=AssistantContext(store, user.id, conversation.id),
+        reply_language=ai.ReplyLanguage("th", "Thai", "test"),
+    )
+
+    assert result.status == "completed"
+    reminders = store.list_reminders(user.id)
+    assert len(reminders) == 2
+    assert {item.remind_at[11:16] for item in reminders} == {"09:00", "18:00"}

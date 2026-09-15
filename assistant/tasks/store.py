@@ -290,6 +290,69 @@ class TaskStore:
             now=reference.isoformat(),
         )
 
+    def create_clock_reminders(
+        self,
+        user_id: str,
+        title: str,
+        clock_times: list[str],
+        *,
+        timezone: str = "UTC",
+        delivery_target_id: str | None = None,
+        now: str | None = None,
+    ) -> list[Reminder]:
+        """Create several next-occurrence clock reminders as one transaction."""
+        if not isinstance(clock_times, list) or not 2 <= len(clock_times) <= 20:
+            raise ValueError("times must contain between 2 and 20 clock times")
+        if len(set(clock_times)) != len(clock_times):
+            raise ValueError("times must not contain duplicates")
+        if any(
+            not isinstance(clock_time, str)
+            or not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", clock_time)
+            for clock_time in clock_times
+        ):
+            raise ValueError("each time must use 24-hour HH:MM format")
+        try:
+            zone = ZoneInfo(timezone)
+        except ZoneInfoNotFoundError as error:
+            raise ValueError(f"unknown timezone: {timezone}") from error
+
+        reference = _reference_time(now).astimezone(zone)
+        reminder_times = []
+        for clock_time in clock_times:
+            hour, minute = (int(part) for part in clock_time.split(":"))
+            remind_at = reference.replace(
+                hour=hour, minute=minute, second=0, microsecond=0
+            )
+            if remind_at <= reference:
+                remind_at += timedelta(days=1)
+            reminder_times.append(remind_at.isoformat())
+
+        clean_title = _text(title, "reminder title", 500)
+        created_at = _now()
+        reminder_ids = [f"rem_{uuid4().hex[:10]}" for _ in clock_times]
+        with self._connect() as db:
+            if delivery_target_id is not None:
+                target = db.execute(
+                    "SELECT 1 FROM delivery_targets WHERE id=? AND user_id=?",
+                    (delivery_target_id, user_id),
+                ).fetchone()
+                if target is None:
+                    raise ValueError("delivery target does not belong to the user")
+            for reminder_id, remind_at in zip(reminder_ids, reminder_times, strict=True):
+                db.execute(
+                    "INSERT INTO reminders(id,user_id,title,remind_at,timezone,status,"
+                    "channel_identity_id,created_at,updated_at,delivery_target_id) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (reminder_id, user_id, clean_title, remind_at, timezone, "scheduled",
+                     None, created_at, created_at, delivery_target_id),
+                )
+                if delivery_target_id is not None:
+                    db.execute(
+                        "INSERT INTO reminder_deliveries VALUES (?,?,?,?,?,?)",
+                        (reminder_id, "pending", 0, None, None, created_at),
+                    )
+        return [self.get_reminder(user_id, reminder_id) for reminder_id in reminder_ids]
+
     def get_reminder(self, user_id: str, reminder_id: str) -> Reminder | None:
         with self._connect() as db:
             row = db.execute(

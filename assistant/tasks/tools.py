@@ -12,6 +12,10 @@ PROMPT = """- Personal task tools are available only in agent mode.
 - For reminders at a clock time like "21:30", call create_reminder_at and pass
   only that 24-hour HH:MM value. Python selects the next occurrence in the
   user's timezone. Never calculate or invent a calendar date for these tools.
+- If the user requests two or more distinct clock times in one reminder request,
+  call create_reminders_at once with every time in `times`. It creates all of
+  them together, or creates none if any time is invalid; do not omit a stated
+  time or substitute multiple single-reminder calls.
 - On Discord, omit channel_id for a private DM reminder. If the user says
   "this channel" or equivalent, pass the current_channel_id from the delivery
   context. If the user mentions a channel, pass that mentioned channel ID.
@@ -25,7 +29,7 @@ PROMPT = """- Personal task tools are available only in agent mode.
   from the current user's saved data."""
 
 REMINDER_CREATION_TOOL_NAMES = frozenset(
-    {"create_reminder_in", "create_reminder_at"}
+    {"create_reminder_in", "create_reminder_at", "create_reminders_at"}
 )
 
 
@@ -119,6 +123,29 @@ SCHEMAS = [
             },
         },
         ["title", "time"],
+    ),
+    _schema(
+        "create_reminders_at",
+        "Create reminders for every listed local clock time atomically. Use when the user specifies two or more times.",
+        {
+            "title": {"type": "string"},
+            "times": {
+                "type": "array",
+                "description": "Every requested 24-hour local time in exact HH:MM format.",
+                "items": {
+                    "type": "string",
+                    "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$",
+                },
+                "minItems": 2,
+                "maxItems": 20,
+                "uniqueItems": True,
+            },
+            "channel_id": {
+                "type": "string",
+                "description": "Optional accessible Discord channel ID. Omit for the default private destination.",
+            },
+        },
+        ["title", "times"],
     ),
     _schema("list_reminders", "List the current user's scheduled reminders."),
     _schema(
@@ -221,6 +248,22 @@ def build_task_tools(context: AssistantContext) -> dict:
                 user_id,
                 title,
                 time,
+                timezone=user.timezone,
+                delivery_target_id=delivery_target_id(channel_id),
+            )
+        )
+
+    def create_reminders_at(
+        title: str,
+        times: list[str],
+        channel_id: str | None = None,
+    ):
+        user = store.get_user(user_id)
+        return _json(
+            store.create_clock_reminders(
+                user_id,
+                title,
+                times,
                 timezone=user.timezone,
                 delivery_target_id=delivery_target_id(channel_id),
             )

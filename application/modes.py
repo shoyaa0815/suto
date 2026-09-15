@@ -22,6 +22,7 @@ PERSONAL_TASK_TOOLS = frozenset(
         "complete_task",
         "create_reminder_in",
         "create_reminder_at",
+        "create_reminders_at",
         "list_reminders",
         "reschedule_reminder",
         "cancel_reminder",
