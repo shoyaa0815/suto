@@ -500,3 +500,42 @@ class TaskStore:
                     (_now(), reminder_id),
                 )
         return self.get_reminder(user_id, reminder_id) if cursor.rowcount else None
+
+    def cancel_reminder_by_title(
+        self,
+        user_id: str,
+        title: str,
+    ) -> tuple[Reminder | None, list[Reminder]]:
+        """Cancel one exact title match, leaving ambiguous matches unchanged."""
+        wanted = title.strip().casefold()
+        if not wanted:
+            return None, []
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute(
+                "SELECT * FROM reminders WHERE user_id=? AND status='scheduled' "
+                "ORDER BY remind_at",
+                (user_id,),
+            ).fetchall()
+            matches = [
+                self._to_reminder(row)
+                for row in rows
+                if row["title"].strip().casefold() == wanted
+            ]
+            if len(matches) != 1:
+                return None, matches
+            reminder = matches[0]
+            now = _now()
+            cursor = db.execute(
+                "UPDATE reminders SET status='cancelled',updated_at=? "
+                "WHERE id=? AND user_id=? AND status='scheduled'",
+                (now, reminder.id, user_id),
+            )
+            if cursor.rowcount != 1:
+                return None, matches
+            db.execute(
+                "UPDATE reminder_deliveries SET status='failed',retry_at=NULL,"
+                "last_error='cancelled',updated_at=? WHERE reminder_id=?",
+                (now, reminder.id),
+            )
+        return self.get_reminder(user_id, reminder.id), matches

@@ -5,6 +5,7 @@ import os
 from collections.abc import Awaitable, Callable
 
 from ai import ask_local_ai
+from application.configuration import load_settings
 from assistant import AssistantContext
 from capabilities.developer.tui_cli import (
     TERMINAL_JOB_STATUSES,
@@ -38,7 +39,6 @@ from interfaces.tui.language import (
     choose_reply_language_async as _choose_reply_language_async,
 )
 from interfaces.tui.operations import (
-    notify_daily_briefing,
     notify_personal_reminders,
     notify_tui,
 )
@@ -96,12 +96,19 @@ async def run_session(
     previous_language_code: str | None = None
     database_path = os.environ.get("SUTO_DB_PATH", "data/suto.db")
     store = JobStore(database_path)
+    profile = load_settings().profile
     user = store.resolve_channel_identity(
         "tui",
         "local",
-        display_name=os.environ.get("SUTO_USER_NAME", "User"),
-        timezone=os.environ.get("SUTO_TIMEZONE", "UTC"),
-        locale=os.environ.get("SUTO_LOCALE", "th"),
+        display_name=profile.display_name,
+        timezone=profile.timezone,
+        locale=profile.locale,
+    )
+    user = store.apply_profile_settings(
+        user.id,
+        display_name=profile.display_name,
+        timezone=profile.timezone,
+        locale=profile.locale,
     )
     conversation = store.get_or_create_conversation(user.id, "tui", "local")
     worker = AutomationWorker(store, JobRunner(store))
@@ -113,8 +120,7 @@ async def run_session(
         else None
     )
     reminder_task = asyncio.create_task(notify_personal_reminders(store, user.id))
-    briefing_task = asyncio.create_task(notify_daily_briefing(store, user.id))
-    background_tasks = [briefing_task, reminder_task]
+    background_tasks = [reminder_task]
     if notification_task is not None:
         background_tasks.append(notification_task)
     print("Type /help for commands")

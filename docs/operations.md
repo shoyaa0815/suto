@@ -1,5 +1,23 @@
 # Operations and advanced features
 
+## Host-managed settings
+
+Non-secret local profile and new-user defaults live in `config.yaml`; secrets
+remain in `.env`. Run `venv/bin/python main.py settings`, use the arrow keys and
+Enter to edit fields, then select Save and press Enter to validate, persist
+atomically, and exit. Unsaved exit requires confirmation. Restart Suto after
+saving so long-lived CLI and Discord processes use the new values. Chat clients
+cannot mutate this host configuration. Discord applies timezone and locale only when
+creating a new identity; it does not overwrite existing Discord profiles.
+Existing reminder timestamps are not rewritten; newly created reminders use
+the user's stored timezone.
+
+YAML profile values take precedence over the legacy `SUTO_TIMEZONE`,
+`SUTO_LOCALE`, and `SUTO_USER_NAME` environment defaults. Unknown sections,
+unknown profile keys, unsupported config versions, invalid timezones, and
+non-mapping YAML fail closed. `config.yaml` is local and ignored by Git;
+`config.example.yaml` documents the versioned schema.
+
 ## Database and worker lifecycle
 
 The unversioned Phase 0–7 database is schema 0. Startup migrates to version 1
@@ -202,17 +220,16 @@ and runtime are in scope for the approved command.
 
 ## Discord personal delivery
 
-Discord agent mode runs a persistent delivery loop for reminders and scheduled
-daily briefings. Briefings default to the user's DM, use the profile timezone,
-and are claimed once per local date. Failed sends retry up to three attempts;
+Discord agent mode runs a persistent delivery loop for reminders. Failed sends
+retry up to three attempts;
 abandoned in-flight claims become eligible again after five minutes. The worker
-revalidates the current reminder or briefing schedule immediately before each
-send so cancelled, rescheduled, or disabled items are not delivered.
+revalidates the current reminder immediately before each send so cancelled or
+rescheduled items are not delivered.
 Server-channel reminders are available only when both the requester and bot can
 view and send to the target channel. Those permissions are checked when the
 target is selected and again immediately before delivery.
 
-`!noti`, `!daily`, `!help`, `!clear`, and `!reset all` are private Discord
+`!notification`, `!help`, `!clear`, and `!reset all` are private Discord
 commands and run only in the bot's DM. If one is invoked in a server channel,
 the bot returns only a prompt to continue in DM. Normal mentioned requests in a
 server channel, including creating a reminder, remain available.

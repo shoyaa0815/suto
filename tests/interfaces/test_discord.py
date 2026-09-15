@@ -3,9 +3,11 @@ from types import SimpleNamespace
 import pytest
 
 import interfaces.discord.bot as discord_bot
+from application.configuration import ProfileSettings
 from assistant import DeliveryTargetContext
 from interfaces.discord.bot import (
     _discord_delivery_context,
+    _resolve_discord_user,
     _send_to_target,
     _without_bot_mention,
     deliver_discord_notifications_once,
@@ -40,9 +42,87 @@ def test_bot_mention_is_removed_before_sending_prompt_to_ai():
     assert _without_bot_mention("<@!123> hello", 123) == "hello"
 
 
+def test_discord_identity_preserves_existing_user_profile(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    existing = store.resolve_channel_identity(
+        "discord",
+        "10",
+        display_name="Old",
+        timezone="UTC",
+        locale="en",
+    )
+    message = _message(guild=None)
+
+    user = _resolve_discord_user(
+        store,
+        message,
+        ProfileSettings(
+            timezone="Asia/Bangkok",
+            locale="th",
+            display_name="Suto Owner",
+        ),
+    )
+
+    assert user.id == existing.id
+    assert user.display_name == "Old"
+    assert user.timezone == "UTC"
+    assert user.locale == "en"
+
+
+def test_new_discord_identity_uses_author_name_and_profile_defaults(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+
+    user = _resolve_discord_user(
+        store,
+        _message(guild=None),
+        ProfileSettings(
+            timezone="Asia/Bangkok",
+            locale="th",
+            display_name="Suto Owner",
+        ),
+    )
+
+    assert user.display_name == "Owner"
+    assert user.timezone == "Asia/Bangkok"
+    assert user.locale == "th"
+
+
 def test_discord_rejects_home_mode_before_connecting():
     with pytest.raises(ValueError, match="only in the plain terminal"):
         discord_bot.run("home")
+
+
+def test_discord_startup_does_not_overwrite_existing_identity(
+    tmp_path,
+    monkeypatch,
+):
+    store = JobStore(tmp_path / "suto.db")
+    user = store.resolve_channel_identity(
+        "discord",
+        "10",
+        display_name="Old",
+        timezone="UTC",
+        locale="en",
+    )
+    (tmp_path / "config.yaml").write_text(
+        "version: 1\nprofile:\n  timezone: Asia/Bangkok\n"
+        "  locale: th\n  display_name: Suto Owner\n",
+        encoding="utf-8",
+    )
+    started = []
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DISCORD_TOKEN", "test-token")
+    monkeypatch.setattr(discord_bot, "assistant_store", store)
+    monkeypatch.setattr(discord_bot, "configured_profile", None)
+    monkeypatch.setattr(discord_bot.client, "run", started.append)
+
+    discord_bot.run("agent")
+
+    unchanged = store.get_user(user.id)
+    assert unchanged.display_name == "Old"
+    assert unchanged.timezone == "UTC"
+    assert unchanged.locale == "en"
+    assert started == ["test-token"]
 
 
 class _Channel:
@@ -162,7 +242,9 @@ def _discord_user(tmp_path):
     return store, user, target
 
 
-def test_discord_noti_command_lists_and_cancels_reminders(tmp_path, monkeypatch):
+def test_discord_notification_lists_and_cancels_one_reminder_by_name(
+    tmp_path, monkeypatch
+):
     store, user, target = _discord_user(tmp_path)
     monkeypatch.setattr(discord_bot, "active_mode", "agent")
     conversation = store.get_or_create_conversation(user.id, "discord", "10")
@@ -176,7 +258,7 @@ def test_discord_noti_command_lists_and_cancels_reminders(tmp_path, monkeypatch)
     listing = handle_personal_command(
         store,
         user,
-        "!noti",
+        "!notification",
         target,
         conversation_id=conversation.id,
         is_dm=True,
@@ -186,16 +268,16 @@ def test_discord_noti_command_lists_and_cancels_reminders(tmp_path, monkeypatch)
     assert handle_personal_command(
         store,
         user,
-        f"!noti del {reminder.id}",
+        "!notification remove กินยา",
         target,
         conversation_id=conversation.id,
         is_dm=True,
-    ) == f"Reminder removed: {reminder.id}"
+    ) == "Reminder removed: กินยา"
     assert (
         handle_personal_command(
             store,
             user,
-            "!noti",
+            "!notification",
             target,
             conversation_id=conversation.id,
             is_dm=True,
@@ -204,47 +286,27 @@ def test_discord_noti_command_lists_and_cancels_reminders(tmp_path, monkeypatch)
     )
 
 
-def test_discord_daily_command_manages_dm_schedule(tmp_path, monkeypatch):
+def test_discord_notification_does_not_remove_duplicate_names(tmp_path, monkeypatch):
     store, user, target = _discord_user(tmp_path)
     monkeypatch.setattr(discord_bot, "active_mode", "agent")
     conversation = store.get_or_create_conversation(user.id, "discord", "10")
 
-    result = handle_personal_command(
-        store,
-        user,
-        "!daily at 08:30",
-        target,
-        conversation_id=conversation.id,
-        is_dm=True,
+    first = store.create_reminder(
+        user.id, "กินยา", "2099-09-13T09:00:00+07:00", timezone="Asia/Bangkok"
     )
-    preferences = store.user_preferences(user.id)
+    second = store.create_reminder(
+        user.id, "กินยา", "2099-09-13T12:00:00+07:00", timezone="Asia/Bangkok"
+    )
 
-    assert "Discord DM" in result
-    assert preferences["briefing_time"] == "08:30"
-    delivery_target = store.get_delivery_target(
-        user.id, preferences["briefing_delivery_target_id"]
+    result = handle_personal_command(
+        store, user, "!notification remove กินยา", target,
+        conversation_id=conversation.id, is_dm=True,
     )
-    assert delivery_target.destination_id == "10"
-    assert "08:30" in handle_personal_command(
-        store,
-        user,
-        "!daily status",
-        target,
-        conversation_id=conversation.id,
-        is_dm=True,
-    )
-    assert (
-        handle_personal_command(
-            store,
-            user,
-            "!daily off",
-            target,
-            conversation_id=conversation.id,
-            is_dm=True,
-        )
-        == "Daily briefing disabled."
-    )
-    assert store.user_preferences(user.id) == {}
+
+    assert "Multiple pending reminders" in result
+    assert first.id in result
+    assert second.id in result
+    assert [item.id for item in store.list_reminders(user.id)] == [first.id, second.id]
 
 
 def test_private_commands_are_rejected_in_guild_without_reading_or_mutating_data(
@@ -262,7 +324,7 @@ def test_private_commands_are_rejected_in_guild_without_reading_or_mutating_data
         timezone="Asia/Bangkok",
     )
 
-    for prompt in ("!noti", "!daily", "!help", "!clear", "!reset all"):
+    for prompt in ("!notification", "!help", "!clear", "!reset all"):
         result = handle_personal_command(
             store,
             user,
@@ -312,8 +374,10 @@ def test_discord_dm_help_clear_and_reset_are_user_scoped(tmp_path, monkeypatch):
     )
     assert all(
         command in help_text
-        for command in ("!noti", "!daily", "!clear", "!reset all")
+        for command in ("!notification", "!clear", "!reset all")
     )
+    assert "!noti [" not in help_text
+    assert "!daily" not in help_text
 
     assert "cleared" in handle_personal_command(
         store,
@@ -356,23 +420,11 @@ def test_discord_dm_help_clear_and_reset_are_user_scoped(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_discord_scheduled_briefing_is_sent_once(tmp_path, monkeypatch):
-    store, user, target_context = _discord_user(tmp_path)
-    target = store.get_or_create_delivery_target(
-        user.id,
-        target_context.platform,
-        target_context.destination_id,
-        target_context.destination_type,
-        target_context.display_name,
-        requester_id=target_context.requester_id,
-    )
+async def test_discord_delivery_ignores_legacy_daily_briefing_preferences(
+    tmp_path, monkeypatch
+):
+    store, user, _ = _discord_user(tmp_path)
     store.set_user_preference(user.id, "briefing_time", "08:30")
-    store.set_user_preference(user.id, "briefing_delivery_target_id", target.id)
-    store.create_task(
-        user.id,
-        "ส่งรายงาน",
-        due_at="2026-09-13T10:00:00+07:00",
-    )
     sent = []
 
     async def fake_send(delivery, content):
@@ -384,7 +436,4 @@ async def test_discord_scheduled_briefing_is_sent_once(tmp_path, monkeypatch):
     await deliver_discord_notifications_once(store, now=now)
     await deliver_discord_notifications_once(store, now=now)
 
-    assert len(sent) == 1
-    assert sent[0][0] == "10"
-    assert "สรุปประจำวัน" in sent[0][1]
-    assert "ส่งรายงาน" in sent[0][1]
+    assert sent == []

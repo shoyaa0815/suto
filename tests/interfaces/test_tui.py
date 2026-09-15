@@ -4,7 +4,7 @@ import pytest
 from textual.containers import Horizontal
 from textual.widgets import Input, RichLog, Static
 
-from interfaces.tui.app import SettingsScreen, SutoTUI
+from interfaces.tui.app import SutoTUI
 from interfaces.tui import backend
 from interfaces.tui.output import write
 from interfaces.tui.operations import print_due_reminders, print_pending_reminders
@@ -85,57 +85,9 @@ async def test_tui_shows_spinner_while_request_is_running():
         release.set()
 
 
-async def test_setting_modal_saves_profile_timezone(tmp_path, monkeypatch):
-    database_path = tmp_path / "suto.db"
-    store = JobStore(database_path)
-    user = store.resolve_channel_identity("tui", "local", timezone="UTC")
-    monkeypatch.setenv("SUTO_DB_PATH", str(database_path))
-    app = SutoTUI("agent", session_runner=idle_session)
-
-    async with app.run_test(size=(100, 30)) as pilot:
-        prompt = app.query_one("#prompt", Input)
-        prompt.value = "/setting"
-        await pilot.press("enter")
-        await pilot.pause()
-
-        assert isinstance(app.screen, SettingsScreen)
-        timezone = app.screen.query_one("#settings-timezone", Input)
-        assert timezone.value == "UTC"
-        timezone.value = "Asia/Bangkok"
-        await pilot.click("#settings-save")
-        await pilot.pause()
-
-        assert not isinstance(app.screen, SettingsScreen)
-        assert JobStore(database_path).get_user(user.id).timezone == "Asia/Bangkok"
-        lines = app.query_one("#terminal", RichLog).lines
-        assert any("Time zone saved: Asia/Bangkok" in line.text for line in lines)
-
-
-async def test_setting_modal_rejects_unknown_timezone(tmp_path, monkeypatch):
-    database_path = tmp_path / "suto.db"
-    store = JobStore(database_path)
-    user = store.resolve_channel_identity("tui", "local", timezone="UTC")
-    monkeypatch.setenv("SUTO_DB_PATH", str(database_path))
-    app = SutoTUI("agent", session_runner=idle_session)
-
-    async with app.run_test(size=(100, 30)) as pilot:
-        prompt = app.query_one("#prompt", Input)
-        prompt.value = "/setting"
-        await pilot.press("enter")
-        await pilot.pause()
-
-        timezone = app.screen.query_one("#settings-timezone", Input)
-        timezone.value = "Mars/Olympus"
-        await pilot.press("enter")
-        await pilot.pause()
-
-        assert isinstance(app.screen, SettingsScreen)
-        error = app.screen.query_one("#settings-error", Static).render()
-        assert "unknown timezone" in error.plain
-        assert JobStore(database_path).get_user(user.id).timezone == "UTC"
-
-
-async def test_session_exposes_only_help_noti_and_exit(tmp_path, monkeypatch, capsys):
+async def test_session_exposes_notification_command_and_removes_by_name(
+    tmp_path, monkeypatch, capsys
+):
     database_path = tmp_path / "suto.db"
     store = JobStore(database_path)
     user = store.resolve_channel_identity("tui", "local")
@@ -150,14 +102,13 @@ async def test_session_exposes_only_help_noti_and_exit(tmp_path, monkeypatch, ca
             "/jobs",
             "/quit",
             "/brief",
+            "/setting",
             "/daily",
-            "/daily at 08:30",
-            "/daily status",
-            "/daily off",
             "/noti",
-            "/noti del resaldfj",
-            f"/noti del {reminder.id}",
-            "/noti",
+            "/notification",
+            "/notification remove ไม่มีชื่อนี้",
+            "/notification remove นัดหมอ",
+            "/notification",
             "/help",
             "/exit",
         ]
@@ -173,22 +124,51 @@ async def test_session_exposes_only_help_noti_and_exit(tmp_path, monkeypatch, ca
     assert "Unknown command: /jobs" in output
     assert "Unknown command: /quit" in output
     assert "Unknown command: /brief" in output
-    assert "สรุปประจำวัน" in output
-    assert "Daily briefing scheduled for 08:30" in output
-    assert "Daily briefing: 08:30" in output
-    assert "Daily briefing disabled." in output
+    assert "Unknown command: /setting" in output
+    assert "Unknown command: /daily" in output
+    assert "Unknown command: /noti" in output
     assert "Pending reminders:" in output
     assert reminder.id in output
     assert "นัดหมอ" in output
-    assert "Reminder not found: resaldfj" in output
-    assert f"Reminder removed: {reminder.id}" in output
+    assert "Reminder not found: ไม่มีชื่อนี้" in output
+    assert "Reminder removed: นัดหมอ" in output
     assert "No pending reminders." in output
     assert store.get_reminder(user.id, reminder.id).status == "cancelled"
     assert "  /help" in output
-    assert "  /noti" in output
-    assert "  /daily" in output
+    assert "  /notification" in output
+    assert "  /notification remove <name>" in output
+    assert "  /daily" not in output
     assert "  /exit" in output
     assert "bye" in output
+
+
+async def test_cli_identity_uses_shared_yaml_profile(tmp_path, monkeypatch):
+    database_path = tmp_path / "suto.db"
+    store = JobStore(database_path)
+    existing = store.resolve_channel_identity(
+        "tui",
+        "local",
+        display_name="Old",
+        timezone="UTC",
+        locale="en",
+    )
+    (tmp_path / "config.yaml").write_text(
+        "version: 1\nprofile:\n  timezone: Asia/Bangkok\n"
+        "  locale: th\n  display_name: Suto Owner\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SUTO_DB_PATH", str(database_path))
+
+    async def read_prompt():
+        return "/exit"
+
+    await backend.run_session("agent", read_prompt)
+
+    user = JobStore(database_path).get_user(existing.id)
+    assert user.display_name == "Suto Owner"
+    assert user.timezone == "Asia/Bangkok"
+    assert user.locale == "th"
 
 
 def test_overdue_reminder_prints_original_time_and_is_not_repeated(

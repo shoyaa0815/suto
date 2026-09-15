@@ -17,9 +17,6 @@ TOOL_ACTIVITY_NAMES = {
     "list_reminders": "checking reminders",
     "reschedule_reminder": "rescheduling a reminder",
     "cancel_reminder": "cancelling a reminder",
-    "get_daily_briefing": "preparing the daily briefing",
-    "set_daily_briefing": "scheduling the daily briefing",
-    "disable_daily_briefing": "turning off the daily briefing",
 }
 
 

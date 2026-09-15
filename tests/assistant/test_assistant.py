@@ -1,3 +1,7 @@
+import sqlite3
+import threading
+from contextlib import contextmanager
+
 import ai
 import pytest
 from assistant import AssistantContext, DeliveryTargetContext
@@ -119,6 +123,71 @@ def test_tasks_and_reminders_are_owned_by_one_user(tmp_path):
     assert [item.id for item in store.list_reminders(owner.id)] == [reminder.id]
     assert store.cancel_reminder(other.id, reminder.id) is None
     assert store.cancel_reminder(owner.id, reminder.id).status == "cancelled"
+
+
+def test_cancel_reminder_by_title_waits_for_writer_before_checking_duplicates(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "suto.db"
+    store = JobStore(path)
+    user = store.resolve_channel_identity("tui", "local")
+    first = store.create_reminder(
+        user.id,
+        "same",
+        "2099-01-01T01:00:00+00:00",
+    )
+    writer = sqlite3.connect(path, timeout=10)
+    writer.execute("BEGIN IMMEDIATE")
+    writer.execute(
+        "INSERT INTO reminders(id,user_id,title,remind_at,timezone,status,"
+        "channel_identity_id,created_at,updated_at,delivery_target_id) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (
+            "rem_concurrent",
+            user.id,
+            "same",
+            "2099-01-01T02:00:00+00:00",
+            "UTC",
+            "scheduled",
+            None,
+            "2026-09-15T00:00:00+00:00",
+            "2026-09-15T00:00:00+00:00",
+            None,
+        ),
+    )
+
+    statement_started = threading.Event()
+    original_connect = store._connect
+
+    @contextmanager
+    def traced_connect():
+        with original_connect() as db:
+            db.set_trace_callback(
+                lambda sql: statement_started.set()
+                if sql.startswith(("BEGIN IMMEDIATE", "SELECT * FROM reminders"))
+                else None
+            )
+            yield db
+
+    monkeypatch.setattr(store, "_connect", traced_connect)
+    outcome = {}
+
+    def cancel():
+        outcome["value"] = store.cancel_reminder_by_title(user.id, "same")
+
+    worker = threading.Thread(target=cancel)
+    worker.start()
+    assert statement_started.wait(timeout=2)
+    writer.commit()
+    writer.close()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    removed, matches = outcome["value"]
+    assert removed is None
+    assert len(matches) == 2
+    assert store.get_reminder(user.id, first.id).status == "scheduled"
+    assert store.get_reminder(user.id, "rem_concurrent").status == "scheduled"
 
 
 def test_due_reminders_are_claimed_once_and_future_reminders_are_left_scheduled(tmp_path):
@@ -329,6 +398,12 @@ async def test_agent_can_create_task_for_current_user(tmp_path, monkeypatch):
         timezone="Asia/Bangkok",
     )
     store.set_user_preference(user.id, "briefing", "concise")
+    store.set_user_preference(user.id, "briefing_time", "08:30")
+    store.set_user_preference(
+        user.id,
+        "briefing_delivery_target_id",
+        "target_old",
+    )
     conversation = store.get_or_create_conversation(user.id, "tui", "main")
     calls = 0
     observed_tools = set()
@@ -340,6 +415,8 @@ async def test_agent_can_create_task_for_current_user(tmp_path, monkeypatch):
             assert '"display_name": "Suto Owner"' in messages[0]["content"]
             assert '"timezone": "Asia/Bangkok"' in messages[0]["content"]
             assert '"briefing": "concise"' in messages[0]["content"]
+            assert "briefing_time" not in messages[0]["content"]
+            assert "briefing_delivery_target_id" not in messages[0]["content"]
         observed_tools.update(item["function"]["name"] for item in tool_schemas)
         if calls == 1:
             return {
@@ -372,50 +449,6 @@ async def test_agent_can_create_task_for_current_user(tmp_path, monkeypatch):
     assert "create_task" in observed_tools
     assert "apply_workspace_patch" not in observed_tools
     assert [task.title for task in store.list_tasks(user.id)] == ["Call the customer"]
-
-
-async def test_agent_can_request_daily_briefing(tmp_path, monkeypatch):
-    store = JobStore(tmp_path / "suto.db")
-    user = store.resolve_channel_identity(
-        "tui", "owner", timezone="Asia/Bangkok", locale="th"
-    )
-    conversation = store.get_or_create_conversation(user.id, "tui", "main")
-    calls = 0
-
-    async def fake_chat(session, messages, tool_schemas, think=False):
-        nonlocal calls
-        calls += 1
-        names = {item["function"]["name"] for item in tool_schemas}
-        assert "get_daily_briefing" in names
-        if calls == 1:
-            return {
-                "message": {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "function": {
-                                "name": "get_daily_briefing",
-                                "arguments": {},
-                            }
-                        }
-                    ],
-                }
-            }
-        assert "สรุปประจำวัน" in messages[-1]["content"]
-        return {"message": {"content": "วันนี้ยังไม่มีงานครับ"}}
-
-    monkeypatch.setattr(ai.client.aiohttp, "ClientSession", FakeClientSession)
-    monkeypatch.setattr(ai.client, "chat", fake_chat)
-
-    answer = await ai.ask_local_ai(
-        "สรุปวันนี้ให้หน่อย",
-        mode="agent",
-        assistant_context=AssistantContext(store, user.id, conversation.id),
-        reply_language=ai.ReplyLanguage("th", "Thai", "test"),
-    )
-
-    assert answer == "วันนี้ยังไม่มีงานครับ"
 
 
 async def test_agent_cannot_claim_uncreated_reminder(tmp_path, monkeypatch):

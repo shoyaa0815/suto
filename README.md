@@ -13,15 +13,23 @@ python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 ```
 
-Create a `.env` file and configure an AI provider. Example for Ollama:
+Copy `config.example.yaml` to `config.yaml` and set the non-secret local profile
+and defaults used when Discord users are first seen:
+
+```yaml
+version: 1
+profile:
+  timezone: Asia/Bangkok
+  locale: th
+  display_name: Your name
+```
+
+Create a `.env` file for provider configuration and secrets. Example for Ollama:
 
 ```dotenv
 AI_PROVIDER=ollama
 AI_BASE_URL=http://localhost:11434
 AI_MODEL=qwen3.5:9b
-SUTO_USER_NAME=Your name
-SUTO_TIMEZONE=Asia/Bangkok
-SUTO_LOCALE=th
 ```
 
 Example for OpenAI:
@@ -43,16 +51,28 @@ Start Suto:
 venv/bin/python main.py chat cli
 venv/bin/python main.py agent cli
 venv/bin/python main.py home
+venv/bin/python main.py settings
 ```
 
 `chat` answers questions conversationally. `agent` keeps conversation history,
 uses the local user profile, and can create, list, complete, reschedule, or
 cancel personal tasks and reminders from natural-language requests. In agent
-mode, requests such as `สรุปวันนี้ให้หน่อย` produce a daily briefing from the
-current user's open tasks and scheduled reminders.
+mode, requests such as `สรุปวันนี้ให้หน่อย` can be answered from the current
+user's open tasks and scheduled reminders.
 
 `home` is currently a silent placeholder. It exits successfully without
 launching the Textual TUI, starting an AI session, or accessing hardware.
+
+`settings` opens a keyboard-driven terminal editor for `config.yaml`. Use the
+arrow keys to select a field and Enter to edit it; select Save and press Enter
+to validate, persist atomically, and exit. Esc cancels field editing, and
+discarding staged changes requires confirmation. Restart Suto after saving.
+Discord and the chat CLI read these values but cannot change them. Discord uses
+timezone and locale only as defaults for new users and keeps each user's
+Discord display name and existing profile isolated.
+Legacy `SUTO_TIMEZONE`, `SUTO_LOCALE`, and `SUTO_USER_NAME` environment values
+remain fallbacks when the corresponding YAML value is absent. Keep API keys and
+platform tokens in `.env`, never in `config.yaml`.
 
 Reminders are persisted and appear in the terminal when they become due. If
 Suto was closed at that time, it reports the missed reminder on the next start.
@@ -66,21 +86,16 @@ channel. These permissions are checked again immediately before delivery.
 Discord reminders are retried while the bot is running and remain persisted
 across restarts.
 
-Discord agent mode also supports `!noti`, `!noti del <reminder_id>`, `!daily`,
-`!daily at <HH:MM>`, `!daily status`, and `!daily off` in the bot's DM. Discord
-also provides `!help`, `!clear`, and `!reset all` there. These private commands
-are rejected in server channels.
-Scheduled Discord briefings are delivered by DM in the profile timezone. A
-briefing missed while the bot was offline is delivered once after restart, and
-transient send failures are retried.
+Discord agent mode also supports `!notification` and
+`!notification remove <name>` in the bot's DM. Discord also provides `!help`,
+`!clear`, and `!reset all` there. These private commands are rejected in server
+channels. If more than one pending reminder has the same name, none is removed
+and the matching reminders are listed with their IDs and times.
 
-The terminal interface exposes `/help`, `/setting` for profile settings,
-`/noti` for pending reminders, `/noti del <reminder_id>` to remove one, and
-`/exit`. Use `/daily` for an immediate briefing, `/daily at 08:30` to deliver
-one automatically each day in the profile timezone, `/daily status` to inspect
-the schedule, and `/daily off` to disable it. Automatic delivery occurs while
-the CLI is running; if it starts after the configured time, that day's briefing
-is delivered once. Personal-service integrations are under active development.
+The terminal interface exposes `/help`, `/notification` for pending reminders,
+`/notification remove <name>` to remove one by name, and `/exit`. If a name is
+ambiguous, no reminder is removed and the matches are listed. Personal-service
+integrations are under active development.
 
 ## Parked developer capability
 

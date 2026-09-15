@@ -3,10 +3,6 @@ import re
 from dataclasses import asdict
 
 from assistant.context import AssistantContext
-from assistant.briefing import (
-    build_daily_briefing,
-    set_daily_briefing_time,
-)
 
 
 PROMPT = """- Personal task tools are available only in agent mode.
@@ -25,9 +21,8 @@ PROMPT = """- Personal task tools are available only in agent mode.
 - due_at must be an ISO-8601 value with a timezone offset.
 - Never invent task or reminder IDs. Use list_tasks or list_reminders before
   completing, rescheduling, or cancelling an item when its ID is unknown.
-- When the user asks for today's summary or daily briefing, call
-  get_daily_briefing. Use set_daily_briefing for a recurring briefing at a
-  local HH:MM time, and disable_daily_briefing to turn it off."""
+- When the user asks for a summary, use list_tasks and list_reminders to answer
+  from the current user's saved data."""
 
 REMINDER_CREATION_TOOL_NAMES = frozenset(
     {"create_reminder_in", "create_reminder_at"}
@@ -146,26 +141,6 @@ SCHEMAS = [
         {"reminder_id": {"type": "string"}},
         ["reminder_id"],
     ),
-    _schema(
-        "get_daily_briefing",
-        "Summarize the current user's open tasks and scheduled reminders for today.",
-    ),
-    _schema(
-        "set_daily_briefing",
-        "Schedule one automatic daily briefing at a local clock time.",
-        {
-            "time": {
-                "type": "string",
-                "description": "24-hour local time in exact HH:MM format.",
-                "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$",
-            }
-        },
-        ["time"],
-    ),
-    _schema(
-        "disable_daily_briefing",
-        "Turn off the current user's automatic daily briefing.",
-    ),
 ]
 
 TOOL_NAMES = frozenset(schema["function"]["name"] for schema in SCHEMAS)
@@ -275,26 +250,6 @@ def build_task_tools(context: AssistantContext) -> dict:
     def cancel_reminder(reminder_id: str):
         reminder = store.cancel_reminder(user_id, reminder_id)
         return _json(reminder) if reminder else f"reminder not found or inactive: {reminder_id}"
-
-    def get_daily_briefing():
-        return build_daily_briefing(store, user_id)
-
-    def set_daily_briefing(time: str):
-        user = store.get_user(user_id)
-        target_id = delivery_target_id()
-        clock_time = (
-            store.configure_external_briefing(user_id, time, target_id)
-            if target_id is not None
-            else set_daily_briefing_time(store, user_id, time)
-        )
-        return (
-            f"daily briefing scheduled for {clock_time} "
-            f"in timezone {user.timezone}"
-        )
-
-    def disable_daily_briefing():
-        disabled = store.disable_external_briefing(user_id)
-        return "daily briefing disabled" if disabled else "daily briefing was already disabled"
 
     return {
         name: handler

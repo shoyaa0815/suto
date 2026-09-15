@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .locking import ProcessLock
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 8
 
 HARDENING = """
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -179,6 +179,28 @@ CREATE INDEX external_briefing_deliveries_status_idx
  ON external_briefing_deliveries(status,retry_at,updated_at);
 """
 
+# Versions 7 and 8 preserve compatibility with databases created while the
+# retired briefing feature was changing. These tables have no active runtime.
+VERSION_7_COMPATIBILITY = "SELECT 1;"
+
+LEGACY_BRIEFING_SCHEMA = """
+CREATE TABLE IF NOT EXISTS briefing_deliveries(
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ local_date TEXT NOT NULL, delivered_at TEXT NOT NULL,
+ PRIMARY KEY(user_id,local_date));
+CREATE TABLE IF NOT EXISTS external_briefing_deliveries(
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ local_date TEXT NOT NULL,
+ delivery_target_id TEXT NOT NULL REFERENCES delivery_targets(id) ON DELETE CASCADE,
+ scheduled_time TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('pending','sending','retrying','delivered','failed')),
+ attempt_count INTEGER NOT NULL DEFAULT 0, retry_at TEXT,
+ last_error TEXT, updated_at TEXT NOT NULL,
+ PRIMARY KEY(user_id,local_date));
+CREATE INDEX IF NOT EXISTS external_briefing_deliveries_status_idx
+ ON external_briefing_deliveries(status,retry_at,updated_at);
+"""
+
 
 def backup_database(source: Path, destination: Path) -> Path:
     source, destination = source.resolve(), destination.expanduser().absolute()
@@ -227,6 +249,8 @@ def initialize_database(store) -> None:
                 (4, DAILY_BRIEFING),
                 (5, REMINDER_DELIVERY),
                 (6, DISCORD_BRIEFING_DELIVERY),
+                (7, VERSION_7_COMPATIBILITY),
+                (8, LEGACY_BRIEFING_SCHEMA),
             ):
                 if number <= version:
                     continue

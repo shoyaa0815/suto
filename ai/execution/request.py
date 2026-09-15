@@ -18,6 +18,11 @@ from workflows.runtime.context import ALL_WORKSPACE_TOOLS, ExecutionContext
 from .. import config, prompting
 
 
+RETIRED_PREFERENCE_KEYS = frozenset(
+    {"briefing_time", "briefing_delivery_target_id"}
+)
+
+
 @dataclass(frozen=True)
 class PreparedRequest:
     attachments: dict[str, tuple[str, bytes]]
@@ -89,12 +94,17 @@ def _personal_context(context: AssistantContext | None) -> str:
                 else None
             ),
         }
+    preferences = {
+        key: value
+        for key, value in context.store.user_preferences(user.id).items()
+        if key not in RETIRED_PREFERENCE_KEYS
+    }
     return json.dumps(
         {
             "display_name": user.display_name,
             "timezone": user.timezone,
             "locale": user.locale,
-            "preferences": context.store.user_preferences(user.id),
+            "preferences": preferences,
             "delivery": delivery,
         },
         ensure_ascii=False,

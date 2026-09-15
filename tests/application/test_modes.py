@@ -22,6 +22,9 @@ def test_agent_mode_has_personal_assistant_tools():
     assert "create_reminder_in" in policy.allowed_tools
     assert "create_reminder_at" in policy.allowed_tools
     assert "create_reminder" not in policy.allowed_tools
+    assert "get_daily_briefing" not in policy.allowed_tools
+    assert "set_daily_briefing" not in policy.allowed_tools
+    assert "disable_daily_briefing" not in policy.allowed_tools
     assert "apply_workspace_patch" not in policy.allowed_tools
 
 

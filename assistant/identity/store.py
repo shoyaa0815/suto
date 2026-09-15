@@ -63,6 +63,34 @@ class IdentityStore:
             )
         return self.get_user(user_id) if cursor.rowcount else None
 
+    def apply_profile_settings(
+        self,
+        user_id: str,
+        *,
+        display_name: str,
+        timezone: str,
+        locale: str,
+    ) -> User | None:
+        """Synchronize host-managed profile settings onto an existing identity."""
+        name = redact_text(display_name).strip()
+        if not name or len(name) > 100:
+            raise ValueError("display name must contain 1-100 characters")
+        if not isinstance(locale, str) or not 2 <= len(locale.strip()) <= 16:
+            raise ValueError("locale must contain 2-16 characters")
+        current = self.get_user(user_id)
+        if current is None:
+            return None
+        values = (name, _timezone(timezone), locale.strip())
+        if values == (current.display_name, current.timezone, current.locale):
+            return current
+        with self._connect() as db:
+            db.execute(
+                "UPDATE users SET display_name=?,timezone=?,locale=?,updated_at=? "
+                "WHERE id=?",
+                (*values, _now(), user_id),
+            )
+        return self.get_user(user_id)
+
     def resolve_channel_identity(
         self,
         channel: str,

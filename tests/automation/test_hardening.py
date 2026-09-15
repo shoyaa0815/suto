@@ -59,6 +59,37 @@ def test_migration_rolls_back_failed_version(tmp_path, monkeypatch):
         assert not db.execute("SELECT 1 FROM sqlite_master WHERE name='memories'").fetchone()
 
 
+def test_version_seven_database_retains_legacy_briefing_schema(tmp_path):
+    path = tmp_path / "version-seven.db"
+    store = JobStore(path)
+    user = store.resolve_channel_identity(
+        "discord",
+        "10",
+        timezone="Asia/Bangkok",
+    )
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "INSERT INTO user_preferences VALUES (?,?,?,datetime('now'))",
+            (user.id, "briefing_time", "08:30"),
+        )
+        db.executescript(
+            """
+            DROP TABLE external_briefing_deliveries;
+            DROP TABLE briefing_deliveries;
+            DELETE FROM schema_migrations WHERE version = 8;
+            PRAGMA user_version = 7;
+            """
+        )
+
+    migrated = JobStore(path)
+
+    assert migrated.user_preferences(user.id)["briefing_time"] == "08:30"
+    with sqlite3.connect(path) as db:
+        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master")}
+    assert "briefing_deliveries" in tables
+    assert "external_briefing_deliveries" in tables
+
+
 def test_online_backup_is_consistent_and_never_overwrites(tmp_path):
     store = JobStore(tmp_path / 'live.db')
     job = store.create_job('retained')

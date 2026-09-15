@@ -8,11 +8,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import discord
 
 from ai import ask_local_ai, set_debug_logs
+from application.configuration import ProfileSettings, load_settings
 from assistant import AssistantContext, DeliveryTargetContext
-from assistant.briefing import (
-    briefing_schedule_status,
-    build_daily_briefing,
-)
 from workflows.storage.store import JobStore
 from application.language import choose_reply_language
 from application.modes import DEFAULT_MODE, get_mode_policy
@@ -29,6 +26,7 @@ active_mode = DEFAULT_MODE
 reply_languages: dict[tuple[int, int], str] = {}
 assistant_store: JobStore | None = None
 delivery_worker_task: asyncio.Task | None = None
+configured_profile: ProfileSettings | None = None
 
 
 def _get_assistant_store() -> JobStore:
@@ -36,6 +34,16 @@ def _get_assistant_store() -> JobStore:
     if assistant_store is None:
         assistant_store = JobStore(os.environ.get("SUTO_DB_PATH", "data/suto.db"))
     return assistant_store
+
+
+def _resolve_discord_user(store: JobStore, message, profile: ProfileSettings):
+    return store.resolve_channel_identity(
+        "discord",
+        str(message.author.id),
+        display_name=message.author.display_name,
+        timezone=profile.timezone,
+        locale=profile.locale,
+    )
 
 
 def should_process_message(message, bot_user) -> bool:
@@ -159,18 +167,6 @@ def _reminder_time(reminder) -> str:
     return instant.strftime("%Y-%m-%d %H:%M %Z")
 
 
-def _get_or_create_default_target(store, user_id: str, target):
-    return store.get_or_create_delivery_target(
-        user_id,
-        target.platform,
-        target.destination_id,
-        target.destination_type,
-        target.display_name,
-        guild_id=target.guild_id,
-        requester_id=target.requester_id,
-    )
-
-
 def _discord_help() -> str:
     lines = [
         "Discord DM commands:",
@@ -181,8 +177,7 @@ def _discord_help() -> str:
     if active_mode == "agent":
         lines.extend(
             (
-                "!noti [del <reminder_id>] — list or remove reminders",
-                "!daily [at <HH:MM>|status|off] — show or schedule a daily briefing",
+                "!notification [remove <name>] — list or remove reminders by name",
             )
         )
     return "\n".join(lines)
@@ -203,7 +198,7 @@ def handle_personal_command(
         return None
 
     command = parts[0].casefold()
-    if command not in {"!noti", "!daily", "!help", "!clear", "!reset"}:
+    if command not in {"!notification", "!help", "!clear", "!reset"}:
         return None
 
     if not is_dm:
@@ -229,7 +224,7 @@ def handle_personal_command(
     if active_mode != "agent":
         return "Personal commands are available only in agent mode."
 
-    if command == "!noti":
+    if command == "!notification":
         if len(parts) == 1:
             reminders = store.list_reminders(user.id, limit=None)
             if not reminders:
@@ -240,49 +235,20 @@ def handle_personal_command(
                 for item in reminders
             )
             return "\n".join(lines)
-        if len(parts) == 3 and parts[1].casefold() == "del":
-            reminder = store.cancel_reminder(user.id, parts[2])
+        if len(parts) >= 3 and parts[1].casefold() == "remove":
+            title = " ".join(parts[2:])
+            reminder, matches = store.cancel_reminder_by_title(user.id, title)
+            if len(matches) > 1:
+                lines = [f'Multiple pending reminders are named "{title}":']
+                lines.extend(
+                    f"{item.id}  {_reminder_time(item)}  {item.title}"
+                    for item in matches
+                )
+                return "\n".join(lines)
             if reminder is None:
-                return f"Reminder not found: {parts[2]}"
-            return f"Reminder removed: {reminder.id}"
-        return "usage: !noti [del <reminder_id>]"
-
-    if len(parts) == 1:
-        return build_daily_briefing(store, user.id)
-    action = parts[1].casefold()
-    if len(parts) == 3 and action == "at":
-        target = _get_or_create_default_target(store, user.id, default_target)
-        clock_time = store.configure_external_briefing(
-            user.id,
-            parts[2],
-            target.id,
-        )
-        return (
-            f"Daily briefing scheduled for {clock_time} {user.timezone} "
-            "and will be sent by Discord DM."
-        )
-    if len(parts) == 2 and action == "status":
-        clock_time = briefing_schedule_status(store, user.id)
-        if clock_time is None:
-            return "Daily briefing is off."
-        preferences = store.user_preferences(user.id)
-        target_id = preferences.get("briefing_delivery_target_id")
-        target = (
-            store.get_delivery_target(user.id, target_id) if target_id else None
-        )
-        if target is None or target.platform != "discord":
-            return (
-                f"Daily briefing: {clock_time} {user.timezone}; automatic Discord "
-                "delivery is not configured. Use !daily at <HH:MM>."
-            )
-        return (
-            f"Daily briefing: {clock_time} {user.timezone} via "
-            f"{target.display_name}."
-        )
-    if len(parts) == 2 and action == "off":
-        store.disable_external_briefing(user.id)
-        return "Daily briefing disabled."
-    return "usage: !daily [at <HH:MM>|status|off]"
+                return f"Reminder not found: {title}"
+            return f"Reminder removed: {reminder.title}"
+        return "usage: !notification [remove <name>]"
 
 
 async def deliver_discord_notifications_once(store, *, now: str | None = None) -> None:
@@ -304,44 +270,8 @@ async def deliver_discord_notifications_once(store, *, now: str | None = None) -
         else:
             store.complete_reminder_delivery(delivery.reminder_id)
 
-    briefings = store.claim_due_briefing_deliveries("discord", now=now)
-    for delivery in briefings:
-        if not store.briefing_delivery_is_current(delivery, now=now):
-            store.fail_briefing_delivery(
-                delivery.user_id,
-                delivery.local_date,
-                "briefing schedule changed before delivery",
-                max_attempts=1,
-            )
-            continue
-        try:
-            briefing_now = datetime.fromisoformat(now) if now else None
-            briefing = build_daily_briefing(
-                store,
-                delivery.user_id,
-                now=briefing_now,
-            )
-            await _send_to_target(delivery, briefing)
-        except Exception as error:
-            status = store.fail_briefing_delivery(
-                delivery.user_id,
-                delivery.local_date,
-                f"{type(error).__name__}: {error}",
-            )
-            print(
-                f"[discord briefing] user={delivery.user_id} "
-                f"date={delivery.local_date} status={status} "
-                f"error={type(error).__name__}: {error}"
-            )
-        else:
-            store.complete_briefing_delivery(
-                delivery.user_id,
-                delivery.local_date,
-            )
-
-
 async def deliver_discord_reminders() -> None:
-    """Deliver persistent Discord reminders and daily briefings."""
+    """Deliver persistent Discord reminders."""
     store = _get_assistant_store()
     while not client.is_closed():
         try:
@@ -374,13 +304,8 @@ async def on_message(message: discord.Message):
         return
 
     store = _get_assistant_store()
-    user = store.resolve_channel_identity(
-        "discord",
-        str(message.author.id),
-        display_name=message.author.display_name,
-        timezone=os.environ.get("SUTO_TIMEZONE", "UTC"),
-        locale=os.environ.get("SUTO_LOCALE", "th"),
-    )
+    profile = configured_profile or load_settings().profile
+    user = _resolve_discord_user(store, message, profile)
     conversation = store.get_or_create_conversation(
         user.id,
         "discord",
@@ -483,7 +408,7 @@ async def on_message(message: discord.Message):
 
 
 def run(mode: str):
-    global active_mode
+    global active_mode, configured_profile
 
     # Validate before opening the Discord connection. main.py already checks
     # this, but keeping the boundary safe also protects direct callers.
@@ -491,6 +416,7 @@ def run(mode: str):
         raise ValueError("home mode is available only in the plain terminal")
     get_mode_policy(mode)
     active_mode = mode
+    configured_profile = load_settings().profile
     set_debug_logs(True)
 
     token = os.environ.get("DISCORD_TOKEN")

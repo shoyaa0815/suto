@@ -8,12 +8,14 @@ INTERFACE_MODES = tuple(mode for mode in PUBLIC_MODES if mode != "home")
 
 def _parse_args(args: list[str]) -> tuple[str, str]:
     usage = (
-        "usage: python3 main.py home | "
+        "usage: python3 main.py <home|settings> | "
         f"python3 main.py <{'|'.join(INTERFACE_MODES)}> "
         f"<{'|'.join(INTERFACES)}>"
     )
     if args == ["home"]:
         return "home_terminal", "home"
+    if args == ["settings"]:
+        return "settings_terminal", "settings"
     if len(args) != 2:
         raise SystemExit(usage)
 
@@ -37,7 +39,9 @@ def main():
     from dotenv import load_dotenv
 
     load_dotenv()
-    if name == "cli":
+    if name == "settings_terminal":
+        from interfaces.settings_terminal import run
+    elif name == "cli":
         from interfaces.tui import run
     elif name == "discord":
         from interfaces.discord import run

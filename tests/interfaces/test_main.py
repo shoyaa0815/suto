@@ -10,6 +10,7 @@ from main import _parse_args
         (["chat", "cli"], ("cli", "chat")),
         (["agent", "cli"], ("cli", "agent")),
         (["home"], ("home_terminal", "home")),
+        (["settings"], ("settings_terminal", "settings")),
         (["chat", "discord"], ("discord", "chat")),
         (["agent", "discord"], ("discord", "agent")),
         (["chat", "line"], ("line", "chat")),
@@ -51,3 +52,15 @@ def test_main_dispatches_home_to_plain_terminal(monkeypatch):
     main_module.main()
 
     assert calls == ["home"]
+
+
+def test_main_dispatches_settings_to_plain_terminal(monkeypatch):
+    import interfaces.settings_terminal as settings_terminal
+
+    calls = []
+    monkeypatch.setattr(main_module.sys, "argv", ["main.py", "settings"])
+    monkeypatch.setattr(settings_terminal, "run", calls.append)
+
+    main_module.main()
+
+    assert calls == ["settings"]

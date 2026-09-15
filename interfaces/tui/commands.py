@@ -4,12 +4,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from assistant.briefing import (
-    briefing_schedule_status,
-    build_daily_briefing,
-    disable_daily_briefing,
-    set_daily_briefing_time,
-)
 from interfaces.tui.operations import print_pending_reminders
 from interfaces.tui.output import write as print
 
@@ -38,12 +32,8 @@ def print_help(mode: str | None = None) -> None:
     print("  /help  show available commands")
     print("  /clear  clear this chat context")
     print("  /reset all  delete all saved conversations")
-    print("  /setting  open profile settings")
-    print("  /noti  show reminders that have not been delivered")
-    print("  /noti del <reminder_id>  remove a pending reminder")
-    print("  /daily  show today's briefing")
-    print("  /daily at <HH:MM>  schedule a daily briefing")
-    print("  /daily status|off  show or disable the daily schedule")
+    print("  /notification  show reminders that have not been delivered")
+    print("  /notification remove <name>  remove a pending reminder by name")
     print("  /exit  exit suto")
 
 
@@ -57,53 +47,26 @@ def _exit(context: CommandContext, argument: str) -> CommandOutcome:
     return CommandOutcome(handled=True, exit_requested=True)
 
 
-def _noti(context: CommandContext, argument: str) -> CommandOutcome:
+def _notification(context: CommandContext, argument: str) -> CommandOutcome:
     if not argument:
         print_pending_reminders(context.store, context.user.id)
         return CommandOutcome(handled=True)
-    parts = argument.split()
-    if len(parts) != 2 or parts[0].casefold() != "del":
-        print("usage: /noti [del <reminder_id>]")
+    action, _, title = argument.partition(" ")
+    if action.casefold() != "remove" or not title.strip():
+        print("usage: /notification [remove <name>]")
         return CommandOutcome(handled=True)
-    reminder = context.store.cancel_reminder(context.user.id, parts[1])
-    if reminder is None:
-        print(f"Reminder not found: {parts[1]}")
+    reminder, matches = context.store.cancel_reminder_by_title(
+        context.user.id,
+        title,
+    )
+    if len(matches) > 1:
+        print(f'Multiple pending reminders are named "{title.strip()}":')
+        for match in matches:
+            print(f"{match.id}  {match.remind_at}  {match.title}")
+    elif reminder is None:
+        print(f"Reminder not found: {title.strip()}")
     else:
-        print(f"Reminder removed: {reminder.id}")
-    return CommandOutcome(handled=True)
-
-
-def _daily(context: CommandContext, argument: str) -> CommandOutcome:
-    parts = argument.split()
-    try:
-        if not parts:
-            print(f"suto> {build_daily_briefing(context.store, context.user.id)}")
-        elif len(parts) == 2 and parts[0].casefold() == "at":
-            clock_time = set_daily_briefing_time(
-                context.store,
-                context.user.id,
-                parts[1],
-            )
-            print(
-                f"Daily briefing scheduled for {clock_time} "
-                f"({context.store.get_user(context.user.id).timezone})."
-            )
-        elif len(parts) == 1 and parts[0].casefold() == "status":
-            clock_time = briefing_schedule_status(context.store, context.user.id)
-            if clock_time:
-                print(
-                    f"Daily briefing: {clock_time} "
-                    f"({context.store.get_user(context.user.id).timezone})"
-                )
-            else:
-                print("Daily briefing is off.")
-        elif len(parts) == 1 and parts[0].casefold() == "off":
-            disable_daily_briefing(context.store, context.user.id)
-            print("Daily briefing disabled.")
-        else:
-            print("usage: /daily [at <HH:MM>|status|off]")
-    except ValueError as error:
-        print(error)
+        print(f"Reminder removed: {reminder.title}")
     return CommandOutcome(handled=True)
 
 
@@ -137,8 +100,7 @@ def _reset(context: CommandContext, argument: str) -> CommandOutcome:
 COMMAND_HANDLERS: dict[str, CommandHandler] = {
     "/help": _help,
     "/exit": _exit,
-    "/noti": _noti,
-    "/daily": _daily,
+    "/notification": _notification,
     "/clear": _clear,
     "/reset": _reset,
 }
