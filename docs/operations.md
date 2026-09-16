@@ -182,22 +182,6 @@ requests. It is not a VM, and per-process resource limits are not cgroup-wide
 aggregate accounting. Files legitimately exposed inside the selected workspace
 and runtime are in scope for the approved command.
 
-## Discord personal delivery
-
-Discord agent mode runs a persistent delivery loop for reminders. Failed sends
-retry up to three attempts;
-abandoned in-flight claims become eligible again after five minutes. The worker
-revalidates the current reminder immediately before each send so cancelled or
-rescheduled items are not delivered.
-Server-channel reminders are available only when both the requester and bot can
-view and send to the target channel. Those permissions are checked when the
-target is selected and again immediately before delivery.
-
-`!notification`, `!help`, `!clear`, and `!reset all` are private Discord
-commands and run only in the bot's DM. If one is invoked in a server channel,
-the bot returns only a prompt to continue in DM. Normal mentioned requests in a
-server channel, including creating a reminder, remain available.
-
 ## Home mode placeholder
 
 `home` mode is launched with `python3 main.py home` and rejects an explicit
@@ -222,7 +206,7 @@ public deployment or reverse-proxy mode is provided.
 
 Dashboard shows saved local CLI sessions, open personal tasks and scheduled
 reminders. Sessions supports search, paginated messages and exact local CLI
-identity/channel scoping; it does not expose other users' Discord conversations.
+identity/channel scoping; it does not expose other users' conversations.
 Models displays provider/model environment defaults and credential presence,
 without returning credentials or contacting a provider. Logs shows bounded,
 redacted host job events, with search, event filtering, pagination and optional

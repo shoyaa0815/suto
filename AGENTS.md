@@ -1,16 +1,16 @@
 # AGENTS.md
 
 Applies repository-wide. Suto is a Python 3.12+ local-first assistant with
-`chat` and `agent` modes. CLI and Discord are implemented. The LINE scaffold is
-parked and intentionally outside the current product scope; do not implement or
-extend it unless the user explicitly reopens that work.
+`chat` and `agent` modes. The CLI is the supported interface. Discord and LINE
+integrations have been retired and are outside the current product scope; do not
+implement or restore them unless the user explicitly reopens that work.
 
 ## Commands
 
 ```bash
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
-venv/bin/python main.py <chat|agent> <cli|discord>
+venv/bin/python main.py <chat|agent> cli
 venv/bin/python main.py home
 venv/bin/pytest -q
 ```
@@ -25,7 +25,7 @@ Run focused tests while developing, then the full suite for shared changes.
   policy/context preparation, model/tool rounds, and limits; `tooling/` owns
   handler assembly and audit events; `providers/` owns provider adapters.
 - `assistant/`: identity, conversations, tasks, reminders, and briefings.
-- `interfaces/`: terminal and Discord integrations; the LINE scaffold is parked.
+- `interfaces/`: terminal integration.
   In `interfaces/cli/`, `backend.py` owns session lifecycle, `commands.py` owns
   the public command registry, and `operations.py` owns background delivery.
 - `workflows/`: durable jobs, workers, scheduling, SQLite, and migrations;
@@ -42,14 +42,10 @@ Deployment is host-managed Python; no container or cloud infrastructure is defin
 flowchart LR
     subgraph Users
         T[Terminal]
-        DUser[Discord user]
-        LUser[LINE user]
     end
     subgraph Host[Suto host]
         Main[main.py]
         CLI[Plain CLI]
-        Discord[discord.py]
-        Line[LINE scaffold<br/>parked / out of scope]
         AI[AI executor + tools]
         Service[Assistant services]
         Worker[Automation + delivery workers]
@@ -58,21 +54,14 @@ flowchart LR
         Backup[(Backups)]
     end
     subgraph External
-        DG[Discord API]
-        LP[LINE platform]
         Provider[Ollama / OpenAI-compatible]
         Web[Web / search]
     end
     T --> Main --> CLI --> AI
-    DUser --> DG <--> Discord --> AI
-    LUser --> LP -.-> Line -.-> AI
-    Main --> Discord
-    Main -.-> Line
     AI <--> Provider
     AI --> Web
     AI --> Service <--> DB
     CLI --> Worker
-    Discord --> Worker
     Worker <--> DB
     DB --- Lock
     DB -. snapshot .-> Backup
@@ -83,8 +72,7 @@ flowchart LR
 - SQLite, WAL, locks, and active backups belong on one durable host filesystem;
   they are not a multi-host coordination mechanism.
 - One advisory-lock owner runs automation for a database. The CLI owns local
-  automation and briefing delivery; Discord owns Discord reminder and briefing
-  delivery.
+  automation and briefing delivery.
 - AI, search, fetch, and platform integrations cross a network trust boundary.
   See `docs/operations.md` for migration, recovery, backup, and worker semantics.
 
@@ -98,8 +86,8 @@ flowchart LR
 - Keep the AI executor thin. Add request shaping, tool assembly, loop behavior,
   and execution limits to their owning modules instead of growing the public
   lifecycle function.
-- Keep LINE parked. Do not add LINE execution, webhook, delivery, configuration,
-  dependencies, or tests unless the user explicitly changes its scope.
+- Do not add Discord or LINE execution, webhook, delivery, configuration,
+  dependencies, or tests unless the user explicitly changes their scope.
 - Expose a capability only when its interface has a working execution or delivery
   path. Never claim a mutation succeeded without confirmed tool state.
 - Preserve clarification questions when required information is missing.
@@ -119,7 +107,7 @@ flowchart LR
 - Remote URL fetching must allow only intended HTTP(S) targets; validate DNS and
   redirects, reject private/loopback/link-local/metadata addresses, and bound
   redirects, response size, and timeouts.
-- Preserve Discord user and bot permission checks before channel delivery.
+- Preserve interface permission checks before delivery.
 - Do not broaden workspace, command, write, approval, symlink, or sandbox rules.
 - Keep secrets and private content out of logs, errors, prompts, and test output.
 
@@ -129,7 +117,7 @@ flowchart LR
 - Make the smallest cohesive patch; do not edit caches, `venv/`, databases, or
   lock files.
 - Add regression tests at the behavior boundary. Use deterministic fakes for AI,
-  HTTP, Discord, clocks, and workers; tests must not require network or secrets.
+  HTTP, clocks, and workers; tests must not require network or secrets.
 - Use temporary SQLite databases and assert both results and committed state.
 - Coordinate async race tests with events, not arbitrary sleeps.
 - Cover permission, retry, cancellation, restart, boundary, and partial-failure
