@@ -7,6 +7,7 @@ from interfaces.cli import backend
 from interfaces.cli import app as cli_app
 from interfaces.cli.app import (
     ACTIVITY_ROW_OFFSET,
+    ACTIVITY_ROW_HEIGHT,
     DOT_FRAMES,
     PROMPT_BOX_HEIGHT,
     PROMPT_LAYOUT_HEIGHT,
@@ -45,20 +46,23 @@ def test_plain_cli_starts_session_and_uses_a_simple_prompt(monkeypatch, capsys):
     assert calls[1] == ("chat", "hello")
 
 
-def test_cli_prompt_has_one_terminal_row_above_and_below_the_three_gray_rows():
+def test_cli_prompt_reserves_activity_row_below_the_three_gray_rows():
     application = _build_prompt_application("> ")
 
     assert application.full_screen is False
     assert application.erase_when_done is False
     assert isinstance(application.layout.container, HSplit)
     dimension = application.layout.container.height
-    assert dimension.min == dimension.max == dimension.preferred == PROMPT_LAYOUT_HEIGHT == 5
+    assert dimension.min == dimension.max == dimension.preferred == PROMPT_LAYOUT_HEIGHT == 6
     gray_box = application.layout.container.children[1]
     assert isinstance(gray_box, HSplit)
     assert gray_box.height.preferred == PROMPT_BOX_HEIGHT == 3
+    activity_row = application.layout.container.children[2]
+    assert activity_row.height.preferred == ACTIVITY_ROW_HEIGHT == 1
+    assert ACTIVITY_ROW_OFFSET == 1
 
 
-def test_cli_activity_uses_dot_frames_in_the_reserved_row(monkeypatch):
+def test_cli_activity_uses_dot_frames_in_the_reserved_row_below_the_prompt(monkeypatch):
     writes = []
 
     class FakeStdout:

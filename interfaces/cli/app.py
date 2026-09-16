@@ -29,15 +29,22 @@ PROMPT_STYLE = Style.from_dict(
 
 PROMPT_BOX_HEIGHT = 3
 PROMPT_BOX_MARGIN_HEIGHT = 1
-PROMPT_LAYOUT_HEIGHT = PROMPT_BOX_HEIGHT + (PROMPT_BOX_MARGIN_HEIGHT * 2)
+ACTIVITY_ROW_HEIGHT = 1
+PROMPT_LAYOUT_HEIGHT = (
+    PROMPT_BOX_HEIGHT
+    + (PROMPT_BOX_MARGIN_HEIGHT * 2)
+    + ACTIVITY_ROW_HEIGHT
+)
 PROMPT_BOX_DIMENSION = Dimension.exact(PROMPT_BOX_HEIGHT)
 PROMPT_LAYOUT_DIMENSION = Dimension.exact(PROMPT_LAYOUT_HEIGHT)
-ACTIVITY_ROW_OFFSET = PROMPT_LAYOUT_HEIGHT - 1
+# The retained prompt ends with a terminal-colored row. Keep activity directly
+# above it and immediately below the gray input box.
+ACTIVITY_ROW_OFFSET = PROMPT_BOX_MARGIN_HEIGHT
 DOT_FRAMES = (".", "..", "...", "")
 
 
 def _build_prompt_application(prompt: str) -> Application[str]:
-    """Build a gray input area with one terminal-colored row above and below."""
+    """Build a gray input area with a reserved activity row below it."""
     field = TextArea(
         multiline=False,
         prompt=[("class:prompt", prompt)],
@@ -85,6 +92,7 @@ def _build_prompt_application(prompt: str) -> Application[str]:
                         ],
                         height=PROMPT_BOX_DIMENSION,
                     ),
+                    Window(height=Dimension.exact(ACTIVITY_ROW_HEIGHT), char=" "),
                     Window(height=Dimension.exact(PROMPT_BOX_MARGIN_HEIGHT), char=" "),
                 ],
                 height=PROMPT_LAYOUT_DIMENSION,
