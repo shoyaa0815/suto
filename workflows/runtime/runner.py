@@ -20,7 +20,7 @@ from .context import (
 from ..models import Job, JobStatus, StepStatus
 from ..storage.store import JobStore
 from .options import job_limits
-from tools.advanced import MEMORY_TOOLS, RETRIEVAL_TOOLS, SUBTASK_TOOLS
+from tools.advanced import RETRIEVAL_TOOLS, SUBTASK_TOOLS
 
 AIExecutor = Callable[..., Awaitable[AIExecutionResult]]
 DEFAULT_RETRY_DELAYS = (1.0, 2.0, 4.0)
@@ -202,8 +202,6 @@ class JobRunner:
                 allowed_tools = allowed_tools | WRITE_WORKSPACE_TOOLS
             if job.allow_command:
                 allowed_tools = allowed_tools | COMMAND_TOOLS
-            if job.options.get('memory'):
-                allowed_tools |= MEMORY_TOOLS
             if job.options.get('retrieval'):
                 allowed_tools |= RETRIEVAL_TOOLS
             if job.options.get('subtasks') and not job.parent_id:

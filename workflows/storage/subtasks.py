@@ -43,7 +43,6 @@ class SubtaskStore:
                 raise PermissionError('child permissions cannot exceed the parent')
             existing = db.execute('SELECT * FROM jobs WHERE parent_id=? AND source_ref=?', (parent_id, key)).fetchone()
             options = {**limits, 'sandbox': parent.options.get('sandbox', 'process'),
-                       'memory': parent.options.get('memory', False),
                        'retrieval': parent.options.get('retrieval', False)}
             if existing:
                 child = self._to_job(existing)

@@ -14,7 +14,7 @@ def print_json(value):
 
 async def handle_operations(store, command: str, argument: str) -> bool:
     commands = {'/health', '/diagnostics', '/metrics', '/backup', '/cleanup', '/limits',
-                '/logs', '/memory', '/knowledge', '/subtasks', '/notifications'}
+                '/logs', '/knowledge', '/subtasks', '/notifications'}
     if command not in commands:
         return False
     try:
@@ -57,25 +57,6 @@ async def handle_operations(store, command: str, argument: str) -> bool:
             if len(parts) != 1:
                 raise ValueError('usage: /subtasks <parent_job_id>')
             print(store.children_summary(parts[0]) or 'No subtasks.')
-        elif command == '/memory':
-            if len(parts) < 2:
-                raise ValueError('usage: /memory <on|off|list|add|search|delete> <workspace> [text|memory_id]')
-            action, workspace, *rest = parts
-            if action in {'on', 'off', 'list'} and rest:
-                raise ValueError('unexpected memory arguments')
-            if action in {'on', 'off'}:
-                store.set_memory_enabled(workspace, action == 'on')
-                print(f'Memory {action} for {workspace}')
-            elif action == 'list':
-                print_json(store.list_memories(workspace))
-            elif action == 'add' and rest:
-                print(await store.remember(workspace, ' '.join(rest)))
-            elif action == 'search' and rest:
-                print_json(await store.recall(workspace, ' '.join(rest)))
-            elif action == 'delete' and len(rest) == 1:
-                print_json({'deleted': store.forget_memory(workspace, rest[0])})
-            else:
-                raise ValueError('invalid memory action or arguments')
         elif command == '/knowledge':
             if len(parts) < 2:
                 raise ValueError('usage: /knowledge <index|search|clear> <workspace> [query]')

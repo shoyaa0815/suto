@@ -6,9 +6,7 @@ Non-secret local profile and new-user defaults live in `config.yaml`; secrets
 remain in `.env`. Run `venv/bin/python main.py settings`, use the arrow keys and
 Enter to edit fields, then select Save and press Enter to validate, persist
 atomically, and exit. Unsaved exit requires confirmation. Restart Suto after
-saving so long-lived CLI and Discord processes use the new values. Chat clients
-cannot mutate this host configuration. Discord applies timezone and locale only when
-creating a new identity; it does not overwrite existing Discord profiles.
+so the CLI uses the new values. Chat clients cannot mutate this host configuration.
 Existing reminder timestamps are not rewritten; newly created reminders use
 the user's stored timezone.
 
@@ -42,7 +40,7 @@ volume; backup files are not automatically deleted by retention cleanup.
 checks, worker heartbeat, limits, metrics, and optional dependency configuration.
 `ok` describes database health; `ready` additionally requires a fresh running
 worker heartbeat. Optional dependency presence does not prove that the host
-permits namespaces or that an embedding model is serving requests.
+permits namespaces.
 
 A kernel advisory lock allows one worker process per database on a single Linux
 host. Additional processes cannot recover or execute that worker's running jobs.
@@ -97,40 +95,6 @@ completed, failed or cancelled jobs, plus expired operator logs. It preserves
 job summaries, plans, metrics, approvals, and all resumable-job checkpoints.
 SQLite may reuse freed pages without immediately shrinking the database file.
 
-## Opt-in semantic memory
-
-Memory is separated by canonical workspace. Enable it as the user, configure an
-already available Ollama embedding model, and opt each job in independently:
-
-```dotenv
-SUTO_EMBED_URL=http://localhost:11434
-SUTO_EMBED_MODEL=your-installed-embedding-model
-```
-
-```text
-/memory on /path/to/project
-/memory add /path/to/project "The API uses cursor pagination"
-/memory search /path/to/project "How do we paginate results?"
-/memory list /path/to/project
-/run --workspace /path/to/project --memory review the API conventions
-/memory delete /path/to/project mem_123456789abc
-/memory off /path/to/project
-```
-
-The provider uses Ollama's [`/api/embed`](https://docs.ollama.com/api/embed).
-Text is redacted before embedding and storage. Similarity uses normalized vector
-dot products; endpoint/model identity and vector dimensions must match. Changing
-the configured model excludes old embeddings from search until notes are added
-using the new model. Limits: 500 notes/workspace, 4,000 characters/note or query,
-4,096 dimensions, and 30 seconds/request. No model is downloaded automatically.
-
-Agent `remember_memory` requires approval for the exact note; agents cannot
-enable workspace memory. Turning memory off blocks retrieval and new saves but
-keeps existing notes for user inspection/deletion. The configured embedding
-endpoint receives the redacted note/query; use the default local endpoint when
-keeping this data on the machine. Retrieval results are reference data, not
-instructions or permission grants.
-
 ## Project retrieval
 
 ```text
@@ -140,7 +104,7 @@ instructions or permission grants.
 /knowledge clear /path/to/project
 ```
 
-The index uses SQLite FTS5 keyword ranking, separate from semantic memory.
+The index uses SQLite FTS5 keyword ranking.
 Incremental indexing stores hashes and bounded chunks with file/line citations.
 `index_project` refreshes the job's index; `search_project` queries it. A search
 rehashes candidate files and omits stale/deleted/symlinked results. Reindex after

@@ -273,7 +273,7 @@ def test_progress_activity_text_distinguishes_thinking_and_tool_work():
     assert activity_text({"activity": "finished", "detail": "completed"}) is None
 
 
-def test_print_progress_can_label_a_discord_request(capsys):
+def test_print_progress_can_label_a_prefixed_request(capsys):
     print_progress(
         {
             "activity": "finished",
@@ -285,9 +285,9 @@ def test_print_progress_can_label_a_discord_request(capsys):
             "total_tokens": 100,
             "heartbeat": False,
         },
-        prefix="discord:123:456",
+        prefix="device:123:456",
     )
 
     assert capsys.readouterr().out == (
-        "[discord:123:456] completed · 100 tokens\n"
+        "[device:123:456] completed · 100 tokens\n"
     )

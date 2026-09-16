@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .locking import ProcessLock
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 HARDENING = """
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -77,10 +77,6 @@ ADVANCED = """
 ALTER TABLE jobs ADD COLUMN parent_id TEXT REFERENCES jobs(id);
 ALTER TABLE jobs ADD COLUMN options TEXT NOT NULL DEFAULT '{}';
 CREATE INDEX jobs_parent_idx ON jobs(parent_id);
-CREATE TABLE workspace_features(workspace TEXT PRIMARY KEY, memory_enabled INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE memories(id TEXT PRIMARY KEY, workspace TEXT NOT NULL, content TEXT NOT NULL,
- embedding TEXT NOT NULL, model TEXT NOT NULL, created_at TEXT NOT NULL);
-CREATE INDEX memories_workspace_idx ON memories(workspace);
 CREATE TABLE knowledge_files(workspace TEXT NOT NULL, path TEXT NOT NULL,
  sha256 TEXT NOT NULL, PRIMARY KEY(workspace,path));
 CREATE VIRTUAL TABLE knowledge_chunks USING fts5(workspace UNINDEXED, path UNINDEXED,
@@ -201,6 +197,11 @@ CREATE INDEX IF NOT EXISTS external_briefing_deliveries_status_idx
  ON external_briefing_deliveries(status,retry_at,updated_at);
 """
 
+REMOVE_SEMANTIC_MEMORY = """
+DROP TABLE IF EXISTS memories;
+DROP TABLE IF EXISTS workspace_features;
+"""
+
 
 def backup_database(source: Path, destination: Path) -> Path:
     source, destination = source.resolve(), destination.expanduser().absolute()
@@ -251,6 +252,7 @@ def initialize_database(store) -> None:
                 (6, DISCORD_BRIEFING_DELIVERY),
                 (7, VERSION_7_COMPATIBILITY),
                 (8, LEGACY_BRIEFING_SCHEMA),
+                (9, REMOVE_SEMANTIC_MEMORY),
             ):
                 if number <= version:
                     continue

@@ -42,6 +42,9 @@ def test_migration_backup_and_newer_schema_refusal(tmp_path):
     assert len(list((tmp_path / 'backups').glob('*.db'))) == 1
     with sqlite3.connect(path) as db:
         assert db.execute('SELECT COUNT(*) FROM schema_migrations').fetchone()[0] == SCHEMA_VERSION
+        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master")}
+        assert "memories" not in tables
+        assert "workspace_features" not in tables
         db.execute('PRAGMA user_version=999')
     with pytest.raises(RuntimeError, match='newer'):
         JobStore(path)
@@ -76,7 +79,7 @@ def test_version_seven_database_retains_legacy_briefing_schema(tmp_path):
             """
             DROP TABLE external_briefing_deliveries;
             DROP TABLE briefing_deliveries;
-            DELETE FROM schema_migrations WHERE version = 8;
+            DELETE FROM schema_migrations WHERE version IN (8, 9);
             PRAGMA user_version = 7;
             """
         )

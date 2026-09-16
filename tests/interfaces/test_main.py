@@ -12,10 +12,6 @@ from main import _parse_args
         (["web"], ("web", "web")),
         (["home"], ("home_terminal", "home")),
         (["settings"], ("settings_terminal", "settings")),
-        (["chat", "discord"], ("discord", "chat")),
-        (["agent", "discord"], ("discord", "agent")),
-        (["chat", "line"], ("line", "chat")),
-        (["agent", "line"], ("line", "agent")),
     ],
 )
 def test_parse_args_accepts_interface_and_mode(args, expected):
@@ -27,11 +23,12 @@ def test_parse_args_accepts_interface_and_mode(args, expected):
     [
         [],
         ["discord"],
+        ["chat", "discord"],
+        ["agent", "line"],
         ["secret", "discord"],
         ["developer", "cli"],
         ["home", "cli"],
         ["home", "discord"],
-        ["home", "line"],
         ["chat"],
         ["chat", "unknown"],
         ["chat", "tui"],

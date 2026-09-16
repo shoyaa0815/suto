@@ -2,7 +2,7 @@ import sys
 
 from application.modes import PUBLIC_MODES
 
-INTERFACES = ("cli", "discord", "line")
+INTERFACES = ("cli",)
 INTERFACE_MODES = tuple(mode for mode in PUBLIC_MODES if mode != "home")
 
 
@@ -45,12 +45,8 @@ def main():
         from interfaces.settings_terminal import run
     elif name == "cli":
         from interfaces.cli import run
-    elif name == "discord":
-        from interfaces.discord import run
     elif name == "web":
         from interfaces.web import run
-    else:
-        from interfaces.line import run
     run(mode)
 
 

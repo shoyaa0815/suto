@@ -5,7 +5,7 @@ import pytest
 
 import ai
 from ai import AIExecutionResult
-from workflows.runtime.context import ApprovalRequired, ExecutionContext
+from workflows.runtime.context import ExecutionContext
 from workflows.runtime.options import validate_options
 from workflows.runtime.runner import JobRunner
 from workflows.storage.store import JobStore
@@ -13,82 +13,6 @@ from workflows.runtime.worker import AutomationWorker
 from capabilities.developer.cli import _parse_run
 from tests.automation.test_hardening import eventually
 from tools.advanced import TOOL_NAMES, build_advanced_tools
-
-
-class SemanticEmbedder:
-    identity = 'fixture-semantic-model-v1'
-
-    async def embed(self, text):
-        # Deterministic semantic fixture: related concepts without shared words.
-        return [1., 0., 0.] if any(word in text.lower() for word in ('car', 'vehicle', 'automobile')) else [0., 1., 0.]
-
-
-async def test_semantic_memory_opt_in_scope_model_and_delete(tmp_path):
-    store = JobStore(tmp_path / 'jobs.db')
-    one, two = tmp_path / 'one', tmp_path / 'two'
-    one.mkdir()
-    two.mkdir()
-    embedder = SemanticEmbedder()
-    with pytest.raises(PermissionError, match='disabled'):
-        await store.remember(one, 'car', embedder=embedder)
-    store.set_memory_enabled(one, True)
-    store.set_memory_enabled(two, True)
-    saved = await store.remember(one, 'car uses electricity; api_key=test-secret', embedder=embedder)
-    await store.remember(one, 'garden flowers', embedder=embedder)
-    await store.remember(two, 'private vehicle note', embedder=embedder)
-    reopened = JobStore(store.path)
-    matches = await reopened.recall(one, 'automobile', embedder=embedder)
-    assert matches[0]['id'] == saved
-    assert 'test-secret' not in matches[0]['content']
-    assert all('private vehicle' not in row['content'] for row in matches)
-    embedder.identity = 'different-model'
-    assert await store.recall(one, 'car', embedder=embedder) == []
-    store.set_memory_enabled(one, False)
-    with pytest.raises(PermissionError):
-        await store.recall(one, 'car', embedder=embedder)
-    assert not store.forget_memory(two, saved)
-    assert store.forget_memory(one, saved)
-    assert all(row['id'] != saved for row in store.list_memories(one))
-
-
-async def test_memory_disable_during_embedding_and_invalid_vectors(tmp_path):
-    store = JobStore(tmp_path / 'jobs.db')
-    store.set_memory_enabled(tmp_path, True)
-
-    class DisablingEmbedder(SemanticEmbedder):
-        async def embed(self, text):
-            store.set_memory_enabled(tmp_path, False)
-            return [1., 0.]
-
-    with pytest.raises(PermissionError, match='disabled while'):
-        await store.remember(tmp_path, 'note', embedder=DisablingEmbedder())
-    assert not store.list_memories(tmp_path)
-    from workflows.storage.knowledge import normalized_vector
-    for value in ([float('nan')], [0., 0.], [float('inf')], [], [True]):
-        with pytest.raises(ValueError):
-            normalized_vector(value)
-
-
-async def test_memory_tools_require_job_permission_and_approval(tmp_path):
-    store = JobStore(tmp_path / 'jobs.db')
-    store.set_memory_enabled(tmp_path, True)
-    job = store.create_job('save memory', workspace=str(tmp_path), options={'memory': True})
-    store.claim_next_job()
-    context = ExecutionContext(job.id, tmp_path, plan_store=store)
-    with pytest.raises(PermissionError, match='not allowed'):
-        await build_advanced_tools(context)['remember_memory']('note')
-
-    def approval(kind, action, summary, preview):
-        authorized, request = store.request_or_consume_approval(job.id, kind, action, summary, preview)
-        if not authorized:
-            raise ApprovalRequired(request.id, summary)
-
-    context = ExecutionContext(job.id, tmp_path, plan_store=store, allowed_tools=TOOL_NAMES, approval_callback=approval)
-    with pytest.raises(ApprovalRequired):
-        await build_advanced_tools(context)['remember_memory']('note')
-    assert store.get_job(job.id).status == 'waiting_approval'
-    assert not store.list_memories(tmp_path)
-    assert store.notifications()[0]['status'] == 'waiting_approval'
 
 
 def test_project_index_incremental_citations_secrets_and_staleness(tmp_path):
@@ -263,12 +187,12 @@ async def test_exact_tool_budget_allows_final_summary(tmp_path):
 
 
 def test_cli_opt_in_and_invalid_limits(tmp_path):
-    result = _parse_run(f'--workspace "{tmp_path}" --memory --retrieval --subtasks --sandbox bwrap '
+    result = _parse_run(f'--workspace "{tmp_path}" --retrieval --subtasks --sandbox bwrap '
                         '--max-tokens 2000 --max-seconds 60 inspect', include_options=True)
-    assert result[-1] == {'memory': True, 'retrieval': True, 'subtasks': True, 'sandbox': 'bwrap',
+    assert result[-1] == {'retrieval': True, 'subtasks': True, 'sandbox': 'bwrap',
                           'max_tokens': 2000, 'max_elapsed_seconds': 60}
     assert _parse_run('inspect', include_options=True)[-1] == {}
-    for options in ({'memory': 'true'}, {'max_tokens': 0}, {'max_tokens': True}, {'sandbox': 'unsafe'}, {'unknown': True}):
+    for options in ({'retrieval': 'true'}, {'max_tokens': 0}, {'max_tokens': True}, {'sandbox': 'unsafe'}, {'unknown': True}):
         with pytest.raises(ValueError):
             validate_options(options)
 
@@ -287,38 +211,3 @@ async def test_advanced_tools_not_exposed_without_job_opt_in(tmp_path, monkeypat
     await ai.execute_local_ai('inspect', mode='developer', execution_context=context,
                               reply_language=ai.ReplyLanguage('en', 'English', 'test'))
     assert not set(observed) & TOOL_NAMES
-
-
-async def test_ollama_embedding_protocol_handles_fragmented_response(monkeypatch):
-    from workflows.storage.knowledge import OllamaEmbeddings
-    observed = {}
-
-    class Body:
-        async def iter_chunked(self, size):
-            for part in (b'{"embeddings":', b'[[3.0,4.0]]}'):
-                yield part
-
-    class Response:
-        status = 200
-        content = Body()
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            pass
-
-    class Session(Response):
-        def __init__(self, **kwargs):
-            pass
-
-        def post(self, url, json):
-            observed.update(url=url, payload=json)
-            return Response()
-
-    monkeypatch.setenv('SUTO_EMBED_MODEL', 'test-model')
-    monkeypatch.setenv('SUTO_EMBED_URL', 'http://localhost:11434')
-    monkeypatch.setattr('workflows.storage.knowledge.aiohttp.ClientSession', Session)
-    assert await OllamaEmbeddings().embed('vehicle') == [.6, .8]
-    assert observed['url'] == 'http://localhost:11434/api/embed'
-    assert observed['payload'] == {'model': 'test-model', 'input': 'vehicle', 'truncate': False}

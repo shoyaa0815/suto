@@ -332,7 +332,7 @@ def _parse_run(argument: str, *, include_options: bool = False):
             if not parts:
                 raise ValueError("--workspace requires a path")
             workspace = Path(parts.pop(0)).expanduser().resolve()
-        elif flag in {'--memory', '--retrieval', '--subtasks'}:
+        elif flag in {'--retrieval', '--subtasks'}:
             options[flag[2:]] = True
         elif flag in {'--sandbox', '--max-tokens', '--max-tool-calls', '--max-seconds', '--max-files'}:
             if not parts:

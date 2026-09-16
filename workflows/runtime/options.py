@@ -5,11 +5,11 @@ from .context import ExecutionLimits
 
 def validate_options(options: dict | None) -> dict:
     options = dict(options or {})
-    allowed = {'memory', 'retrieval', 'subtasks', 'sandbox', 'max_tokens', 'max_tool_calls',
+    allowed = {'retrieval', 'subtasks', 'sandbox', 'max_tokens', 'max_tool_calls',
                'max_elapsed_seconds', 'max_changed_files'}
     if options.keys() - allowed:
         raise ValueError('unknown job options: ' + ', '.join(sorted(options.keys() - allowed)))
-    for name in ('memory', 'retrieval', 'subtasks'):
+    for name in ('retrieval', 'subtasks'):
         if name in options and type(options[name]) is not bool:
             raise ValueError(f'{name} must be a boolean')
     if options.get('sandbox', 'process') not in {'process', 'bwrap'}:

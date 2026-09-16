@@ -1,15 +1,9 @@
-"""Workspace-scoped semantic memory and bounded, incremental project retrieval."""
+"""Bounded, incremental keyword retrieval for workspace project files."""
 import hashlib
-import json
-import math
 import os
 import re
 import stat
-from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
-
-import aiohttp
 
 from .redaction import redact_text
 
@@ -54,121 +48,7 @@ def safe_document(workspace: str, relative: str) -> bytes:
         os.close(fd)
 
 
-def normalized_vector(vector) -> list[float]:
-    if not isinstance(vector, list) or not 1 <= len(vector) <= 4096:
-        raise ValueError('invalid embedding dimensions')
-    if any(type(value) not in (int, float) or not math.isfinite(value) for value in vector):
-        raise ValueError('embedding must contain finite numbers')
-    norm = math.sqrt(sum(value * value for value in vector))
-    if not math.isfinite(norm) or norm == 0:
-        raise ValueError('embedding has invalid norm')
-    return [value / norm for value in vector]
-
-
-class OllamaEmbeddings:
-    def __init__(self):
-        self.base_url = os.environ.get('SUTO_EMBED_URL', 'http://localhost:11434').rstrip('/')
-        self.model = os.environ.get('SUTO_EMBED_MODEL', '').strip()
-        self.identity = self.base_url + '#' + self.model
-
-    async def embed(self, text: str) -> list[float]:
-        if not self.model:
-            raise ValueError('semantic memory requires SUTO_EMBED_MODEL and a running Ollama embedding model')
-        try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-                async with session.post(self.base_url + '/api/embed', json={
-                        'model': self.model, 'input': text, 'truncate': False}) as response:
-                    if response.status != 200:
-                        raise RuntimeError(f'embedding provider returned HTTP {response.status}')
-                    raw = bytearray()
-                    async for chunk in response.content.iter_chunked(16384):
-                        raw.extend(chunk)
-                        if len(raw) > 256000:
-                            raise ValueError('embedding response too large')
-                    payload = json.loads(raw)
-                    if not isinstance(payload, dict):
-                        raise ValueError('embedding provider returned an invalid response')
-                    vectors = payload.get('embeddings', [])
-                    if not isinstance(vectors, list) or len(vectors) != 1:
-                        raise ValueError('embedding provider must return exactly one vector')
-                    return normalized_vector(vectors[0])
-        except (aiohttp.ClientError, TimeoutError) as error:
-            raise RuntimeError(f'embedding provider unavailable ({type(error).__name__})') from error
-
-
 class KnowledgeStore:
-    def memory_enabled(self, workspace) -> bool:
-        key = workspace_key(workspace)
-        with self._connect() as db:
-            row = db.execute('SELECT memory_enabled FROM workspace_features WHERE workspace=?', (key,)).fetchone()
-            return bool(row and row[0])
-
-    def set_memory_enabled(self, workspace, enabled: bool) -> None:
-        key = workspace_key(workspace)
-        with self._connect() as db:
-            db.execute('INSERT INTO workspace_features VALUES(?,?) ON CONFLICT(workspace) '
-                       'DO UPDATE SET memory_enabled=excluded.memory_enabled', (key, int(enabled)))
-            self._log(db, None, 'memory.enabled' if enabled else 'memory.disabled', key)
-
-    def list_memories(self, workspace) -> list[dict]:
-        key = workspace_key(workspace)
-        with self._connect() as db:
-            return [dict(row) for row in db.execute('SELECT id,content,model,created_at FROM memories '
-                                                    'WHERE workspace=? ORDER BY created_at DESC LIMIT 500', (key,))]
-
-    async def remember(self, workspace, content: str, *, embedder=None, job_id=None) -> str:
-        key = workspace_key(workspace)
-        if not self.memory_enabled(key):
-            raise PermissionError('memory is disabled for this workspace')
-        if not isinstance(content, str) or not content.strip() or len(content) > 4000:
-            raise ValueError('memory must contain 1-4000 characters')
-        content = redact_text(content)
-        embedder = embedder or OllamaEmbeddings()
-        vector = normalized_vector(await embedder.embed(content))
-        memory_id = 'mem_' + uuid4().hex[:12]
-        with self._connect() as db:
-            db.execute('BEGIN IMMEDIATE')
-            enabled = db.execute('SELECT memory_enabled FROM workspace_features WHERE workspace=?', (key,)).fetchone()
-            if not enabled or not enabled[0]:
-                raise PermissionError('memory was disabled while embedding')
-            if db.execute('SELECT COUNT(*) FROM memories WHERE workspace=?', (key,)).fetchone()[0] >= 500:
-                raise ValueError('workspace memory quota reached (500 entries)')
-            db.execute('INSERT INTO memories VALUES(?,?,?,?,?,?)', (memory_id, key, content,
-                       json.dumps(vector), embedder.identity, datetime.now(UTC).isoformat()))
-            self._log(db, job_id, 'memory.saved', memory_id)
-        return memory_id
-
-    async def recall(self, workspace, query: str, *, embedder=None, limit: int = 5) -> list[dict]:
-        key = workspace_key(workspace)
-        if not self.memory_enabled(key):
-            raise PermissionError('memory is disabled for this workspace')
-        if not isinstance(query, str) or not query.strip() or len(query) > 4000:
-            raise ValueError('memory query must contain 1-4000 characters')
-        embedder = embedder or OllamaEmbeddings()
-        vector = normalized_vector(await embedder.embed(redact_text(query)))
-        with self._connect() as db:
-            enabled = db.execute('SELECT memory_enabled FROM workspace_features WHERE workspace=?', (key,)).fetchone()
-            if not enabled or not enabled[0]:
-                raise PermissionError('memory was disabled while embedding')
-            rows = db.execute('SELECT * FROM memories WHERE workspace=? AND model=? LIMIT 500',
-                              (key, embedder.identity)).fetchall()
-        matches = []
-        for row in rows:
-            stored = normalized_vector(json.loads(row['embedding']))
-            if len(stored) != len(vector):
-                continue
-            score = sum(a * b for a, b in zip(stored, vector))
-            matches.append({'id': row['id'], 'content': row['content'], 'score': round(score, 6)})
-        return sorted(matches, key=lambda item: item['score'], reverse=True)[:min(max(int(limit), 1), 10)]
-
-    def forget_memory(self, workspace, memory_id: str) -> bool:
-        key = workspace_key(workspace)
-        with self._connect() as db:
-            cursor = db.execute('DELETE FROM memories WHERE workspace=? AND id=?', (key, memory_id))
-            if cursor.rowcount:
-                self._log(db, None, 'memory.deleted', memory_id)
-            return cursor.rowcount == 1
-
     def index_workspace(self, workspace) -> dict:
         key = workspace_key(workspace)
         seen = set()

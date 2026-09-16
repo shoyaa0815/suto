@@ -13,8 +13,7 @@ python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 ```
 
-Copy `config.example.yaml` to `config.yaml` and set the non-secret local profile
-and defaults used when Discord users are first seen:
+Copy `config.example.yaml` to `config.yaml` and set the non-secret local profile:
 
 ```yaml
 version: 1
@@ -72,30 +71,13 @@ launching an interactive CLI, starting an AI session, or accessing hardware.
 arrow keys to select a field and Enter to edit it; select Save and press Enter
 to validate, persist atomically, and exit. Esc cancels field editing, and
 discarding staged changes requires confirmation. Restart Suto after saving.
-Discord and the chat CLI read these values but cannot change them. Discord uses
-timezone and locale only as defaults for new users and keeps each user's
-Discord display name and existing profile isolated.
+The chat CLI reads these values but cannot change them.
 Legacy `SUTO_TIMEZONE`, `SUTO_LOCALE`, and `SUTO_USER_NAME` environment values
 remain fallbacks when the corresponding YAML value is absent. Keep API keys and
 platform tokens in `.env`, never in `config.yaml`.
 
 Reminders are persisted and appear in the terminal when they become due. If
 Suto was closed at that time, it reports the missed reminder on the next start.
-
-In Discord servers, Suto processes a message only when the bot is directly
-mentioned. Direct messages do not require a mention. In agent mode, reminders
-default to a private Discord message; requests that say "this channel" or
-mention an accessible text channel are delivered there instead. The bot and
-requesting user must both be able to view and send messages in the target
-channel. These permissions are checked again immediately before delivery.
-Discord reminders are retried while the bot is running and remain persisted
-across restarts.
-
-Discord agent mode also supports `!notification` and
-`!notification remove <name>` in the bot's DM. Discord also provides `!help`,
-`!clear`, and `!reset all` there. These private commands are rejected in server
-channels. If more than one pending reminder has the same name, none is removed
-and the matching reminders are listed with their IDs and times.
 
 The terminal interface exposes `/help`, `/notification` for pending reminders,
 `/notification remove <name>` to remove one by name, and `/exit`. If a name is

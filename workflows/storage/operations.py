@@ -98,8 +98,7 @@ class OperationsStore:
                 'integrity': integrity, 'schema_version': version, 'foreign_key_errors': foreign_keys,
                 'worker_alive': healthy_worker, 'worker': worker, 'settings': self.settings(),
                 'capabilities': {'bwrap_installed': bool(shutil.which('bwrap', path='/usr/bin:/bin')),
-                                 'prlimit_installed': bool(shutil.which('prlimit', path='/usr/bin:/bin')),
-                                 'embedding_model_configured': bool(os.environ.get('SUTO_EMBED_MODEL', '').strip())},
+                                 'prlimit_installed': bool(shutil.which('prlimit', path='/usr/bin:/bin'))},
                 'database_bytes': self.path.stat().st_size, 'metrics': self.metrics()}
 
     def backup(self, destination: str | Path) -> Path:
