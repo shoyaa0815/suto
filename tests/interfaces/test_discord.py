@@ -125,6 +125,67 @@ def test_discord_startup_does_not_overwrite_existing_identity(
     assert started == ["test-token"]
 
 
+def test_discord_retries_the_known_initial_gateway_reconnect_bug(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "config.yaml").write_text(
+        "version: 1\nprofile:\n  timezone: Asia/Bangkok\n"
+        "  locale: th\n  display_name: Suto Owner\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_run(token):
+        calls.append(token)
+        if len(calls) == 1:
+            raise AttributeError("'NoneType' object has no attribute 'sequence'")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DISCORD_TOKEN", "test-token")
+    monkeypatch.setattr(discord_bot, "configured_profile", None)
+    monkeypatch.setattr(discord_bot.client, "run", fake_run)
+    monkeypatch.setattr(discord_bot.client, "clear", lambda: calls.append("clear"))
+    monkeypatch.setattr(discord_bot.client.http, "connector", object())
+    monkeypatch.setattr(discord_bot.time, "sleep", lambda seconds: calls.append(seconds))
+
+    discord_bot.run("agent")
+
+    assert calls == ["test-token", "clear", discord_bot.DISCORD_RETRY_BASE_SECONDS, "test-token"]
+    assert discord_bot.client.http.connector is discord_bot.discord.utils.MISSING
+
+
+def test_discord_retries_server_error_with_exponential_backoff(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "config.yaml").write_text(
+        "version: 1\nprofile:\n  timezone: Asia/Bangkok\n"
+        "  locale: th\n  display_name: Suto Owner\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    class _ServerError(Exception):
+        status = 500
+
+    def fake_run(token):
+        calls.append(token)
+        if calls.count("test-token") < 3:
+            raise _ServerError()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DISCORD_TOKEN", "test-token")
+    monkeypatch.setattr(discord_bot, "configured_profile", None)
+    monkeypatch.setattr(discord_bot.discord, "DiscordServerError", _ServerError)
+    monkeypatch.setattr(discord_bot.client, "run", fake_run)
+    monkeypatch.setattr(discord_bot.client, "clear", lambda: calls.append("clear"))
+    monkeypatch.setattr(discord_bot.client.http, "connector", object())
+    monkeypatch.setattr(discord_bot.time, "sleep", lambda seconds: calls.append(seconds))
+
+    discord_bot.run("agent")
+
+    assert calls == ["test-token", "clear", 5, "test-token", "clear", 10, "test-token"]
+
+
 class _Channel:
     def __init__(self, channel_id, name, bot_permissions, user_permissions):
         self.id = channel_id

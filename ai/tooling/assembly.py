@@ -10,6 +10,7 @@ from tools import (
     build_workspace_tools,
     get_tools,
 )
+from tools.datetime_tool import get_current_datetime
 from workflows.runtime.context import ExecutionContext
 
 from .. import client
@@ -50,6 +51,13 @@ def build_runtime_tools(
     handlers = build_attachment_tools(attachments, complete_document_part)
     if assistant_context is not None:
         handlers.update(build_task_tools(assistant_context))
+        user = assistant_context.store.get_user(assistant_context.user_id)
+        if user is not None:
+            # "today" must be evaluated in the same timezone used when the
+            # user's reminders were created and are displayed by Discord.
+            handlers["get_current_datetime"] = lambda: get_current_datetime(
+                user.timezone
+            )
     if execution_context is not None:
         handlers.update(
             build_workspace_tools(execution_context, change_event_callback)

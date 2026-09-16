@@ -12,6 +12,7 @@ dependencies = [
     "openpyxl>=3.1.5",
     "pypdf>=6.16.1",
     "lingua-language-detector>=2.2.0,<3",
+    "prompt-toolkit>=3.0.52,<4",
     "textual>=0.89.1",
 ]
 

@@ -1,4 +1,4 @@
-from interfaces.tui.output import set_activity, write_styled
+from interfaces.cli.output import set_activity, write_styled
 
 
 MAX_PROGRESS_DETAIL_CHARS = 60
@@ -57,10 +57,10 @@ def activity_text(update: dict) -> str | None:
     if activity == "tool":
         tool_name = str(update["detail"]).split(" ", 1)[0]
         detail = TOOL_ACTIVITY_NAMES.get(tool_name, "processing")
-        return f"suto working: {detail}…"
+        return f"Suto is {detail}"
     if activity == "tool_done":
-        return "suto thinking…"
-    return "suto thinking…"
+        return "Suto is thinking"
+    return "Suto is thinking"
 
 
 def print_progress(update: dict, prefix: str = "") -> None:

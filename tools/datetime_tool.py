@@ -1,4 +1,5 @@
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # PROMPT is this tool's slice of the AI's system prompt: it tells the AI
 # when/why to call get_current_datetime. tools/__init__.py collects every
@@ -56,8 +57,9 @@ SCHEMA = {
 # answering 18:44 for a 21:44 local time and aging the year by one along the
 # way, in questions that never mentioned UTC. These are local times; anything
 # that has to be converted from them is better added as its own field.
-def get_current_datetime() -> str:
-    now = datetime.now().astimezone()
+def get_current_datetime(timezone: str | None = None) -> str:
+    """Return the current time in the caller's requested IANA timezone."""
+    now = datetime.now(ZoneInfo(timezone)) if timezone else datetime.now().astimezone()
     return "\n".join(
         [
             f"day_of_week: {now.strftime('%A')}",

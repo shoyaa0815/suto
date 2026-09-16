@@ -8,6 +8,8 @@ from assistant.tasks.tools import (
     REMINDER_CREATION_TOOL_NAMES,
     reminder_creation_requested,
 )
+from application.modes import CLARIFICATIONS_ENABLED
+from tools.clarification import parse_request as parse_clarification_request
 from workflows.runtime.context import ApprovalRequired, ExecutionLimitExceeded
 
 from .. import client, config, response
@@ -171,6 +173,42 @@ class ModelToolLoop:
                 )
                 if reason:
                     return self.blocked_result(reason)
+                if name == "ask_user" and CLARIFICATIONS_ENABLED:
+                    try:
+                        clarification = parse_clarification_request(args)
+                    except ValueError as error:
+                        self.outcome = f"failed: invalid clarification request: {error}"
+                        return self.build_result(
+                            "no response from ai",
+                            status="failed",
+                            error=self.outcome,
+                        )
+                    await emit_tool_event(
+                        self.tool_event_callback,
+                        {
+                            "job_id": (
+                                self.execution_context.job_id
+                                if self.execution_context is not None
+                                else None
+                            ),
+                            "tool_name": name,
+                            "arguments": audit_tool_arguments(name, args),
+                            "status": "waiting_input",
+                            "elapsed_seconds": 0,
+                            "result_size": 0,
+                            "error": None,
+                        },
+                    )
+                    self.outcome = "waiting for user clarification"
+                    return self.build_result(
+                        clarification["question"]
+                        + "\n"
+                        + "\n".join(
+                            f"- {option}" for option in clarification["options"]
+                        ),
+                        status="waiting_input",
+                        clarification=clarification,
+                    )
                 if name in self.tools:
                     result, tool_outcome, tool_error, elapsed_ms = (
                         await self._execute_tool(name, args)

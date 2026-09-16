@@ -1,6 +1,8 @@
 import json
 import re
 from dataclasses import asdict
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from assistant.context import AssistantContext
 
@@ -26,7 +28,8 @@ PROMPT = """- Personal task tools are available only in agent mode.
 - Never invent task or reminder IDs. Use list_tasks or list_reminders before
   completing, rescheduling, or cancelling an item when its ID is unknown.
 - When the user asks for a summary, use list_tasks and list_reminders to answer
-  from the current user's saved data."""
+  from the current user's saved data. For each reminder, use `local_time`
+  exactly as returned; do not convert its date or time."""
 
 REMINDER_CREATION_TOOL_NAMES = frozenset(
     {"create_reminder_in", "create_reminder_at", "create_reminders_at"}
@@ -181,6 +184,19 @@ def _json(value) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+def _reminders_json(reminders) -> str:
+    """Give the model an unambiguous local rendering alongside the instant."""
+    values = []
+    for reminder in reminders:
+        value = asdict(reminder)
+        instant = datetime.fromisoformat(reminder.remind_at).astimezone(
+            ZoneInfo(reminder.timezone)
+        )
+        value["local_time"] = instant.strftime("%Y-%m-%d %H:%M %Z")
+        values.append(value)
+    return json.dumps(values, ensure_ascii=False)
+
+
 def build_task_tools(context: AssistantContext) -> dict:
     store = context.store
     user_id = context.user_id
@@ -270,7 +286,7 @@ def build_task_tools(context: AssistantContext) -> dict:
         )
 
     def list_reminders():
-        return _json(store.list_reminders(user_id))
+        return _reminders_json(store.list_reminders(user_id))
 
     def list_delivery_channels(query: str = ""):
         needle = query.strip().casefold()

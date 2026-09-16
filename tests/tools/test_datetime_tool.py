@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from tools import datetime_tool
 
@@ -91,3 +91,18 @@ def test_time_24h_is_zero_padded_hour_and_minute(monkeypatch):
 
 def test_schema_name_matches_the_registered_tool_name():
     assert datetime_tool.SCHEMA["function"]["name"] == "get_current_datetime"
+
+
+def test_requested_timezone_controls_the_returned_local_time(monkeypatch):
+    class _FixedInstant(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            instant = datetime(2026, 1, 5, 20, 7, tzinfo=UTC)
+            return instant.astimezone(tz) if tz else instant
+
+    monkeypatch.setattr(datetime_tool, "datetime", _FixedInstant)
+
+    fields = _fields(datetime_tool.get_current_datetime("Asia/Bangkok"))
+
+    assert fields["date_iso"] == "2026-01-06"
+    assert fields["time_24h"] == "03:07"

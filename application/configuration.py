@@ -84,6 +84,11 @@ def load_settings(path: str | Path = DEFAULT_CONFIG_PATH) -> AppSettings:
             raise ValueError(f"invalid YAML in {config_path}") from error
     else:
         raw = {}
+    return parse_settings(raw)
+
+
+def parse_settings(raw: object) -> AppSettings:
+    """Validate decoded configuration using the same rules as file loading."""
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):

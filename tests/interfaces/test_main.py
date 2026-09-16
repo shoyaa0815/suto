@@ -9,6 +9,7 @@ from main import _parse_args
     [
         (["chat", "cli"], ("cli", "chat")),
         (["agent", "cli"], ("cli", "agent")),
+        (["web"], ("web", "web")),
         (["home"], ("home_terminal", "home")),
         (["settings"], ("settings_terminal", "settings")),
         (["chat", "discord"], ("discord", "chat")),
@@ -34,6 +35,9 @@ def test_parse_args_accepts_interface_and_mode(args, expected):
         ["chat"],
         ["chat", "unknown"],
         ["chat", "tui"],
+        ["chat", "web"],
+        ["agent", "web"],
+        ["web", "cli"],
         ["chat", "discord", "extra"],
     ],
 )
@@ -64,3 +68,27 @@ def test_main_dispatches_settings_to_plain_terminal(monkeypatch):
     main_module.main()
 
     assert calls == ["settings"]
+
+
+def test_main_dispatches_cli_to_the_plain_terminal(monkeypatch):
+    import interfaces.cli as cli
+
+    calls = []
+    monkeypatch.setattr(main_module.sys, "argv", ["main.py", "agent", "cli"])
+    monkeypatch.setattr(cli, "run", calls.append)
+
+    main_module.main()
+
+    assert calls == ["agent"]
+
+
+def test_main_dispatches_web_dashboard(monkeypatch):
+    import interfaces.web as web
+
+    calls = []
+    monkeypatch.setattr(main_module.sys, "argv", ["main.py", "web"])
+    monkeypatch.setattr(web, "run", calls.append)
+
+    main_module.main()
+
+    assert calls == ["web"]

@@ -60,8 +60,13 @@ cancel personal tasks and reminders from natural-language requests. In agent
 mode, requests such as `สรุปวันนี้ให้หน่อย` can be answered from the current
 user's open tasks and scheduled reminders.
 
+The `cli` interface is a plain stdin/stdout session. It prints the active model
+and mode, accepts requests in a framed `>` prompt, and leaves each submitted
+user message in its frame. Assistant replies are printed without a name prefix.
+The CLI does not launch a full-screen UI.
+
 `home` is currently a silent placeholder. It exits successfully without
-launching the Textual TUI, starting an AI session, or accessing hardware.
+launching an interactive CLI, starting an AI session, or accessing hardware.
 
 `settings` opens a keyboard-driven terminal editor for `config.yaml`. Use the
 arrow keys to select a field and Enter to edit it; select Save and press Enter

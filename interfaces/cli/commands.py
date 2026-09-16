@@ -1,11 +1,12 @@
-"""Public TUI command dispatch, isolated from session lifecycle concerns."""
+"""Public CLI command dispatch, isolated from session lifecycle concerns."""
 
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from interfaces.tui.operations import print_pending_reminders
-from interfaces.tui.output import write as print
+from interfaces.cli import CLI_STORAGE_INTERFACE
+from interfaces.cli.operations import print_pending_reminders
+from interfaces.cli.output import write as print
 
 
 @dataclass(frozen=True)
@@ -86,7 +87,7 @@ def _reset(context: CommandContext, argument: str) -> CommandOutcome:
     count = context.store.reset_conversations()
     conversation = context.store.get_or_create_conversation(
         context.user.id,
-        "tui",
+        CLI_STORAGE_INTERFACE,
         "local",
     )
     print(f"All saved conversations deleted ({count}).")

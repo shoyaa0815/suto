@@ -15,3 +15,4 @@ class AIExecutionResult:
     prompt_tokens: int
     output_tokens: int
     elapsed_seconds: float
+    clarification: dict[str, list[str] | str] | None = None

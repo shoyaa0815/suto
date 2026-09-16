@@ -5,7 +5,7 @@ import sqlite3
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from interfaces.tui.output import write as print
+from interfaces.cli.output import write as print
 
 
 def print_json(value):
@@ -95,7 +95,7 @@ async def handle_operations(store, command: str, argument: str) -> bool:
     return True
 
 
-async def notify_tui(store):
+async def notify_cli(store):
     """Opt-in local delivery; acknowledgement follows printing (at least once)."""
     while True:
         for event in reversed(store.notifications()):

@@ -14,7 +14,7 @@ from workflows.storage.migrations import SCHEMA_VERSION
 from workflows.runtime.runner import JobRunner
 from workflows.storage.store import JobStore
 from workflows.runtime.worker import AutomationWorker
-from interfaces.tui.operations import handle_operations
+from interfaces.cli.operations import handle_operations
 
 
 async def eventually(predicate, timeout=3):

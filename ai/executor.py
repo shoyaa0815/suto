@@ -68,6 +68,7 @@ async def execute_local_ai(
         text: str,
         status: str = "completed",
         error: str | None = None,
+        clarification: dict[str, list[str] | str] | None = None,
     ) -> AIExecutionResult:
         return AIExecutionResult(
             text=text,
@@ -76,6 +77,7 @@ async def execute_local_ai(
             prompt_tokens=progress.prompt_tokens,
             output_tokens=progress.output_tokens,
             elapsed_seconds=time.perf_counter() - request_started,
+            clarification=clarification,
         )
 
     def blocked_result(reason: str) -> AIExecutionResult:

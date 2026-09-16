@@ -1,13 +1,14 @@
-"""TUI session orchestration with compatibility exports for parked helpers."""
+"""Plain CLI session orchestration with compatibility exports for parked helpers."""
 
 import asyncio
 import os
 from collections.abc import Awaitable, Callable
 
-from ai import ask_local_ai
+from ai import ask_local_ai, execute_local_ai
 from application.configuration import load_settings
+from application.modes import CLARIFICATIONS_ENABLED
 from assistant import AssistantContext
-from capabilities.developer.tui_cli import (
+from capabilities.developer.cli import (
     TERMINAL_JOB_STATUSES,
     _definition_options,
     _parse_automation_run,
@@ -29,21 +30,22 @@ from capabilities.developer.tui_cli import (
     _single_argument,
     _wait_for_job,
 )
-from interfaces.tui.commands import (
+from interfaces.cli import CLI_STORAGE_INTERFACE
+from interfaces.cli.commands import (
     COMMAND_HANDLERS,
     CommandContext,
     handle_command,
     print_help as _print_help,
 )
-from interfaces.tui.language import (
+from interfaces.cli.language import (
     choose_reply_language_async as _choose_reply_language_async,
 )
-from interfaces.tui.operations import (
+from interfaces.cli.operations import (
     notify_personal_reminders,
-    notify_tui,
+    notify_cli,
 )
-from interfaces.tui.output import set_activity, write as print
-from interfaces.tui.progress import print_progress
+from interfaces.cli.output import set_activity, write as print
+from interfaces.cli.progress import activity_text, print_progress
 from workflows.runtime.runner import JobRunner
 from workflows.runtime.worker import AutomationWorker
 from workflows.storage.store import JobStore
@@ -98,7 +100,7 @@ async def run_session(
     store = JobStore(database_path)
     profile = load_settings().profile
     user = store.resolve_channel_identity(
-        "tui",
+        CLI_STORAGE_INTERFACE,
         "local",
         display_name=profile.display_name,
         timezone=profile.timezone,
@@ -110,12 +112,16 @@ async def run_session(
         timezone=profile.timezone,
         locale=profile.locale,
     )
-    conversation = store.get_or_create_conversation(user.id, "tui", "local")
+    conversation = store.get_or_create_conversation(
+        user.id, CLI_STORAGE_INTERFACE, "local"
+    )
     worker = AutomationWorker(store, JobRunner(store))
     worker_task = asyncio.create_task(worker.start())
     notification_task = (
-        asyncio.create_task(notify_tui(store))
-        if os.environ.get("SUTO_NOTIFY_TUI", "").lower()
+        asyncio.create_task(notify_cli(store))
+        if os.environ.get(
+            "SUTO_NOTIFY_CLI", os.environ.get("SUTO_NOTIFY_TUI", "")
+        ).lower()
         in {"1", "true", "yes"}
         else None
     )
@@ -123,7 +129,6 @@ async def run_session(
     background_tasks = [reminder_task]
     if notification_task is not None:
         background_tasks.append(notification_task)
-    print("Type /help for commands")
     try:
         await asyncio.sleep(0)
         if worker_task.done():
@@ -149,7 +154,7 @@ async def run_session(
                 if outcome.conversation_id is not None:
                     conversation = store.get_or_create_conversation(
                         user.id,
-                        "tui",
+                        CLI_STORAGE_INTERFACE,
                         "local",
                     )
                 if outcome.reset_language:
@@ -166,27 +171,83 @@ async def run_session(
             )
             previous_language_code = reply_language.code
 
+            context = (
+                AssistantContext(store, user.id, conversation.id)
+                if mode == "agent"
+                else None
+            )
+            clarification_reader = (
+                getattr(read_prompt, "request_clarification", None)
+                if CLARIFICATIONS_ENABLED
+                else None
+            )
+            activity_writer = getattr(read_prompt, "set_activity", None)
+
+            def report_progress(update: dict) -> None:
+                if activity_writer is None:
+                    print_progress(update)
+                else:
+                    activity_writer(activity_text(update))
+
             try:
-                answer = await ask_local_ai(
-                    prompt,
-                    mode=mode,
-                    reply_language=reply_language,
-                    progress_callback=print_progress,
-                    conversation_history=history,
-                    assistant_context=(
-                        AssistantContext(store, user.id, conversation.id)
-                        if mode == "agent"
-                        else None
-                    ),
-                )
+                if activity_writer is not None:
+                    activity_writer("Suto is thinking")
+                if clarification_reader is None:
+                    answer = await ask_local_ai(
+                        prompt,
+                        mode=mode,
+                        reply_language=reply_language,
+                        progress_callback=report_progress,
+                        conversation_history=history,
+                        assistant_context=context,
+                    )
+                else:
+                    result = await execute_local_ai(
+                        prompt,
+                        mode=mode,
+                        reply_language=reply_language,
+                        progress_callback=report_progress,
+                        conversation_history=history,
+                        assistant_context=context,
+                    )
+                    while result.status == "waiting_input" and result.clarification:
+                        answer = await clarification_reader(result.clarification)
+                        if answer is None:
+                            print("Clarification cancelled.")
+                            break
+                        question = str(result.clarification["question"])
+                        options = result.clarification["options"]
+                        store.add_message(
+                            conversation.id,
+                            "assistant",
+                            question + "\n" + "\n".join(
+                                f"- {option}" for option in options
+                            ),
+                        )
+                        resumed_history = store.conversation_history(conversation.id)
+                        store.add_message(conversation.id, "user", answer)
+                        result = await execute_local_ai(
+                            f"Original request: {prompt}\nUser's answer: {answer}",
+                            mode=mode,
+                            reply_language=reply_language,
+                            progress_callback=report_progress,
+                            conversation_history=resumed_history,
+                            assistant_context=context,
+                        )
+                    else:
+                        answer = result.text
+                    if result.status == "waiting_input":
+                        continue
             except KeyboardInterrupt:
                 print("\nrequest cancelled")
                 continue
             finally:
                 set_activity(None)
+                if activity_writer is not None:
+                    activity_writer(None)
 
             store.add_message(conversation.id, "assistant", answer)
-            print(f"suto> {answer}")
+            print(answer)
     finally:
         await _cancel_tasks(background_tasks)
         await worker.stop()

@@ -1,4 +1,4 @@
-"""Non-blocking language selection for the TUI session."""
+"""Non-blocking language selection for the CLI session."""
 
 import asyncio
 import threading
@@ -10,7 +10,7 @@ async def choose_reply_language_async(
     prompt: str,
     previous_code: str | None,
 ):
-    """Run Lingua off the UI event loop; its first detection can be expensive."""
+    """Run Lingua off the CLI event loop; its first detection can be expensive."""
     loop = asyncio.get_running_loop()
     result = loop.create_future()
 

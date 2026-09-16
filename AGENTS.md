@@ -26,7 +26,7 @@ Run focused tests while developing, then the full suite for shared changes.
   handler assembly and audit events; `providers/` owns provider adapters.
 - `assistant/`: identity, conversations, tasks, reminders, and briefings.
 - `interfaces/`: terminal and Discord integrations; the LINE scaffold is parked.
-  In `interfaces/tui/`, `backend.py` owns session lifecycle, `commands.py` owns
+  In `interfaces/cli/`, `backend.py` owns session lifecycle, `commands.py` owns
   the public command registry, and `operations.py` owns background delivery.
 - `workflows/`: durable jobs, workers, scheduling, SQLite, and migrations;
   `capabilities/developer/` is tested but parked and not public.
@@ -47,7 +47,7 @@ flowchart LR
     end
     subgraph Host[Suto host]
         Main[main.py]
-        CLI[CLI / Textual]
+        CLI[Plain CLI]
         Discord[discord.py]
         Line[LINE scaffold<br/>parked / out of scope]
         AI[AI executor + tools]
@@ -93,7 +93,7 @@ flowchart LR
 - Trace flows end to end: entry point, validation, tool/business logic, storage,
   worker, side effect, failure handling, and user-visible result.
 - Preserve `chat`, `agent`, and parked `developer` separation.
-- Keep the TUI backend thin. Add public slash commands through the command
+- Keep the CLI backend thin. Add public slash commands through the command
   registry and keep background loops in operations, not in the session loop.
 - Keep the AI executor thin. Add request shaping, tool assembly, loop behavior,
   and execution limits to their owning modules instead of growing the public

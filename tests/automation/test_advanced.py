@@ -10,7 +10,7 @@ from workflows.runtime.options import validate_options
 from workflows.runtime.runner import JobRunner
 from workflows.storage.store import JobStore
 from workflows.runtime.worker import AutomationWorker
-from capabilities.developer.tui_cli import _parse_run
+from capabilities.developer.cli import _parse_run
 from tests.automation.test_hardening import eventually
 from tools.advanced import TOOL_NAMES, build_advanced_tools
 

@@ -1,4 +1,4 @@
-"""Parked developer CLI parsing and presentation helpers."""
+"""Parked developer command parsing and presentation helpers."""
 
 import asyncio
 import json
@@ -12,8 +12,8 @@ from workflows.library.definitions import (
 )
 from workflows.models import Job, JobStatus, MissedRunPolicy, ScheduleKind
 from workflows.storage.store import JobStore
-from interfaces.tui.output import write as print
-from interfaces.tui.progress import format_elapsed
+from interfaces.cli.output import write as print
+from interfaces.cli.progress import format_elapsed
 
 TERMINAL_JOB_STATUSES = frozenset(
     {
@@ -485,4 +485,3 @@ def _print_automatic_job_result(job: Job) -> None:
         print(f'suto> Job {job.id} is waiting for subtasks. Inspect with /subtasks {job.id}.')
     else:
         print(f"suto> Job {job.id} failed: {job.error or 'unknown error'}")
-

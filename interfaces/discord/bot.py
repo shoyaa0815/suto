@@ -18,6 +18,8 @@ from tools.file_reader import SUPPORTED_EXTENSIONS
 # Discord's own limit on one message. Longer answers are split across several.
 MAX_MESSAGE_CHARS = 2000
 MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+DISCORD_RETRY_BASE_SECONDS = 5
+DISCORD_RETRY_MAX_SECONDS = 60
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -58,6 +60,20 @@ def should_process_message(message, bot_user) -> bool:
 def _without_bot_mention(content: str, bot_user_id: int) -> str:
     pattern = rf"<@!?{re.escape(str(bot_user_id))}>"
     return re.sub(pattern, "", content).strip()
+
+
+def _retry_delay(attempt: int) -> int:
+    return min(
+        DISCORD_RETRY_BASE_SECONDS * 2 ** (attempt - 1),
+        DISCORD_RETRY_MAX_SECONDS,
+    )
+
+
+def _reset_client_for_retry() -> None:
+    client.clear()
+    # client.run() closes the aiohttp connector. ``clear()`` resets the
+    # session but retains that connector, so the next login needs a new one.
+    client.http.connector = discord.utils.MISSING
 
 
 def _discord_delivery_context(message):
@@ -192,7 +208,7 @@ def handle_personal_command(
     conversation_id: str | None = None,
     is_dm: bool = True,
 ) -> str | None:
-    """Handle Discord text equivalents of the TUI's personal commands."""
+    """Handle Discord text equivalents of the CLI's personal commands."""
     parts = prompt.split()
     if not parts:
         return None
@@ -422,4 +438,24 @@ def run(mode: str):
     token = os.environ.get("DISCORD_TOKEN")
     if not token:
         raise SystemExit("DISCORD_TOKEN is not set (put it in .env)")
-    client.run(token)
+    attempts = 0
+    while True:
+        try:
+            client.run(token)
+            return
+        except discord.DiscordServerError as error:
+            reason = f"Discord HTTP {error.status} during login"
+        except AttributeError as error:
+            # discord.py 2.7.1 can try to resume an initial failed gateway
+            # connection and dereference ``self.ws`` before it exists. The
+            # preceding gateway error (such as HTTP 503) is logged by the
+            # library; restart from a clean client state instead.
+            if "'NoneType' object has no attribute 'sequence'" not in str(error):
+                raise
+            reason = "initial gateway connection failed"
+
+        attempts += 1
+        delay = _retry_delay(attempts)
+        print(f"[discord] {reason}; retrying in {delay}s")
+        _reset_client_for_retry()
+        time.sleep(delay)

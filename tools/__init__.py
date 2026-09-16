@@ -10,6 +10,8 @@
 # outside this package needs to change. The AI executor asks this registry for tools
 # allowed by the active mode instead of exposing every tool globally.
 from .datetime_tool import get_current_datetime
+from .clarification import PROMPT as CLARIFICATION_PROMPT
+from .clarification import SCHEMA as CLARIFICATION_SCHEMA
 from assistant.tasks.tools import build_task_tools
 from assistant.tasks.tools import PROMPT as TASK_PROMPT
 from assistant.tasks.tools import SCHEMAS as TASK_SCHEMAS
@@ -59,6 +61,7 @@ ALL_TOOLS = {
     **{name: _workspace_unavailable for name in ADVANCED_TOOL_NAMES},
     **{name: _assistant_unavailable for name in TASK_TOOL_NAMES},
     "get_current_datetime": get_current_datetime,
+    "ask_user": _assistant_unavailable,
     "search_web": search_web,
     "fetch_url": fetch_url,
     # This placeholder is replaced with a request-scoped handler by ai/executor.py.
@@ -80,6 +83,7 @@ ALL_TOOL_SCHEMAS = {
     for schema in [
         *ADVANCED_SCHEMAS,
         *TASK_SCHEMAS,
+        CLARIFICATION_SCHEMA,
         DATETIME_SCHEMA,
         SEARCH_SCHEMA,
         FETCH_SCHEMA,
@@ -101,6 +105,7 @@ ALL_TOOL_GUIDANCE = {
     **{name: ADVANCED_PROMPT for name in ADVANCED_TOOL_NAMES},
     **{name: TASK_PROMPT for name in TASK_TOOL_NAMES},
     "get_current_datetime": DATETIME_PROMPT,
+    "ask_user": CLARIFICATION_PROMPT,
     "search_web": SEARCH_PROMPT,
     "fetch_url": FETCH_PROMPT,
     "read_attached_file": FILE_READER_PROMPT,

@@ -1,8 +1,11 @@
 from dataclasses import dataclass
 
-
 DEFAULT_MODE = "chat"
 PUBLIC_MODES = ("chat", "agent", "home")
+
+# Parked until clarification state can be persisted and resumed across
+# interfaces. The implementation remains available internally for that work.
+CLARIFICATIONS_ENABLED = False
 
 ASSISTANT_TOOLS = frozenset(
     {
@@ -13,7 +16,7 @@ ASSISTANT_TOOLS = frozenset(
         "search_attachment",
         "summarize_attachment",
     }
-)
+) | (frozenset({"ask_user"}) if CLARIFICATIONS_ENABLED else frozenset())
 
 PERSONAL_TASK_TOOLS = frozenset(
     {

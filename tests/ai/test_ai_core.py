@@ -58,6 +58,20 @@ async def test_chat_mode_exposes_web_tool_schemas(monkeypatch):
     assert "fetch_url" in observed_names
 
 
+async def test_parked_clarification_is_not_exposed_to_the_model(monkeypatch):
+    async def fake_chat(session, messages, tool_schemas, think=False):
+        assert "ask_user" not in {schema["function"]["name"] for schema in tool_schemas}
+        return {"message": {"content": "Please clarify the time."}}
+
+    monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
+    monkeypatch.setattr(ai.client, "chat", fake_chat)
+
+    result = await ai.execute_local_ai("question", mode="agent")
+
+    assert result.status == "completed"
+    assert result.clarification is None
+
+
 async def test_progress_reports_model_usage_and_completion(monkeypatch):
     updates = []
 

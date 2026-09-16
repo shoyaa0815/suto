@@ -1,14 +1,14 @@
 from workflows.models import MissedRunPolicy, ScheduleKind
 from workflows.storage.store import JobStore
-from capabilities.developer.tui_cli import (
+from capabilities.developer.cli import (
     _parse_run,
     _parse_schedule,
     _print_commands,
     _print_job_status,
     _print_plan,
 )
-from interfaces.tui.commands import print_help as _print_help
-from interfaces.tui.progress import (
+from interfaces.cli.commands import print_help as _print_help
+from interfaces.cli.progress import (
     activity_text,
     format_elapsed,
     print_progress,
@@ -262,13 +262,13 @@ def test_print_progress_hides_non_tool_activity(capsys):
 
 def test_progress_activity_text_distinguishes_thinking_and_tool_work():
     assert activity_text({"activity": "model", "detail": "waiting"}) == (
-        "suto thinking…"
+        "Suto is thinking"
     )
     assert activity_text(
         {"activity": "tool", "detail": "search_web (query=news)"}
-    ) == "suto working: searching the web…"
+    ) == "Suto is searching the web"
     assert activity_text({"activity": "tool_done", "detail": "done"}) == (
-        "suto thinking…"
+        "Suto is thinking"
     )
     assert activity_text({"activity": "finished", "detail": "completed"}) is None
 

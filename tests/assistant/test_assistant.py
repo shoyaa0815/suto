@@ -6,6 +6,7 @@ import ai
 import pytest
 from assistant import AssistantContext, DeliveryTargetContext
 from assistant.tasks.tools import build_task_tools
+from ai.tooling.assembly import build_runtime_tools
 from workflows.storage.store import JobStore
 from tests.support.ai_helpers import FakeClientSession
 
@@ -28,6 +29,33 @@ def test_identity_links_channels_and_stores_preferences(tmp_path):
 
     store.set_user_preference(user.id, "briefing_time", "08:30")
     assert store.user_preferences(user.id) == {"briefing_time": "08:30"}
+
+
+def test_personal_datetime_tool_uses_the_users_timezone(tmp_path, monkeypatch):
+    store = JobStore(tmp_path / "suto.db")
+    user = store.resolve_channel_identity(
+        "tui", "local", timezone="Asia/Bangkok"
+    )
+    observed = []
+
+    def fake_datetime(timezone=None):
+        observed.append(timezone)
+        return "local time"
+
+    monkeypatch.setattr("ai.tooling.assembly.get_current_datetime", fake_datetime)
+    tools = build_runtime_tools(
+        session=object(),
+        allowed_tools=frozenset({"get_current_datetime"}),
+        attachments={},
+        assistant_context=AssistantContext(store, user.id, "conversation"),
+        execution_context=None,
+        change_event_callback=None,
+        guard=object(),
+        progress=object(),
+    )
+
+    assert tools["get_current_datetime"]() == "local time"
+    assert observed == ["Asia/Bangkok"]
 
 
 def test_conversations_are_persistent_and_isolated(tmp_path):

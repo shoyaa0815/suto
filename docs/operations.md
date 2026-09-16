@@ -80,7 +80,7 @@ Completed metrics are retained even after detailed logs are cleaned up.
 
 Defaults: one running job, one running job per canonical workspace, 1,000 queued
 jobs, 120 submissions/minute, and 10,000,000 reported tokens per UTC day. The
-queue and submission checks run transactionally for TUI, automation, schedule
+queue and submission checks run transactionally for CLI, automation, schedule
 and subtask inserts. Workspace aliases resolve to the same concurrency scope.
 
 Daily token quota gates admission and continued execution. Token usage is known
@@ -238,8 +238,47 @@ server channel, including creating a reminder, remain available.
 
 `home` mode is launched with `python3 main.py home` and rejects an explicit
 interface argument. It is currently a silent placeholder that exits with status
-zero. It does not import or launch Textual, start an AI session or worker,
+zero. It does not launch an interactive CLI, start an AI session or worker,
 initialize SQLite, contact Home Assistant, or expose hardware tools.
+
+## Local web dashboard
+
+Run `venv/bin/python main.py web` to open Suto Control in the default browser.
+`web` is a top-level entrypoint like `home` and `settings`; `agent web` and
+`chat web` are no longer accepted. It binds only to `127.0.0.1:8765`.
+The browser opens after the port is listening. If launching the browser fails,
+use the private link printed in the terminal. Ctrl-C or SIGTERM closes the server.
+
+Each launch generates a private sign-in link. Its fragment is exchanged for an
+HttpOnly, SameSite=Strict session cookie and removed from browser history.
+Keep that link private. Restarting the dashboard invalidates previous cookies.
+APIs require that cookie; writes also require an exact local Origin and JSON
+request header. Host validation rejects alternate hostnames. No remote binding,
+public deployment or reverse-proxy mode is provided.
+
+Dashboard shows saved local CLI sessions, open personal tasks and scheduled
+reminders. Sessions supports search, paginated messages and exact local CLI
+identity/channel scoping; it does not expose other users' Discord conversations.
+Models displays provider/model environment defaults and credential presence,
+without returning credentials or contacting a provider. Logs shows bounded,
+redacted host job events, with search, event filtering, pagination and optional
+five-second refresh on the first page. Historical developer events are visible
+to the local operator, but no developer execution or approvals are exposed.
+MCP is an empty future page; System shows the installed project version and a
+disabled Update Suto control. Gateway/restart and web chat are not implemented.
+
+Settings edits the supported `config.yaml` profile schema as YAML. Validate &
+review shows the normalized diff before Save. Unknown fields, invalid timezones,
+malformed YAML and files over 32 KiB are rejected. Secrets remain in `.env`.
+The editor normalizes formatting and removes comments; a byte-level revision
+check detects changes since load, including external edits. Failed validation or
+conflicts preserve the draft and file; Reload requires confirmation for unsaved
+edits. Persistence reuses the existing atomic settings writer. Restart relevant
+Suto processes to apply saved settings; the dashboard never restarts them.
+
+Opening the dashboard never starts AI, automation or delivery workers. Existing
+SQLite is opened read-only with bounded results; missing databases show empty
+states without being created, and unsupported schemas fail without migrations.
 
 ## Local notifications and verification
 
@@ -251,7 +290,7 @@ waiting_approval create a durable local inbox item in the same transaction.
 /notifications ack 42
 ```
 
-`SUTO_NOTIFY_TUI=1` prints live TUI notifications and acknowledges them after
+`SUTO_NOTIFY_CLI=1` prints live CLI notifications and acknowledges them after
 printing. Delivery is at least once: a crash between printing and acknowledgement
 can repeat a message. External delivery of these job-lifecycle notifications is
 not included.
