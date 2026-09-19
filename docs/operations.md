@@ -3,10 +3,10 @@
 ## Host-managed settings
 
 Non-secret local profile and new-user defaults live in `config.yaml`; secrets
-remain in `.env`. Run `venv/bin/python main.py settings`, use the arrow keys and
-Enter to edit fields, then select Save and press Enter to validate, persist
-atomically, and exit. Unsaved exit requires confirmation. Restart Suto after
-so the CLI uses the new values. Chat clients cannot mutate this host configuration.
+remain in `.env`. Run `venv/bin/python main.py settings` to open the local web
+editor. It prints a private sign-in link, validates edits before saving, and
+persists valid settings atomically. Restart Suto after saving so the CLI uses
+the new values.
 Existing reminder timestamps are not rewritten; newly created reminders use
 the user's stored timezone.
 
@@ -182,38 +182,19 @@ requests. It is not a VM, and per-process resource limits are not cgroup-wide
 aggregate accounting. Files legitimately exposed inside the selected workspace
 and runtime are in scope for the approved command.
 
-## Home mode placeholder
+## Local web settings
 
-`home` mode is launched with `python3 main.py home` and rejects an explicit
-interface argument. It is currently a silent placeholder that exits with status
-zero. It does not launch an interactive CLI, start an AI session or worker,
-initialize SQLite, contact Home Assistant, or expose hardware tools.
-
-## Local web dashboard
-
-Run `venv/bin/python main.py web` to open Suto Control in the default browser.
-`web` is a top-level entrypoint like `home` and `settings`; `agent web` and
-`chat web` are no longer accepted. It binds only to `127.0.0.1:8765`.
+Run `venv/bin/python main.py settings` to open the Suto Settings editor in the
+default browser. It binds only to `127.0.0.1:8765`.
 The browser opens after the port is listening. If launching the browser fails,
 use the private link printed in the terminal. Ctrl-C or SIGTERM closes the server.
 
 Each launch generates a private sign-in link. Its fragment is exchanged for an
 HttpOnly, SameSite=Strict session cookie and removed from browser history.
-Keep that link private. Restarting the dashboard invalidates previous cookies.
+Keep that link private. Restarting the settings editor invalidates previous cookies.
 APIs require that cookie; writes also require an exact local Origin and JSON
 request header. Host validation rejects alternate hostnames. No remote binding,
 public deployment or reverse-proxy mode is provided.
-
-Dashboard shows saved local CLI sessions, open personal tasks and scheduled
-reminders. Sessions supports search, paginated messages and exact local CLI
-identity/channel scoping; it does not expose other users' conversations.
-Models displays provider/model environment defaults and credential presence,
-without returning credentials or contacting a provider. Logs shows bounded,
-redacted host job events, with search, event filtering, pagination and optional
-five-second refresh on the first page. Historical developer events are visible
-to the local operator, but no developer execution or approvals are exposed.
-MCP is an empty future page; System shows the installed project version and a
-disabled Update Suto control. Gateway/restart and web chat are not implemented.
 
 Settings edits the supported `config.yaml` profile schema as YAML. Validate &
 review shows the normalized diff before Save. Unknown fields, invalid timezones,
@@ -222,11 +203,10 @@ The editor normalizes formatting and removes comments; a byte-level revision
 check detects changes since load, including external edits. Failed validation or
 conflicts preserve the draft and file; Reload requires confirmation for unsaved
 edits. Persistence reuses the existing atomic settings writer. Restart relevant
-Suto processes to apply saved settings; the dashboard never restarts them.
+Suto processes to apply saved settings; the editor never restarts them.
 
-Opening the dashboard never starts AI, automation or delivery workers. Existing
-SQLite is opened read-only with bounded results; missing databases show empty
-states without being created, and unsupported schemas fail without migrations.
+Opening the settings editor never starts AI, automation, delivery workers, or
+SQLite storage.
 
 ## Local notifications and verification
 

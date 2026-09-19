@@ -47,31 +47,24 @@ Never commit `.env` files or API keys to Git.
 Start Suto:
 
 ```bash
-venv/bin/python main.py chat cli
-venv/bin/python main.py agent cli
-venv/bin/python main.py home
+venv/bin/python main.py
 venv/bin/python main.py settings
 ```
 
-`chat` answers questions conversationally. `agent` keeps conversation history,
-uses the local user profile, and can create, list, complete, reschedule, or
-cancel personal tasks and reminders from natural-language requests. In agent
-mode, requests such as `สรุปวันนี้ให้หน่อย` can be answered from the current
-user's open tasks and scheduled reminders.
+Suto keeps conversation history, uses the local user profile, and can create,
+list, complete, reschedule, or cancel personal tasks and reminders from
+natural-language requests. Requests such as `สรุปวันนี้ให้หน่อย` can be
+answered from the current user's open tasks and scheduled reminders.
 
 The `cli` interface is a plain stdin/stdout session. It prints the active model
 and mode, accepts requests in a framed `>` prompt, and leaves each submitted
 user message in its frame. Assistant replies are printed without a name prefix.
 The CLI does not launch a full-screen UI.
 
-`home` is currently a silent placeholder. It exits successfully without
-launching an interactive CLI, starting an AI session, or accessing hardware.
-
-`settings` opens a keyboard-driven terminal editor for `config.yaml`. Use the
-arrow keys to select a field and Enter to edit it; select Save and press Enter
-to validate, persist atomically, and exit. Esc cancels field editing, and
-discarding staged changes requires confirmation. Restart Suto after saving.
-The chat CLI reads these values but cannot change them.
+`settings` opens a local-only web editor for `config.yaml`. It prints a private
+sign-in link and opens it in the default browser. Validate and review changes
+before saving; restart Suto after saving. The CLI reads these values but cannot
+change them.
 Legacy `SUTO_TIMEZONE`, `SUTO_LOCALE`, and `SUTO_USER_NAME` environment values
 remain fallbacks when the corresponding YAML value is absent. Keep API keys and
 platform tokens in `.env`, never in `config.yaml`.

@@ -1,7 +1,10 @@
 from dataclasses import dataclass
 
-DEFAULT_MODE = "chat"
-PUBLIC_MODES = ("chat", "agent", "home")
+DEFAULT_MODE = "agent"
+# The CLI always starts the personal-assistant policy. These names remain
+# implementation policies for compatibility with stored jobs and tests; they
+# are no longer selectable public modes.
+PUBLIC_MODES = ()
 
 # Parked until clarification state can be persisted and resumed across
 # interfaces. The implementation remains available internally for that work.

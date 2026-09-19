@@ -7,71 +7,28 @@ from main import _parse_args
 @pytest.mark.parametrize(
     ("args", "expected"),
     [
-        (["chat", "cli"], ("cli", "chat")),
-        (["agent", "cli"], ("cli", "agent")),
-        (["web"], ("web", "web")),
-        (["home"], ("home_terminal", "home")),
-        (["settings"], ("settings_terminal", "settings")),
+        ([], ("cli", "agent")),
+        (["settings"], ("settings_web", "settings")),
     ],
 )
-def test_parse_args_accepts_interface_and_mode(args, expected):
+def test_parse_args_accepts_public_entrypoints(args, expected):
     assert _parse_args(args) == expected
 
 
 @pytest.mark.parametrize(
     "args",
-    [
-        [],
-        ["discord"],
-        ["chat", "discord"],
-        ["agent", "line"],
-        ["secret", "discord"],
-        ["developer", "cli"],
-        ["home", "cli"],
-        ["home", "discord"],
-        ["chat"],
-        ["chat", "unknown"],
-        ["chat", "tui"],
-        ["chat", "web"],
-        ["agent", "web"],
-        ["web", "cli"],
-        ["chat", "discord", "extra"],
-    ],
+    [["chat", "cli"], ["agent", "cli"], ["home"], ["web"], ["settings", "extra"]],
 )
-def test_parse_args_rejects_invalid_arguments(args):
-    with pytest.raises(SystemExit, match="usage:"):
+def test_parse_args_rejects_removed_entrypoints(args):
+    with pytest.raises(SystemExit, match="usage: python3 main.py \\[settings\\]"):
         _parse_args(args)
 
 
-def test_main_dispatches_home_to_plain_terminal(monkeypatch):
-    import interfaces.home_terminal as home_terminal
-
-    calls = []
-    monkeypatch.setattr(main_module.sys, "argv", ["main.py", "home"])
-    monkeypatch.setattr(home_terminal, "run", calls.append)
-
-    main_module.main()
-
-    assert calls == ["home"]
-
-
-def test_main_dispatches_settings_to_plain_terminal(monkeypatch):
-    import interfaces.settings_terminal as settings_terminal
-
-    calls = []
-    monkeypatch.setattr(main_module.sys, "argv", ["main.py", "settings"])
-    monkeypatch.setattr(settings_terminal, "run", calls.append)
-
-    main_module.main()
-
-    assert calls == ["settings"]
-
-
-def test_main_dispatches_cli_to_the_plain_terminal(monkeypatch):
+def test_main_starts_the_cli_in_personal_assistant_mode(monkeypatch):
     import interfaces.cli as cli
 
     calls = []
-    monkeypatch.setattr(main_module.sys, "argv", ["main.py", "agent", "cli"])
+    monkeypatch.setattr(main_module.sys, "argv", ["main.py"])
     monkeypatch.setattr(cli, "run", calls.append)
 
     main_module.main()
@@ -79,13 +36,13 @@ def test_main_dispatches_cli_to_the_plain_terminal(monkeypatch):
     assert calls == ["agent"]
 
 
-def test_main_dispatches_web_dashboard(monkeypatch):
+def test_main_dispatches_settings_to_local_web_editor(monkeypatch):
     import interfaces.web as web
 
     calls = []
-    monkeypatch.setattr(main_module.sys, "argv", ["main.py", "web"])
+    monkeypatch.setattr(main_module.sys, "argv", ["main.py", "settings"])
     monkeypatch.setattr(web, "run", calls.append)
 
     main_module.main()
 
-    assert calls == ["web"]
+    assert calls == ["settings"]

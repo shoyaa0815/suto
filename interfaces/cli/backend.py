@@ -182,6 +182,24 @@ async def run_session(
                 else None
             )
             activity_writer = getattr(read_prompt, "set_activity", None)
+            cancellation_event = getattr(read_prompt, "cancellation_event", None)
+
+            async def wait_for_request(request):
+                if cancellation_event is None:
+                    return await request
+                request_task = asyncio.create_task(request)
+                cancellation_task = asyncio.create_task(cancellation_event.wait())
+                done, _ = await asyncio.wait(
+                    {request_task, cancellation_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if request_task in done:
+                    cancellation_task.cancel()
+                    await asyncio.gather(cancellation_task, return_exceptions=True)
+                    return request_task.result()
+                request_task.cancel()
+                await asyncio.gather(request_task, return_exceptions=True)
+                raise KeyboardInterrupt()
 
             def report_progress(update: dict) -> None:
                 if activity_writer is None:
@@ -189,28 +207,40 @@ async def run_session(
                 else:
                     activity_writer(activity_text(update))
 
+            def start_request_activity() -> None:
+                if activity_writer is None:
+                    return
+                if cancellation_event is not None:
+                    cancellation_event.clear()
+                activity_writer("Suto is thinking")
+
             try:
-                if activity_writer is not None:
-                    activity_writer("Suto is thinking")
+                start_request_activity()
                 if clarification_reader is None:
-                    answer = await ask_local_ai(
-                        prompt,
-                        mode=mode,
-                        reply_language=reply_language,
-                        progress_callback=report_progress,
-                        conversation_history=history,
-                        assistant_context=context,
+                    answer = await wait_for_request(
+                        ask_local_ai(
+                            prompt,
+                            mode=mode,
+                            reply_language=reply_language,
+                            progress_callback=report_progress,
+                            conversation_history=history,
+                            assistant_context=context,
+                        )
                     )
                 else:
-                    result = await execute_local_ai(
-                        prompt,
-                        mode=mode,
-                        reply_language=reply_language,
-                        progress_callback=report_progress,
-                        conversation_history=history,
-                        assistant_context=context,
+                    result = await wait_for_request(
+                        execute_local_ai(
+                            prompt,
+                            mode=mode,
+                            reply_language=reply_language,
+                            progress_callback=report_progress,
+                            conversation_history=history,
+                            assistant_context=context,
+                        )
                     )
                     while result.status == "waiting_input" and result.clarification:
+                        if activity_writer is not None:
+                            activity_writer(None)
                         answer = await clarification_reader(result.clarification)
                         if answer is None:
                             print("Clarification cancelled.")
@@ -226,13 +256,16 @@ async def run_session(
                         )
                         resumed_history = store.conversation_history(conversation.id)
                         store.add_message(conversation.id, "user", answer)
-                        result = await execute_local_ai(
-                            f"Original request: {prompt}\nUser's answer: {answer}",
-                            mode=mode,
-                            reply_language=reply_language,
-                            progress_callback=report_progress,
-                            conversation_history=resumed_history,
-                            assistant_context=context,
+                        start_request_activity()
+                        result = await wait_for_request(
+                            execute_local_ai(
+                                f"Original request: {prompt}\nUser's answer: {answer}",
+                                mode=mode,
+                                reply_language=reply_language,
+                                progress_callback=report_progress,
+                                conversation_history=resumed_history,
+                                assistant_context=context,
+                            )
                         )
                     else:
                         answer = result.text

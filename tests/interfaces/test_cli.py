@@ -1,16 +1,17 @@
+import asyncio
 from contextlib import nullcontext
 
 import pytest
 from prompt_toolkit.layout.containers import HSplit
+from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.widgets import TextArea
 
 from interfaces.cli import backend
 from interfaces.cli import app as cli_app
 from interfaces.cli.app import (
-    ACTIVITY_ROW_OFFSET,
     ACTIVITY_ROW_HEIGHT,
     DOT_FRAMES,
     PROMPT_BOX_HEIGHT,
-    PROMPT_LAYOUT_HEIGHT,
     PromptReader,
     _build_prompt_application,
 )
@@ -21,68 +22,160 @@ from workflows.storage.store import JobStore
 def test_plain_cli_starts_session_and_uses_a_simple_prompt(monkeypatch, capsys):
     calls = []
 
-    class FakeApplication:
-        async def run_async(self):
+    class FakeReader:
+        async def start(self):
+            calls.append("start")
+
+        async def stop(self):
+            calls.append("stop")
+
+        async def __call__(self):
+            calls.append("> ")
             return "hello"
 
-    def fake_application(prompt):
-        calls.append(prompt)
-        return FakeApplication()
+        def write(self, value):
+            calls.append(("write", value))
+
+        def set_activity(self, value):
+            calls.append(("activity", value))
 
     async def fake_session(mode, read_prompt):
         calls.append((mode, await read_prompt()))
 
     monkeypatch.setattr(cli_app, "run_session", fake_session)
-    monkeypatch.setattr(cli_app, "_build_prompt_application", fake_application)
-    monkeypatch.setattr(cli_app, "patch_stdout", nullcontext)
+    monkeypatch.setattr(cli_app, "PromptReader", FakeReader)
 
     cli_app.run("chat")
 
-    output = capsys.readouterr().out
-    assert "Suto" in output
-    assert "chat" in output
-    assert "Type /help for commands." in output
-    assert calls[0] == "> "
-    assert calls[1] == ("chat", "hello")
+    assert capsys.readouterr().out == ""
+    assert calls[0] == "start"
+    assert any(
+        call[0] == "write" and "Suto" in call[1] and "chat" in call[1]
+        for call in calls
+        if isinstance(call, tuple) and call[0] == "write"
+    )
+    assert ("write", "Type /help for commands. PageUp: history · End: latest\n\n") in calls
+    assert ("chat", "hello") in calls
+    assert calls[-1] == "stop"
 
 
-def test_cli_prompt_reserves_activity_row_below_the_three_gray_rows():
+def test_cli_prompt_keeps_history_above_a_nonwrapping_bottom_status_row():
     application = _build_prompt_application("> ")
 
-    assert application.full_screen is False
-    assert application.erase_when_done is False
+    assert application.full_screen is True
+    assert application.erase_when_done is True
     assert isinstance(application.layout.container, HSplit)
-    dimension = application.layout.container.height
-    assert dimension.min == dimension.max == dimension.preferred == PROMPT_LAYOUT_HEIGHT == 6
-    gray_box = application.layout.container.children[1]
+    history = application.layout.container.children[0]
+    assert application.suto_history_field.window is history
+    activity_row = application.layout.container.children[1]
+    assert activity_row.height.preferred == ACTIVITY_ROW_HEIGHT == 1
+    assert isinstance(activity_row.content, FormattedTextControl)
+    assert activity_row.wrap_lines() is False
+    gray_box = application.layout.container.children[2]
     assert isinstance(gray_box, HSplit)
     assert gray_box.height.preferred == PROMPT_BOX_HEIGHT == 3
-    activity_row = application.layout.container.children[2]
-    assert activity_row.height.preferred == ACTIVITY_ROW_HEIGHT == 1
-    assert ACTIVITY_ROW_OFFSET == 1
 
 
-def test_cli_activity_uses_dot_frames_in_the_reserved_row_below_the_prompt(monkeypatch):
-    writes = []
-
-    class FakeStdout:
-        def isatty(self):
-            return True
-
-        def write(self, value):
-            writes.append(value)
-
-        def flush(self):
-            pass
-
-    monkeypatch.setattr(cli_app.sys, "stdout", FakeStdout())
+def test_cli_activity_text_is_rendered_from_layout_state():
     reader = PromptReader()
     reader._activity = "Suto is thinking"
-    reader._draw_activity(DOT_FRAMES[2])
+    reader._activity_suffix = DOT_FRAMES[2]
 
-    assert writes == [
-        f"\x1b[{ACTIVITY_ROW_OFFSET}A\r\x1b[2KSuto is thinking...\x1b[{ACTIVITY_ROW_OFFSET}B"
-    ]
+    assert reader._activity_text() == "Suto is thinking..."
+    reader._activity = None
+    assert reader._activity_text() == ""
+
+
+async def test_cli_prompt_reader_queues_submitted_input_without_exiting_application(
+    monkeypatch,
+):
+    reader = PromptReader()
+
+    async def fake_start():
+        return None
+
+    monkeypatch.setattr(reader, "start", fake_start)
+    pending = asyncio.create_task(reader())
+    await asyncio.sleep(0)
+    reader._accept("hello")
+
+    assert await pending == "hello"
+
+
+def test_cli_activity_disables_input_and_ctrl_c_requests_cancellation():
+    class FakeField:
+        read_only = False
+
+    class FakeApplication:
+        suto_input_field = FakeField()
+
+        def invalidate(self):
+            pass
+
+    reader = PromptReader()
+    reader._application = FakeApplication()
+
+    reader.set_activity("Suto is thinking")
+
+    assert reader._application.suto_input_field.read_only is True
+    reader._interrupt()
+    assert reader.cancellation_event.is_set()
+
+    reader.set_activity(None)
+    assert reader._application.suto_input_field.read_only is False
+
+
+def test_cli_history_follows_new_output_until_user_scrolls_away():
+    class FakeApplication:
+        suto_history_field = TextArea(read_only=True)
+
+        def invalidate(self):
+            pass
+
+    reader = PromptReader()
+    reader._application = FakeApplication()
+
+    reader.write("first\n")
+    history = reader._application.suto_history_field.buffer
+    assert history.text == "first\n"
+    assert history.cursor_position == len(history.text)
+
+    reader._scroll_history()
+    history.cursor_position = 1
+    reader.write("second\n")
+
+    assert history.text == "first\nsecond\n"
+    assert history.cursor_position == 1
+
+    reader._follow_history()
+    reader.write("third\n")
+    assert history.cursor_position == len(history.text)
+
+
+async def test_cli_cancels_an_active_request_from_the_persistent_reader(
+    tmp_path, monkeypatch, capsys
+):
+    class Reader:
+        def __init__(self):
+            self.cancellation_event = asyncio.Event()
+            self.prompts = iter(["hello", "/exit"])
+
+        async def __call__(self):
+            return next(self.prompts)
+
+        def set_activity(self, value):
+            if value is not None:
+                self.cancellation_event.set()
+
+    async def slow_ask(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setenv("SUTO_DB_PATH", str(tmp_path / "suto.db"))
+    monkeypatch.setattr(backend, "ask_local_ai", slow_ask)
+
+    await backend.run_session("chat", Reader())
+
+    assert "request cancelled" in capsys.readouterr().out
 
 
 async def test_session_exposes_notification_command_and_removes_by_name(
