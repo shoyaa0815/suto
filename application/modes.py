@@ -64,7 +64,9 @@ MODE_POLICIES = {
             "before consequential actions and never claim to have taken an "
             "action when the required tool is unavailable."
         ),
-        allowed_tools=ASSISTANT_TOOLS | PERSONAL_TASK_TOOLS,
+        allowed_tools=(
+            ASSISTANT_TOOLS | PERSONAL_TASK_TOOLS | frozenset({"research"})
+        ),
     ),
     "home": ModePolicy(
         name="home",

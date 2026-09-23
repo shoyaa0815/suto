@@ -1,6 +1,6 @@
 import pytest
 
-from tools import search
+from tools.search import web as search
 
 
 @pytest.fixture(autouse=True)

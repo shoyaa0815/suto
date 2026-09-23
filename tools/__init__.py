@@ -24,17 +24,14 @@ from capabilities.developer.command import build_command_tools
 from capabilities.developer.command import COMMAND_TOOL_NAMES
 from capabilities.developer.command import PROMPT as COMMAND_PROMPT
 from capabilities.developer.command import SCHEMA as COMMAND_SCHEMA
-from .fetch import fetch_url
-from .fetch import PROMPT as FETCH_PROMPT
-from .fetch import SCHEMA as FETCH_SCHEMA
 from .file_reader import build_attachment_tools
 from .file_reader import PROMPT as FILE_READER_PROMPT
 from .file_reader import READ_SCHEMA as FILE_READER_SCHEMA
 from .file_reader import SEARCH_SCHEMA as FILE_SEARCH_SCHEMA
 from .file_reader import SUMMARY_SCHEMA as FILE_SUMMARY_SCHEMA
-from .search import search_web
-from .search import PROMPT as SEARCH_PROMPT
-from .search import SCHEMA as SEARCH_SCHEMA
+from .search import fetch_url, FETCH_PROMPT, FETCH_SCHEMA
+from .search import research, RESEARCH_PROMPT, RESEARCH_SCHEMA
+from .search import search_web, SEARCH_PROMPT, SEARCH_SCHEMA
 from capabilities.developer.planning import build_planning_tools
 from capabilities.developer.planning import CREATE_PLAN_SCHEMA
 from capabilities.developer.planning import PLANNING_TOOL_NAMES
@@ -64,6 +61,7 @@ ALL_TOOLS = {
     "ask_user": _assistant_unavailable,
     "search_web": search_web,
     "fetch_url": fetch_url,
+    "research": research,
     # This placeholder is replaced with a request-scoped handler by ai/executor.py.
     "read_attached_file": _EMPTY_ATTACHMENT_TOOLS["read_attached_file"],
     "search_attachment": _EMPTY_ATTACHMENT_TOOLS["search_attachment"],
@@ -87,6 +85,7 @@ ALL_TOOL_SCHEMAS = {
         DATETIME_SCHEMA,
         SEARCH_SCHEMA,
         FETCH_SCHEMA,
+        RESEARCH_SCHEMA,
         FILE_READER_SCHEMA,
         FILE_SEARCH_SCHEMA,
         FILE_SUMMARY_SCHEMA,
@@ -108,6 +107,7 @@ ALL_TOOL_GUIDANCE = {
     "ask_user": CLARIFICATION_PROMPT,
     "search_web": SEARCH_PROMPT,
     "fetch_url": FETCH_PROMPT,
+    "research": RESEARCH_PROMPT,
     "read_attached_file": FILE_READER_PROMPT,
     "search_attachment": FILE_READER_PROMPT,
     "summarize_attachment": FILE_READER_PROMPT,

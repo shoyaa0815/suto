@@ -6,6 +6,7 @@ MAX_PROGRESS_DETAIL_CHARS = 60
 TOOL_ACTIVITY_NAMES = {
     "search_web": "searching the web",
     "fetch_url": "reading a web page",
+    "research": "researching",
     "read_attached_file": "reading an attachment",
     "search_attachment": "searching an attachment",
     "summarize_attachment": "summarizing an attachment",

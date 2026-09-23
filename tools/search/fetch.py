@@ -3,7 +3,7 @@ from html.parser import HTMLParser
 
 import aiohttp
 
-FETCH_MAX_CHARS = 4000
+FETCH_MAX_CHARS = 6000
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -14,7 +14,7 @@ HEADERS = {
 # fetch_url and how to use its result. See the comment in datetime_tool.py
 # for why this lives next to the tool instead of in the AI runtime.
 #
-# The link-verification rule below is written here, not in search.py, even
+# The link-verification rule below is written here, not in web.py, even
 # though it's triggered by search_web results — the rule governs an action
 # fetch_url performs (verify a link before recommending it), so it belongs
 # with the tool doing the acting, not the tool that produced the link.

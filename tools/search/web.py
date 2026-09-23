@@ -164,3 +164,47 @@ async def search_web(query: str, max_results: int | None = None) -> str:
 
     _cache[key] = (now, result)
     return result
+
+
+async def search_web_raw(
+    query: str, max_results: int | None = None
+) -> list[dict]:
+    """Run a web search and return structured result dicts.
+
+    Each dict has ``title``, ``url``, and ``snippet`` keys.  This is used
+    by the research pipeline which needs per-result metadata rather than
+    the single-string format returned by :func:`search_web`.
+    """
+    global _last_call_time
+
+    requested = DEFAULT_MAX_RESULTS if max_results is None else max_results
+    limit = min(max(int(requested), 1), HARD_MAX_RESULTS)
+    now = time.monotonic()
+
+    wait = MIN_INTERVAL_SECONDS - (now - _last_call_time)
+    if wait > 0:
+        await asyncio.sleep(wait)
+    _last_call_time = time.monotonic()
+
+    timeout = aiohttp.ClientTimeout(total=15)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            try:
+                data = await _query_searxng(session, query)
+            except Exception as e:
+                print(f"[search_web_raw] retrying after {type(e).__name__}: {e!r}")
+                await asyncio.sleep(RETRY_DELAY_SECONDS)
+                data = await _query_searxng(session, query)
+    except Exception as e:
+        print(f"[search_web_raw] {type(e).__name__}: {e!r}")
+        return []
+
+    results = _dedup_by_domain(data.get("results", []))[:limit]
+    return [
+        {
+            "title": r.get("title", ""),
+            "url": r.get("url", ""),
+            "snippet": r.get("content", ""),
+        }
+        for r in results
+    ]
