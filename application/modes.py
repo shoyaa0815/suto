@@ -1,10 +1,7 @@
 from dataclasses import dataclass
 
 DEFAULT_MODE = "agent"
-# The CLI always starts the personal-assistant policy. These names remain
-# implementation policies for compatibility with stored jobs and tests; they
-# are no longer selectable public modes.
-PUBLIC_MODES = ()
+PUBLIC_MODES = ("agent",)
 
 # Parked until clarification state can be persisted and resumed across
 # interfaces. The implementation remains available internally for that work.
@@ -36,6 +33,59 @@ PERSONAL_TASK_TOOLS = frozenset(
     }
 )
 
+ASSISTANT_MEMORY_TOOLS = frozenset(
+    {
+        "save_memory",
+        "search_memory",
+        "list_memories",
+        "delete_memory",
+        "memory.save",
+        "memory.search",
+        "memory.list",
+        "memory.delete",
+    }
+)
+
+CODING_TOOLS = frozenset(
+    {
+        "terminal.run",
+        "terminal_run",
+        "file.read",
+        "file_read",
+        "file.write",
+        "file_write",
+        "file.list",
+        "file_list",
+        "git.diff",
+        "git_diff",
+        "git.status",
+        "git_status",
+        "git.log",
+        "git_log",
+        "git.commit",
+        "git_commit",
+        "web.search",
+        "web_search",
+        "web.fetch",
+        "web_fetch",
+        "python.run",
+        "python_run",
+    }
+)
+
+WORKSPACE_AUTOMATION_TOOLS = frozenset(
+    {
+        "list_workspace_files",
+        "read_workspace_file",
+        "search_workspace",
+        "apply_workspace_patch",
+        "create_plan",
+        "update_step",
+        "revise_plan",
+        "run_workspace_command",
+    }
+)
+
 
 @dataclass(frozen=True)
 class ModePolicy:
@@ -57,7 +107,7 @@ MODE_POLICIES = {
     ),
     "agent": ModePolicy(
         name="agent",
-        description="Personal assistant for carrying out multi-step tasks",
+        description="Unified personal assistant with memory and coding tools",
         prompt=(
             "You are in personal assistant mode. Help the user complete tasks "
             "proactively with the tools currently available. Ask for confirmation "
@@ -65,7 +115,11 @@ MODE_POLICIES = {
             "action when the required tool is unavailable."
         ),
         allowed_tools=(
-            ASSISTANT_TOOLS | PERSONAL_TASK_TOOLS | frozenset({"research"})
+            ASSISTANT_TOOLS
+            | PERSONAL_TASK_TOOLS
+            | ASSISTANT_MEMORY_TOOLS
+            | CODING_TOOLS
+            | frozenset({"research"})
         ),
     ),
     "home": ModePolicy(

@@ -72,7 +72,7 @@ def _history_messages(history: list[dict[str, str]] | None) -> list[dict]:
     ]
 
 
-def _personal_context(context: AssistantContext | None) -> str:
+def _personal_context(context: AssistantContext | None, prompt: str = "") -> str:
     if context is None:
         return ""
     user = context.store.get_user(context.user_id)
@@ -99,14 +99,32 @@ def _personal_context(context: AssistantContext | None) -> str:
         for key, value in context.store.user_preferences(user.id).items()
         if key not in RETIRED_PREFERENCE_KEYS
     }
+    payload: dict = {
+        "display_name": user.display_name,
+        "timezone": user.timezone,
+        "locale": user.locale,
+        "preferences": preferences,
+        "delivery": delivery,
+    }
+    if hasattr(context.store, "get_session_summary") and context.conversation_id:
+        summary_obj = context.store.get_session_summary(context.conversation_id)
+        if summary_obj and summary_obj.summary:
+            payload["session_summary"] = summary_obj.summary
+
+    if hasattr(context.store, "search_memories"):
+        items = (
+            context.store.search_memories(user.id, prompt, limit=5)
+            if prompt
+            else context.store.list_memories(user.id, limit=5)
+        )
+        if items:
+            payload["remembered_facts"] = [
+                {"id": m.id, "category": m.category, "fact": m.content}
+                for m in items
+            ]
+
     return json.dumps(
-        {
-            "display_name": user.display_name,
-            "timezone": user.timezone,
-            "locale": user.locale,
-            "preferences": preferences,
-            "delivery": delivery,
-        },
+        payload,
         ensure_ascii=False,
         sort_keys=True,
     )
@@ -140,7 +158,7 @@ def prepare_request(
                 tool_guidance,
                 selected_language,
                 skill_instructions,
-                _personal_context(assistant_context),
+                _personal_context(assistant_context, prompt),
             ),
         },
         *_history_messages(conversation_history),

@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .locking import ProcessLock
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 HARDENING = """
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -202,6 +202,34 @@ DROP TABLE IF EXISTS memories;
 DROP TABLE IF EXISTS workspace_features;
 """
 
+THREE_TIER_MEMORY = """
+CREATE TABLE IF NOT EXISTS session_summaries(
+ conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ summary TEXT NOT NULL,
+ updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS session_summaries_user_idx ON session_summaries(user_id);
+CREATE TABLE IF NOT EXISTS assistant_memories(
+ id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ category TEXT NOT NULL DEFAULT 'general', content TEXT NOT NULL,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS assistant_memories_user_idx ON assistant_memories(user_id, category);
+CREATE VIRTUAL TABLE IF NOT EXISTS assistant_memories_fts USING fts5(
+ memory_id UNINDEXED, user_id UNINDEXED, category UNINDEXED, content, tokenize='unicode61');
+CREATE TRIGGER IF NOT EXISTS assistant_memories_ai AFTER INSERT ON assistant_memories BEGIN
+ INSERT INTO assistant_memories_fts(memory_id, user_id, category, content)
+ VALUES (NEW.id, NEW.user_id, NEW.category, NEW.content);
+END;
+CREATE TRIGGER IF NOT EXISTS assistant_memories_ad AFTER DELETE ON assistant_memories BEGIN
+ DELETE FROM assistant_memories_fts WHERE memory_id = OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS assistant_memories_au AFTER UPDATE ON assistant_memories BEGIN
+ DELETE FROM assistant_memories_fts WHERE memory_id = OLD.id;
+ INSERT INTO assistant_memories_fts(memory_id, user_id, category, content)
+ VALUES (NEW.id, NEW.user_id, NEW.category, NEW.content);
+END;
+"""
+
 
 def backup_database(source: Path, destination: Path) -> Path:
     source, destination = source.resolve(), destination.expanduser().absolute()
@@ -253,12 +281,13 @@ def initialize_database(store) -> None:
                 (7, VERSION_7_COMPATIBILITY),
                 (8, LEGACY_BRIEFING_SCHEMA),
                 (9, REMOVE_SEMANTIC_MEMORY),
+                (10, THREE_TIER_MEMORY),
             ):
                 if number <= version:
                     continue
                 with store._connect() as connection:
                     connection.executescript('BEGIN IMMEDIATE;\n' + script)
-                    connection.execute('INSERT INTO schema_migrations VALUES (?,?)',
+                    connection.execute('INSERT OR REPLACE INTO schema_migrations VALUES (?,?)',
                                        (number, datetime.now(UTC).isoformat()))
                     connection.execute(f'PRAGMA user_version = {number}')
             with store._connect() as connection:

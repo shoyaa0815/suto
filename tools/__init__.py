@@ -16,6 +16,11 @@ from assistant.tasks.tools import build_task_tools
 from assistant.tasks.tools import PROMPT as TASK_PROMPT
 from assistant.tasks.tools import SCHEMAS as TASK_SCHEMAS
 from assistant.tasks.tools import TOOL_NAMES as TASK_TOOL_NAMES
+from assistant.memory.tools import (
+    MEMORY_PROMPT,
+    MEMORY_SCHEMAS,
+    MEMORY_TOOL_NAMES,
+)
 from .advanced import SCHEMAS as ADVANCED_SCHEMAS, TOOL_NAMES as ADVANCED_TOOL_NAMES
 from .advanced import PROMPT as ADVANCED_PROMPT, build_advanced_tools
 from .datetime_tool import PROMPT as DATETIME_PROMPT
@@ -43,6 +48,46 @@ from capabilities.developer.workspace import LIST_SCHEMA as WORKSPACE_LIST_SCHEM
 from capabilities.developer.workspace import PROMPT as WORKSPACE_PROMPT
 from capabilities.developer.workspace import READ_SCHEMA as WORKSPACE_READ_SCHEMA
 from capabilities.developer.workspace import SEARCH_SCHEMA as WORKSPACE_SEARCH_SCHEMA
+from .filesystem import (
+    FILESYSTEM_SCHEMAS,
+    FILESYSTEM_TOOLS,
+    PROMPT as FILESYSTEM_PROMPT,
+    file_list,
+    file_read,
+    file_write,
+)
+from .git import (
+    GIT_SCHEMAS,
+    GIT_TOOLS,
+    PROMPT as GIT_PROMPT,
+    git_commit,
+    git_diff,
+    git_log,
+    git_status,
+)
+from .python import (
+    PYTHON_SCHEMAS,
+    PYTHON_TOOLS,
+    PROMPT as PYTHON_PROMPT,
+    python_run,
+)
+from .terminal import (
+    TERMINAL_SCHEMAS,
+    TERMINAL_TOOLS,
+    PROMPT as TERMINAL_PROMPT,
+    terminal_run,
+)
+from .web import (
+    WEB_SCHEMAS,
+    WEB_TOOLS,
+    PROMPT as WEB_PROMPT,
+)
+from . import filesystem as file
+from . import filesystem
+from . import git
+from . import python
+from . import terminal
+from . import web
 
 _EMPTY_ATTACHMENT_TOOLS = build_attachment_tools({})
 
@@ -57,6 +102,12 @@ def _assistant_unavailable(**kwargs) -> str:
 ALL_TOOLS = {
     **{name: _workspace_unavailable for name in ADVANCED_TOOL_NAMES},
     **{name: _assistant_unavailable for name in TASK_TOOL_NAMES},
+    **{name: _assistant_unavailable for name in MEMORY_TOOL_NAMES},
+    **TERMINAL_TOOLS,
+    **FILESYSTEM_TOOLS,
+    **GIT_TOOLS,
+    **WEB_TOOLS,
+    **PYTHON_TOOLS,
     "get_current_datetime": get_current_datetime,
     "ask_user": _assistant_unavailable,
     "search_web": search_web,
@@ -81,6 +132,12 @@ ALL_TOOL_SCHEMAS = {
     for schema in [
         *ADVANCED_SCHEMAS,
         *TASK_SCHEMAS,
+        *MEMORY_SCHEMAS,
+        *TERMINAL_SCHEMAS,
+        *FILESYSTEM_SCHEMAS,
+        *GIT_SCHEMAS,
+        *WEB_SCHEMAS,
+        *PYTHON_SCHEMAS,
         CLARIFICATION_SCHEMA,
         DATETIME_SCHEMA,
         SEARCH_SCHEMA,
@@ -103,6 +160,12 @@ ALL_TOOL_SCHEMAS = {
 ALL_TOOL_GUIDANCE = {
     **{name: ADVANCED_PROMPT for name in ADVANCED_TOOL_NAMES},
     **{name: TASK_PROMPT for name in TASK_TOOL_NAMES},
+    **{name: MEMORY_PROMPT for name in MEMORY_TOOL_NAMES},
+    **{name: TERMINAL_PROMPT for name in TERMINAL_TOOLS},
+    **{name: FILESYSTEM_PROMPT for name in FILESYSTEM_TOOLS},
+    **{name: GIT_PROMPT for name in GIT_TOOLS},
+    **{name: WEB_PROMPT for name in WEB_TOOLS},
+    **{name: PYTHON_PROMPT for name in PYTHON_TOOLS},
     "get_current_datetime": DATETIME_PROMPT,
     "ask_user": CLARIFICATION_PROMPT,
     "search_web": SEARCH_PROMPT,
@@ -142,3 +205,17 @@ def get_tools(
         dict.fromkeys(ALL_TOOL_GUIDANCE[name] for name in names)
     )
     return tools, schemas, guidance
+
+
+__all__ = [
+    "ALL_TOOLS",
+    "ALL_TOOL_GUIDANCE",
+    "ALL_TOOL_SCHEMAS",
+    "file",
+    "filesystem",
+    "get_tools",
+    "git",
+    "python",
+    "terminal",
+    "web",
+]

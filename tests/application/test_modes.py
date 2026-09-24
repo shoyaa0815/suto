@@ -1,7 +1,12 @@
 import pytest
 
-from application.modes import MODE_POLICIES, get_mode_policy
+from application.modes import DEFAULT_MODE, MODE_POLICIES, PUBLIC_MODES, get_mode_policy
 from tools import get_tools
+
+
+def test_public_mode_is_only_agent():
+    assert DEFAULT_MODE == "agent"
+    assert PUBLIC_MODES == ("agent",)
 
 
 def test_chat_mode_has_current_tools():
@@ -13,7 +18,7 @@ def test_chat_mode_has_current_tools():
     assert "read_attached_file" in policy.allowed_tools
 
 
-def test_agent_mode_has_personal_assistant_tools():
+def test_agent_mode_has_personal_assistant_memory_and_coding_tools():
     policy = get_mode_policy("agent")
 
     assert policy.allowed_tools > get_mode_policy("chat").allowed_tools
@@ -27,6 +32,17 @@ def test_agent_mode_has_personal_assistant_tools():
     assert "set_daily_briefing" not in policy.allowed_tools
     assert "disable_daily_briefing" not in policy.allowed_tools
     assert "apply_workspace_patch" not in policy.allowed_tools
+
+    # Memory tools
+    assert "memory.save" in policy.allowed_tools
+    assert "memory.search" in policy.allowed_tools
+
+    # Coding tools
+    assert "terminal.run" in policy.allowed_tools
+    assert "file.read" in policy.allowed_tools
+    assert "file.write" in policy.allowed_tools
+    assert "git.diff" in policy.allowed_tools
+    assert "python.run" in policy.allowed_tools
 
 
 def test_home_mode_is_a_reserved_placeholder_without_tools():
