@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from application.settings import env_float, env_int
+from permissions import Approval, PermissionEngine, PermissionPolicy
 
 from ..models import ActionType
 
@@ -75,8 +76,12 @@ class ExecutionContext:
             raise ValueError(f"workspace is not a directory: {resolved}")
         object.__setattr__(self, "workspace", resolved)
 
+    def can_tool(self, name: str) -> bool:
+        engine = PermissionEngine(PermissionPolicy({tool: "allow" for tool in self.allowed_tools}))
+        return engine.decide(name).allowed
+
     def require_tool(self, name: str) -> None:
-        if name not in self.allowed_tools:
+        if not self.can_tool(name):
             raise PermissionError(f"tool is not allowed for this job: {name}")
 
     def require_approval(
@@ -87,11 +92,12 @@ class ExecutionContext:
         preview: str,
     ) -> None:
         kind = ActionType(action_type)
-        policy = ACTION_POLICIES[kind]
-        if policy == "allow":
-            return
-        if policy == "deny":
-            raise PermissionError(f"{kind.value} actions are not allowed")
-        if self.approval_callback is None:
-            raise PermissionError(f"approval is unavailable for {kind.value} action")
-        self.approval_callback(kind.value, action, summary, preview)
+        engine = PermissionEngine(PermissionPolicy({item.value: rule for item, rule in ACTION_POLICIES.items()}))
+        callback = self.approval_callback
+        engine.require(
+            kind.value,
+            approval=Approval(kind.value, action, summary, preview),
+            approval_callback=(
+                lambda request: callback(request.action_type, request.action, request.summary, request.preview)
+            ) if callback is not None else None,
+        )

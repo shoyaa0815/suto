@@ -5,6 +5,7 @@ import pytest
 from agent import AgentRequest, AgentRuntime, RunState, RuntimeHooks
 from agent.limits import ExecutionLimits
 from llm.types import ModelResponse, ModelUsage, ToolCall
+from permissions import PermissionEngine, PermissionPolicy
 from tools.registry import FunctionTool, ToolRegistry, ToolValidationError
 from tools.types import ToolResult
 
@@ -188,6 +189,15 @@ async def test_unknown_tool_and_denied_tool_do_not_execute():
         registry(lambda **kwargs: called.append(kwargs)), hooks=Deny(),
     )
     assert (await denied.run(AgentRequest("x"), [])).status == "blocked"
+    assert called == []
+
+    policy_denied = AgentRuntime(
+        FakeModel(ModelResponse("", [ToolCall("test.echo", {"value": "x"})])),
+        registry(lambda **kwargs: called.append(kwargs)),
+        permissions=PermissionEngine(PermissionPolicy({"test.echo": "deny"})),
+    )
+    result = await policy_denied.run(AgentRequest("x"), [])
+    assert result.status == "blocked"
     assert called == []
 
 

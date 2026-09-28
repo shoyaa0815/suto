@@ -13,6 +13,13 @@ reason it changes:
   schema validation, and normalized execution. The agent loop checks permission
   after validation and before execution. Existing callable handlers use
   `FunctionTool`; new tools can implement `Tool` and register directly;
+- `permissions/`: shared policy decisions and exact-action approval requests.
+  Registered agent tools are allowed by default; a request can supply a stricter
+  `PermissionEngine`. Job workspace tools use the same engine for capability and
+  action checks, with durable approval handled by the job store;
+- `sandbox/`: process or Bubblewrap command isolation chosen after permission
+  and exact-action approval. Its policy contains backend, workspace, and mount
+  access, independent of the permission decision;
 - `providers/`: provider protocol and Ollama/OpenAI-compatible adapters;
 - `client.py`: provider-facing chat façade;
 - `prompting.py` and `response.py`: model-facing input and output rules;

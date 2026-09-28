@@ -100,7 +100,7 @@ def _validate_pytest_args(context: ExecutionContext, args: list[str]) -> list[st
 
 
 def _validate_compile_args(context: ExecutionContext, args: list[str]) -> list[str]:
-    if "apply_workspace_patch" not in context.allowed_tools:
+    if not context.can_tool("apply_workspace_patch"):
         raise PermissionError("compileall requires job write permission")
     validated = []
     for argument in args:

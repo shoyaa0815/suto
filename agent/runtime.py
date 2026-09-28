@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from llm.base import Model
 from llm.types import ModelRequest, ModelResponse, ToolCall
+from permissions import PermissionEngine, PermissionPolicy
 from tools.executor import ToolExecutor, ToolNotFoundError
 from tools.registry import ToolRegistry, ToolValidationError
 
@@ -60,6 +61,7 @@ class AgentRuntime:
         *,
         limits: ExecutionLimits | None = None,
         hooks: RuntimeHooks | None = None,
+        permissions: PermissionEngine | None = None,
         passthrough_exceptions: tuple[type[Exception], ...] = (),
     ) -> None:
         self.model = model
@@ -67,6 +69,9 @@ class AgentRuntime:
         self.tool_executor = ToolExecutor(tools)
         self.limits = limits or ExecutionLimits()
         self.hooks = hooks or RuntimeHooks()
+        # Registration limits which tools exist; this policy governs requests
+        # for those tools without coupling the runtime to concrete tool names.
+        self.permissions = permissions or PermissionEngine(PermissionPolicy(default="allow"))
         self.passthrough_exceptions = passthrough_exceptions
         self.state = AgentState()
         self.events: list[AgentEvent] = []
@@ -170,8 +175,12 @@ class AgentRuntime:
                         reason = f"invalid tool arguments: {call.name}: {error}"
                         await self.hooks.on_tool_finished(call, "failed", reason, reason, 0)
                         return await self._stop("failed", f"tool failed: {call.name}", reason, run_id, session_id, usage)
-                    if not await self.hooks.authorize(call.name, deepcopy(prepared.arguments)):
-                        reason = f"tool is not allowed for this request: {call.name}"
+                    decision = self.permissions.decide(call.name)
+                    if not decision.allowed or not await self.hooks.authorize(call.name, deepcopy(prepared.arguments)):
+                        reason = (
+                            decision.reason if not decision.allowed else
+                            f"tool is not allowed for this request: {call.name}"
+                        )
                         await self.hooks.on_tool_finished(call, "blocked", reason, reason, 0)
                         return await self._stop("blocked", reason, reason, run_id, session_id, usage)
                     early_result = await self.hooks.on_tool_requested(call, iteration)
