@@ -5,7 +5,7 @@ import time
 
 import aiohttp
 
-from application.language import ReplyLanguage
+from application.language import ReplyLanguage, choose_reply_language
 from application.modes import DEFAULT_MODE
 from assistant.context import AssistantContext
 from workflows.runtime.context import (
@@ -25,6 +25,7 @@ from .models import (
     ToolEventCallback,
 )
 from .progress import RequestProgress
+from retrieval.base import RetrievalError
 from .tooling.assembly import build_runtime_tools
 
 
@@ -85,16 +86,28 @@ async def execute_local_ai(
         outcome = f"blocked: {reason}"
         return build_result(reason, status="blocked", error=reason)
 
-    prepared = prepare_request(
-        prompt,
-        mode,
-        attachments,
-        reply_language,
-        skill_instructions,
-        conversation_history,
-        assistant_context,
-        execution_context,
-    )
+    try:
+        prepared = prepare_request(
+            prompt,
+            mode,
+            attachments,
+            reply_language,
+            skill_instructions,
+            conversation_history,
+            assistant_context,
+            execution_context,
+        )
+    except RetrievalError:
+        outcome = "memory retrieval unavailable"
+        config.debug("[ai] memory retrieval unavailable")
+        await progress.emit("finished", outcome)
+        language = reply_language or choose_reply_language(prompt)
+        text = (
+            "ค้นความจำไม่พร้อมใช้งาน กรุณาลองใหม่อีกครั้ง"
+            if language.code == "th"
+            else "Memory search is unavailable. Please try again."
+        )
+        return build_result(text, status="failed", error=outcome)
     guard = ExecutionGuard(execution_context, progress, request_started)
     timeout = aiohttp.ClientTimeout(
         total=config.AI_TIMEOUT_SECONDS,

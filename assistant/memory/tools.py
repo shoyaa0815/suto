@@ -1,35 +1,38 @@
 """Tools for saving, searching, and managing long-term memories."""
 
+import sqlite3
 from typing import Any
 
 from assistant.context import AssistantContext
+from .service import PersistentMemory
 
 
 def build_memory_tools(context: AssistantContext) -> dict[str, Any]:
     """Assemble memory tools bound to the active assistant context."""
-    user_id = context.user_id
-    store = context.store
+    memory = PersistentMemory(context.store, context.user_id)
 
     def save_memory(content: str, category: str = "general") -> str:
         try:
-            item = store.save_memory(user_id, content=content, category=category)
+            item = memory.save(content, category)
             return f"Successfully saved to memory (ID: {item.id}, category: {item.category}): {item.content}"
         except Exception as exc:
             return f"Error saving to memory: {exc}"
 
     def search_memory(query: str, limit: int = 5) -> str:
         try:
-            items = store.search_memories(user_id, query=query, limit=limit)
+            items = memory.search(query, limit)
             if not items:
                 return f"No memories found matching '{query}'."
             lines = [f"- [{m.category}] ({m.id}): {m.content}" for m in items]
             return "Found relevant memories:\n" + "\n".join(lines)
+        except sqlite3.DatabaseError:
+            return "Memory search is unavailable. Please try again."
         except Exception as exc:
             return f"Error searching memory: {exc}"
 
     def list_memories(category: str | None = None) -> str:
         try:
-            items = store.list_memories(user_id, category=category, limit=20)
+            items = memory.list(category, limit=20)
             if not items:
                 return "No saved memories found."
             lines = [f"- [{m.category}] ({m.id}): {m.content}" for m in items]
@@ -39,7 +42,7 @@ def build_memory_tools(context: AssistantContext) -> dict[str, Any]:
 
     def delete_memory(memory_id: str) -> str:
         try:
-            deleted = store.delete_memory(user_id, memory_id)
+            deleted = memory.delete(memory_id)
             if deleted:
                 return f"Successfully deleted memory with ID: {memory_id}"
             return f"Memory with ID '{memory_id}' not found."

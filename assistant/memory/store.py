@@ -1,7 +1,6 @@
 """SQLite and FTS5 storage mixin for 3-tier memory."""
 
 import re
-import sqlite3
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -100,28 +99,27 @@ class MemoryStore:
         query: str,
         limit: int = 5,
     ) -> list[MemoryItem]:
-        clean_words = [w for w in re.sub(r"[^\w\s]", " ", query).split() if w]
+        # Bound FTS expression depth for long user prompts.
+        clean_words = re.sub(r"[^\w\s]", " ", query).split()[:32]
         safe_limit = min(max(int(limit), 1), 50)
         with self._connect() as db:
             if clean_words:
                 fts_query = " OR ".join(f'"{w}"' for w in clean_words)
-                try:
-                    rows = db.execute(
-                        """
-                        SELECT m.* FROM assistant_memories m
-                        JOIN assistant_memories_fts f ON m.id = f.memory_id
-                        WHERE f.user_id = ? AND assistant_memories_fts MATCH ?
-                        ORDER BY bm25(assistant_memories_fts), m.updated_at DESC
-                        LIMIT ?
-                        """,
-                        (user_id, fts_query, safe_limit),
-                    ).fetchall()
-                    if rows:
-                        return [self._to_memory_item(r) for r in rows]
-                except sqlite3.OperationalError:
-                    pass
+                rows = db.execute(
+                    """
+                    SELECT m.* FROM assistant_memories m
+                    JOIN assistant_memories_fts f ON m.id = f.memory_id
+                    WHERE m.user_id = ? AND assistant_memories_fts MATCH ?
+                    ORDER BY bm25(assistant_memories_fts), m.updated_at DESC
+                    LIMIT ?
+                    """,
+                    (user_id, fts_query, safe_limit),
+                ).fetchall()
+                return [self._to_memory_item(r) for r in rows]
 
-            # Fallback to recent memories for this user
+            if query.strip():
+                return []
+            # An empty query explicitly requests recent memories.
             rows = db.execute(
                 """
                 SELECT * FROM assistant_memories

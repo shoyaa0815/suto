@@ -6,8 +6,10 @@ from dataclasses import dataclass
 from application.language import ReplyLanguage, choose_reply_language
 from application.modes import get_mode_policy
 from assistant.context import AssistantContext
+from assistant.memory.service import PersistentMemory
 from assistant.memory.tools import MEMORY_TOOL_NAMES
 from context import ContextManager
+from retrieval.memory import MemoryRetriever
 from tools import (
     ADVANCED_TOOL_NAMES,
     COMMAND_TOOL_NAMES,
@@ -64,7 +66,7 @@ def _allowed_tools(
     return allowed_job_tools
 
 
-def _personal_context(context: AssistantContext | None, prompt: str = "") -> str:
+def _personal_context(context: AssistantContext | None) -> str:
     if context is None:
         return ""
     user = context.store.get_user(context.user_id)
@@ -103,18 +105,6 @@ def _personal_context(context: AssistantContext | None, prompt: str = "") -> str
         if summary_obj and summary_obj.summary:
             payload["session_summary"] = ContextManager().summary(summary_obj.summary)
 
-    if hasattr(context.store, "search_memories"):
-        items = (
-            context.store.search_memories(user.id, prompt, limit=5)
-            if prompt
-            else context.store.list_memories(user.id, limit=5)
-        )
-        if items:
-            payload["remembered_facts"] = [
-                {"id": m.id, "category": m.category, "fact": m.content}
-                for m in items
-            ]
-
     return json.dumps(
         payload,
         ensure_ascii=False,
@@ -142,16 +132,22 @@ def prepare_request(
         execution_context,
     )
     _, tool_schemas, tool_guidance = get_tools(allowed_tools)
+    retrieved = []
+    if assistant_context is not None and prompt.strip():
+        retrieved = MemoryRetriever(
+            PersistentMemory(assistant_context.store, assistant_context.user_id)
+        ).search_sync(prompt, limit=5)
     messages = ContextManager().build(
         prompting.build_system_prompt(
             policy.prompt,
             tool_guidance,
             selected_language,
             skill_instructions,
-            _personal_context(assistant_context, prompt),
+            _personal_context(assistant_context),
         ),
         prompt,
         conversation_history,
+        retrieved,
     )
     return PreparedRequest(
         attachments=request_attachments,

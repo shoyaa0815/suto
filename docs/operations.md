@@ -28,6 +28,16 @@ deletes both messages and their summary for the current conversation, while
 history budget and an 8,000-character summary budget. The deterministic summary
 keeps excerpts of older turns, so details outside that budget can be omitted.
 
+Explicitly saved user memories live separately from conversations in SQLite and
+are indexed by FTS5. Searches are scoped to the active user and return ranked
+matches; an empty query lists recent memories. Matching memories enter the
+model request through the context manager with a separate 4,000-character,
+five-result limit. Retrieved text is reference data, not instructions. Saving a
+memory requires the memory tool; conversation turns are not saved automatically.
+If the local memory index fails, the request reports that memory search is
+unavailable before calling the model; the CLI remains available for another
+request. It does not substitute unrelated recent memories.
+
 The unversioned Phase 0–7 database is schema 0. Startup migrates to version 1
 (production controls) and version 2 (advanced features). Each version runs in a
 transaction, is recorded in `schema_migrations`, and updates `PRAGMA user_version`.

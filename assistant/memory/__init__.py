@@ -1,6 +1,7 @@
 """Assistant memory package providing 3-tier memory models, store, and tools."""
 
 from .models import MemoryItem, SessionSummary
+from .service import PersistentMemory
 from .store import MemoryStore
 from .tools import (
     MEMORY_PROMPT,
@@ -15,6 +16,7 @@ __all__ = [
     "MEMORY_TOOL_NAMES",
     "MemoryItem",
     "MemoryStore",
+    "PersistentMemory",
     "SessionSummary",
     "build_memory_tools",
 ]

@@ -1,12 +1,15 @@
 import asyncio
+import sqlite3
 
 import pytest
 
 import ai
+from assistant.context import AssistantContext
 from ai.providers.ollama import OllamaProvider
 from application.language import ReplyLanguage
 from tests.support.ai_helpers import FakeClientSession as _FakeClientSession
 from tests.support.ai_helpers import patch_model_chat
+from workflows.storage.store import JobStore
 
 
 async def test_agent_lifecycle_uses_configured_provider_model(monkeypatch):
@@ -32,6 +35,51 @@ async def test_agent_lifecycle_uses_configured_provider_model(monkeypatch):
     assert len(seen) == 1
     assert seen[0][:2] == ("configured-model", "Please answer in English: are you ready?")
     assert seen[0][2] > 0
+
+
+async def test_memory_index_failure_returns_safe_result_without_model_call(
+    tmp_path, monkeypatch
+):
+    store = JobStore(tmp_path / "suto.db")
+    user = store.resolve_channel_identity("cli", "local")
+    context = AssistantContext(store, user.id, "conversation")
+    original_search = store.search_memories
+    calls = []
+    updates = []
+
+    def broken_search(*_args, **_kwargs):
+        raise sqlite3.OperationalError("private database detail")
+
+    async def fake_chat(_session, _messages, _schemas, think=False):
+        calls.append("model")
+        return {"message": {"content": "model answer"}}
+
+    monkeypatch.setattr(store, "search_memories", broken_search)
+    monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
+    monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
+
+    failed = await ai.execute_local_ai(
+        "remember SQLite", assistant_context=context,
+        reply_language=ReplyLanguage("en", "English", "test"),
+        progress_callback=updates.append,
+    )
+    assert failed.status == "failed"
+    assert failed.error == "memory retrieval unavailable"
+    assert failed.text == "Memory search is unavailable. Please try again."
+    assert "private database detail" not in failed.text + failed.error
+    assert updates[-1]["activity"] == "finished"
+    assert calls == []
+
+    monkeypatch.setattr(store, "search_memories", original_search)
+    monkeypatch.setattr(ai.response, "detect_language_code", lambda _text: "en")
+    recovered = await ai.execute_local_ai(
+        "continue", assistant_context=context,
+        reply_language=ReplyLanguage("en", "English", "test"),
+    )
+    assert recovered.status == "completed"
+    assert recovered.text == "model answer"
+    assert calls == ["model"]
 
 
 def test_write_tool_audit_redacts_file_content():

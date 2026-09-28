@@ -1,6 +1,8 @@
 import asyncio
+import sqlite3
 from contextlib import nullcontext
 
+import ai
 import pytest
 from prompt_toolkit.layout.containers import HSplit
 from prompt_toolkit.layout.controls import FormattedTextControl
@@ -17,6 +19,7 @@ from interfaces.cli.app import (
 )
 from interfaces.cli.operations import print_due_reminders, print_pending_reminders
 from workflows.storage.store import JobStore
+from tests.support.ai_helpers import FakeClientSession, patch_model_chat
 
 
 def test_plain_cli_starts_session_and_uses_a_simple_prompt(monkeypatch, capsys):
@@ -322,6 +325,47 @@ async def test_cli_runs_the_real_assistant_session_backend(
         ("again", []),
         ("third", []),
     ]
+
+
+async def test_cli_continues_after_memory_index_failure(tmp_path, monkeypatch, capsys):
+    database_path = tmp_path / "suto.db"
+    original_search = JobStore.search_memories
+    attempts = 0
+    model_calls = []
+
+    def flaky_search(self, user_id, query, limit=5):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise sqlite3.OperationalError("private database detail")
+        return original_search(self, user_id, query, limit)
+
+    async def fake_chat(_session, messages, _schemas, think=False):
+        model_calls.append(messages[-1]["content"])
+        return {"message": {"content": "second answer"}}
+
+    async def english_language(_prompt, _previous):
+        return ai.ReplyLanguage("en", "English", "test")
+
+    monkeypatch.setenv("SUTO_DB_PATH", str(database_path))
+    monkeypatch.setattr(JobStore, "search_memories", flaky_search)
+    monkeypatch.setattr(ai.client.aiohttp, "ClientSession", FakeClientSession)
+    monkeypatch.setattr(ai.client, "chat", fake_chat)
+    monkeypatch.setattr(ai.response, "detect_language_code", lambda _text: "en")
+    monkeypatch.setattr(backend, "_choose_reply_language_async", english_language)
+    patch_model_chat(monkeypatch)
+    prompts = iter(["first question", "second question", "/exit"])
+
+    async def read_prompt():
+        return next(prompts)
+
+    await backend.run_session("agent", read_prompt)
+
+    output = capsys.readouterr().out
+    assert "Memory search is unavailable. Please try again." in output
+    assert "second answer" in output
+    assert "private database detail" not in output
+    assert model_calls == ["second question"]
 
 
 @pytest.mark.parametrize(

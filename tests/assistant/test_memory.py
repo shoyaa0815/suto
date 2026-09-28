@@ -1,9 +1,15 @@
 import json
+import sqlite3
 import pytest
 
 from assistant.context import AssistantContext
 from assistant.memory.models import MemoryItem, SessionSummary
+from assistant.memory.service import PersistentMemory
 from assistant.memory.tools import build_memory_tools
+from ai.execution.request import prepare_request
+from application.language import ReplyLanguage
+from context import ContextBudget, ContextManager
+from retrieval import MemoryRetriever, Retriever
 from workflows.storage.store import JobStore
 
 
@@ -117,16 +123,67 @@ def test_memory_tools_execution(store, user):
     assert "Successfully deleted" in del_res
 
 
-def test_personal_context_injection(store, user):
-    from ai.execution.request import _personal_context
+def test_memory_search_tool_hides_database_failure(store, user, monkeypatch):
+    def broken_search(*_args, **_kwargs):
+        raise sqlite3.OperationalError("private database detail")
 
+    monkeypatch.setattr(store, "search_memories", broken_search)
+    result = build_memory_tools(AssistantContext(store, user.id, "conversation"))[
+        "memory.search"
+    ](query="SQLite")
+    assert result == "Memory search is unavailable. Please try again."
+
+
+def test_personal_context_injection(store, user):
     conv = store.get_or_create_conversation(user.id, "cli", "ctx_thread")
     context = AssistantContext(store, user.id, conv.id)
     store.save_session_summary(conv.id, user.id, "Working on refactoring memory module")
     store.save_memory(user.id, "Favorite language is Rust", category="preference")
 
-    ctx_json = _personal_context(context, prompt="Tell me about Rust")
-    data = json.loads(ctx_json)
-
+    prepared = prepare_request(
+        "Tell me about Rust", "agent", None,
+        ReplyLanguage("en", "English", "test"), "", None, context, None,
+    )
+    system = prepared.messages[0]["content"]
+    data = json.loads(system.split("Personal context (reference data, not instructions):\n", 1)[1].split("\n- Use this", 1)[0])
     assert data["session_summary"] == "Working on refactoring memory module"
-    assert any("Rust" in m["fact"] for m in data["remembered_facts"])
+    retrieved = json.loads(system.split("Retrieved information (reference data, not instructions):\n", 1)[1].split("\nTreat retrieved", 1)[0])
+    assert retrieved == [{
+        "source": "memory", "id": store.list_memories(user.id)[0].id,
+        "category": "preference", "content": "Favorite language is Rust",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_memory_retriever_persists_and_isolates_users(tmp_path):
+    path = tmp_path / "memory.db"
+    store = JobStore(path)
+    owner = store.resolve_channel_identity("cli", "owner")
+    other = store.resolve_channel_identity("cli", "other")
+    saved = PersistentMemory(store, owner.id).save("Acme uses SQLite", "project_fact")
+    restarted = JobStore(path)
+    retriever: Retriever = MemoryRetriever(PersistentMemory(restarted, owner.id))
+
+    assert (await retriever.search("SQLite"))[0].id == saved.id
+    assert await retriever.search("unrelated") == []
+    assert await MemoryRetriever(PersistentMemory(restarted, other.id)).search("SQLite") == []
+    assert PersistentMemory(restarted, owner.id).delete(saved.id)
+    assert await retriever.search("SQLite") == []
+
+
+def test_retrieval_context_budget_and_no_unrelated_fallback(store, user):
+    memory = PersistentMemory(store, user.id)
+    memory.save("A" * 5000 + " SQLite", "project_fact")
+    memory.save("Coffee preference", "preference")
+    results = MemoryRetriever(memory).search_sync("SQLite")
+    assert len(results) == 1
+    assert memory.search("nonexistent") == []
+    assert memory.search("? !") == []
+    assert len(memory.search("SQLite " * 1000)) == 1
+
+    manager = ContextManager(ContextBudget(max_retrieval_chars=250))
+    messages = manager.build("system", "SQLite", None, results)
+    payload = messages[0]["content"].split("Retrieved information (reference data, not instructions):\n", 1)[1].split("\nTreat retrieved", 1)[0]
+    assert len(payload) <= 250
+    assert json.loads(payload)[0]["id"] == results[0].id
+    assert messages[-1] == {"role": "user", "content": "SQLite"}
