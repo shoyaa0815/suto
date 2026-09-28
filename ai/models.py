@@ -1,6 +1,8 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from planning.models import Plan
+
 
 ProgressCallback = Callable[[dict], object]
 ToolEventCallback = Callable[[dict], object]
@@ -16,3 +18,4 @@ class AIExecutionResult:
     output_tokens: int
     elapsed_seconds: float
     clarification: dict[str, list[str] | str] | None = None
+    plan: Plan | None = None

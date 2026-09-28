@@ -1,9 +1,13 @@
 """Compatibility adapter from Suto's existing AI lifecycle to AgentRuntime."""
 
+import asyncio
+import json
+
 from agent import AgentRequest, AgentResult, AgentRuntime, RuntimeHooks
 from agent.limits import ExecutionLimits
 from application.modes import CLARIFICATIONS_ENABLED
 from assistant.tasks.tools import REMINDER_CREATION_TOOL_NAMES, reminder_creation_requested
+from planning import Planner, Replanner
 from tools.clarification import parse_request as parse_clarification_request
 from tools.registry import FunctionTool, ToolRegistry
 from workflows.runtime.context import ApprovalRequired, ExecutionLimitExceeded
@@ -132,6 +136,7 @@ class ModelToolLoop:
         self.attachments = attachments or {}
         self.outcome = "completed"
         self.runtime = None
+        self.plan = None
 
     async def run(self):
         registry = ToolRegistry()
@@ -144,8 +149,42 @@ class ModelToolLoop:
                 name, schema.get("description", ""), parameters, handler
             ))
         job_limits = self.execution_context.limits if self.execution_context else None
+        model = build_model_router(self.session)
+        if self.execution_context is None and Planner.needs_plan(self.prompt):
+            await self.progress.emit("planning", "drafting a plan")
+            planner = Planner(model)
+            try:
+                planned_response = await self.guard.wait(asyncio.wait_for(
+                    model.generate(planner.request(self.prompt)),
+                    timeout=config.AI_TIMEOUT_SECONDS,
+                ))
+            except (asyncio.CancelledError, ApprovalRequired, ExecutionLimitExceeded):
+                raise
+            except Exception:
+                # Planning is optional; a failed planning call must not block
+                # the normal agent run or expose provider error details.
+                planned_response = None
+            if planned_response is not None:
+                self.progress.record_usage({
+                    "prompt_eval_count": planned_response.usage.prompt_tokens,
+                    "eval_count": planned_response.usage.output_tokens,
+                })
+                try:
+                    self.plan = planner.parse(self.prompt, planned_response)
+                except ValueError:
+                    # An invalid proposal also falls back to the normal run.
+                    pass
+            if self.plan is not None:
+                self.messages.append({
+                    "role": "assistant",
+                    "content": "Proposed plan (guidance only; no action has been completed): "
+                    + json.dumps(
+                        [step.description for step in self.plan.steps],
+                        ensure_ascii=False,
+                    ),
+                })
         self.runtime = AgentRuntime(
-            build_model_router(self.session),
+            model,
             registry,
             limits=ExecutionLimits(
                 max_iterations=self.max_rounds,
@@ -172,6 +211,10 @@ class ModelToolLoop:
             self.outcome = f"timed out: {result.error}"
         elif result.status == "failed" and self.outcome == "completed":
             self.outcome = result.error or "failed"
+        if self.plan is not None and result.status in {"blocked", "failed", "timed_out"}:
+            self.plan = Replanner().block(
+                self.plan, f"run ended with status {result.status}"
+            )
         return self.build_result(
             result.final_text,
             status=result.status,

@@ -7,6 +7,12 @@ reason it changes:
 - `execution/request.py`: mode policy, history, identity context, and schemas;
 - `execution/loop.py`: bounded model/tool rounds and final-answer handling;
 - `execution/limits.py`: elapsed-time, token, tool-call, and shared-budget gates;
+- top-level `planning/`: optional `Plan`, `PlanStep`, `Planner`, and `Replanner`. Clear
+  multi-action interactive requests get a bounded, tool-free model proposal
+  before the normal agent loop. Simple requests go straight to the agent. An
+  invalid or failed proposal falls back to the normal request. Proposed steps
+  remain pending unless separately verified; the result exposes the proposal in
+  `AIExecutionResult.plan`. Job-scoped durable planning tools remain unchanged;
 - `tooling/assembly.py`: request-scoped tool-handler construction;
 - `tooling/events.py`: safe tool audit details, signatures, and callbacks;
 - `tools/registry.py` and `tools/executor.py`: request-scoped tool registration,

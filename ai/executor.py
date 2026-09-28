@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from dataclasses import replace
 
 import aiohttp
 
@@ -148,7 +149,7 @@ async def execute_local_ai(
             )
             result = await loop.run()
             outcome = loop.outcome
-            return result
+            return replace(result, plan=loop.plan)
     except asyncio.CancelledError:
         outcome = "cancelled"
         raise
