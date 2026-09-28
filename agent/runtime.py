@@ -2,14 +2,15 @@
 
 import asyncio
 import json
-import time
 from collections.abc import Awaitable
+from copy import deepcopy
 from dataclasses import replace
 from typing import Any
 from uuid import uuid4
 
 from llm.base import Model
 from llm.types import ModelRequest, ModelResponse, ToolCall
+from tools.executor import ToolExecutor, ToolNotFoundError
 from tools.registry import ToolRegistry, ToolValidationError
 
 from .events import AgentEvent
@@ -63,6 +64,7 @@ class AgentRuntime:
     ) -> None:
         self.model = model
         self.tools = tools
+        self.tool_executor = ToolExecutor(tools)
         self.limits = limits or ExecutionLimits()
         self.hooks = hooks or RuntimeHooks()
         self.passthrough_exceptions = passthrough_exceptions
@@ -158,18 +160,17 @@ class AgentRuntime:
                         await self.hooks.on_tool_finished(call, "blocked", reason, reason, 0)
                         return await self._stop("blocked", reason, reason, run_id, session_id, usage)
                     await self._transition(RunState.AUTHORIZING, run_id, session_id)
-                    tool = self.tools.resolve(call.name)
-                    if tool is None:
+                    try:
+                        prepared = self.tool_executor.prepare(call.name, call.arguments)
+                    except ToolNotFoundError:
                         reason = f"tool is not available for this request: {call.name}"
                         await self.hooks.on_tool_finished(call, "blocked", reason, reason, 0)
                         return await self._stop("blocked", reason, reason, run_id, session_id, usage)
-                    try:
-                        args = self.tools.validate(tool, call.arguments)
                     except ToolValidationError as error:
                         reason = f"invalid tool arguments: {call.name}: {error}"
                         await self.hooks.on_tool_finished(call, "failed", reason, reason, 0)
                         return await self._stop("failed", f"tool failed: {call.name}", reason, run_id, session_id, usage)
-                    if not await self.hooks.authorize(call.name, args):
+                    if not await self.hooks.authorize(call.name, deepcopy(prepared.arguments)):
                         reason = f"tool is not allowed for this request: {call.name}"
                         await self.hooks.on_tool_finished(call, "blocked", reason, reason, 0)
                         return await self._stop("blocked", reason, reason, run_id, session_id, usage)
@@ -182,29 +183,35 @@ class AgentRuntime:
                     if reason:
                         return await self._stop("blocked", reason, reason, run_id, session_id, usage)
                     await self._transition(RunState.EXECUTING, run_id, session_id)
-                    started = time.perf_counter()
                     try:
-                        result = await self._wait(tool.execute(args), self.limits.tool_timeout_seconds)
+                        execution = await self.tool_executor.execute(
+                            prepared,
+                            timeout=self.limits.tool_timeout_seconds,
+                            wait=self._wait,
+                            passthrough_exceptions=self.passthrough_exceptions,
+                        )
                     except self.passthrough_exceptions as error:
                         await self._transition(
                             RunState.WAITING_FOR_APPROVAL if hasattr(error, "approval_id") else RunState.FAILED,
                             run_id, session_id,
                         )
                         raise
-                    except (asyncio.TimeoutError, TimeoutError):
-                        reason = f"tool timed out: {call.name}"
-                        await self.hooks.on_tool_finished(call, "timed out", reason, reason, time.perf_counter() - started)
-                        return await self._stop("timed_out", f"tool timed out: {call.name}", reason, run_id, session_id, usage)
-                    except Exception as error:
-                        reason = f"{type(error).__name__}: {error}"
-                        await self.hooks.on_tool_finished(call, "failed", f"tool failed: {call.name}: {error}", reason, time.perf_counter() - started)
-                        return await self._stop("failed", f"tool failed: {call.name}", f"tool failed: {call.name}", run_id, session_id, usage)
+                    result = execution.result
                     if not result.ok:
                         reason = result.error or f"tool failed: {call.name}"
-                        await self.hooks.on_tool_finished(call, "failed", result.content, reason, time.perf_counter() - started)
-                        return await self._stop("failed", f"tool failed: {call.name}", reason, run_id, session_id, usage)
+                        await self.hooks.on_tool_finished(
+                            call, execution.status, result.content, reason, execution.elapsed_seconds
+                        )
+                        if execution.status == "timed out":
+                            return await self._stop("timed_out", reason, reason, run_id, session_id, usage)
+                        return await self._stop(
+                            "failed", f"tool failed: {call.name}",
+                            execution.reported_error or reason, run_id, session_id, usage,
+                        )
                     completed_tools.add(call.name)
-                    await self.hooks.on_tool_finished(call, "finished", result.content, None, time.perf_counter() - started)
+                    await self.hooks.on_tool_finished(
+                        call, "finished", result.content, None, execution.elapsed_seconds
+                    )
                     await self._transition(RunState.OBSERVING, run_id, session_id)
                     observation = {"role": "tool", "content": str(result.content)}
                     if call.id:

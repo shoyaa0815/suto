@@ -74,7 +74,7 @@ class FunctionTool:
         result = self.handler(**args)
         if inspect.isawaitable(result):
             result = await result
-        return ToolResult(ok=True, content=result)
+        return result if isinstance(result, ToolResult) else ToolResult(ok=True, content=result)
 
 
 class ToolRegistry:

@@ -6,6 +6,7 @@ from agent import AgentRequest, AgentRuntime, RunState, RuntimeHooks
 from agent.limits import ExecutionLimits
 from llm.types import ModelResponse, ModelUsage, ToolCall
 from tools.registry import FunctionTool, ToolRegistry, ToolValidationError
+from tools.types import ToolResult
 
 
 class FakeModel:
@@ -87,6 +88,92 @@ async def test_invalid_arguments_never_reach_tool(arguments):
     assert called == []
 
 
+async def test_invalid_arguments_are_rejected_before_permission_check():
+    class RecordAuthorization(RuntimeHooks):
+        def __init__(self):
+            self.calls = []
+
+        async def authorize(self, name, args):
+            self.calls.append((name, args))
+            return True
+
+    hooks = RecordAuthorization()
+    runtime = AgentRuntime(
+        FakeModel(ModelResponse("", [ToolCall("test.echo", {"value": 42})])),
+        registry(), hooks=hooks,
+    )
+
+    assert (await runtime.run(AgentRequest("echo"), [])).status == "failed"
+    assert hooks.calls == []
+
+
+async def test_registered_tool_is_available_without_runtime_changes():
+    called = []
+
+    class UpperTool:
+        name = "test.upper"
+        description = "Uppercase text"
+        input_schema = {
+            "type": "object", "properties": {"text": {"type": "string"}},
+            "required": ["text"], "additionalProperties": False,
+        }
+
+        async def execute(self, args):
+            called.append(args["text"])
+            return ToolResult(ok=True, content=args["text"].upper())
+
+    tools = ToolRegistry()
+    tools.register(UpperTool())
+    model = FakeModel(
+        ModelResponse("", [ToolCall("test.upper", {"text": "hello"}, "call-2")]),
+        ModelResponse("done"),
+    )
+    runtime = AgentRuntime(model, tools)
+
+    result = await runtime.run(AgentRequest("upper"), [])
+
+    assert result.status == "completed"
+    assert called == ["hello"]
+    assert model.requests[0].available_tools[0]["function"]["name"] == "test.upper"
+    assert model.requests[1].messages[-1] == {
+        "role": "tool", "content": "HELLO", "tool_call_id": "call-2"
+    }
+
+
+async def test_permission_hook_cannot_change_validated_execution_arguments():
+    class MutatingAuthorization(RuntimeHooks):
+        async def authorize(self, name, args):
+            args["value"] = 7
+            return True
+
+    called = []
+    runtime = AgentRuntime(
+        FakeModel(
+            ModelResponse("", [ToolCall("test.echo", {"value": "safe"})]),
+            ModelResponse("done"),
+        ),
+        registry(lambda value: called.append(value) or value),
+        hooks=MutatingAuthorization(),
+    )
+
+    assert (await runtime.run(AgentRequest("echo"), [])).status == "completed"
+    assert called == ["safe"]
+
+
+async def test_tool_result_failure_cannot_be_wrapped_as_success():
+    tools = registry(lambda value: ToolResult(False, "rejected", error="write rejected"))
+    model = FakeModel(ModelResponse("", [ToolCall("test.echo", {"value": "x"})]))
+    runtime = AgentRuntime(model, tools)
+    messages = []
+
+    result = await runtime.run(AgentRequest("echo"), messages)
+
+    assert result.status == "failed"
+    assert result.error == "write rejected"
+    assert len(model.requests) == 1
+    assert not any(message.get("role") == "tool" for message in messages)
+
+
 async def test_unknown_tool_and_denied_tool_do_not_execute():
     called = []
     unknown = AgentRuntime(FakeModel(ModelResponse("", [ToolCall("missing", {})])), registry())
@@ -112,7 +199,9 @@ async def test_tool_failure_and_iteration_limit_cannot_claim_success():
         FakeModel(ModelResponse("", [ToolCall("test.echo", {"value": "x"})])),
         registry(fail),
     )
-    assert (await failing.run(AgentRequest("x"), [])).status == "failed"
+    failure = await failing.run(AgentRequest("x"), [])
+    assert failure.status == "failed"
+    assert failure.error == "tool failed: test.echo"
     assert failing.state.status == RunState.FAILED
 
     looping = AgentRuntime(

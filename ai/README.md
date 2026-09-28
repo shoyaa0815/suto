@@ -9,6 +9,10 @@ reason it changes:
 - `execution/limits.py`: elapsed-time, token, tool-call, and shared-budget gates;
 - `tooling/assembly.py`: request-scoped tool-handler construction;
 - `tooling/events.py`: safe tool audit details, signatures, and callbacks;
+- `tools/registry.py` and `tools/executor.py`: request-scoped tool registration,
+  schema validation, and normalized execution. The agent loop checks permission
+  after validation and before execution. Existing callable handlers use
+  `FunctionTool`; new tools can implement `Tool` and register directly;
 - `providers/`: provider protocol and Ollama/OpenAI-compatible adapters;
 - `client.py`: provider-facing chat façade;
 - `prompting.py` and `response.py`: model-facing input and output rules;
