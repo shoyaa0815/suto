@@ -18,6 +18,16 @@ non-mapping YAML fail closed. `config.yaml` is local and ignored by Git;
 
 ## Database and worker lifecycle
 
+CLI conversations remain in the existing `conversations` and `messages` tables
+and resume by local user, interface, and thread. Before each prompt, the session
+service keeps up to 20 recent messages for model context and condenses older
+messages into a bounded session summary. The summary and its message cursor are
+stored together; the original messages remain available in SQLite. `/clear`
+deletes both messages and their summary for the current conversation, while
+`/reset all` removes saved conversations. Model context uses a 32,000-character
+history budget and an 8,000-character summary budget. The deterministic summary
+keeps excerpts of older turns, so details outside that budget can be omitted.
+
 The unversioned Phase 0–7 database is schema 0. Startup migrates to version 1
 (production controls) and version 2 (advanced features). Each version runs in a
 transaction, is recorded in `schema_migrations`, and updates `PRAGMA user_version`.

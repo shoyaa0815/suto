@@ -46,6 +46,7 @@ from interfaces.cli.operations import (
 )
 from interfaces.cli.output import set_activity, write as print
 from interfaces.cli.progress import activity_text, print_progress
+from sessions import SessionService, SessionStore
 from workflows.runtime.runner import JobRunner
 from workflows.runtime.worker import AutomationWorker
 from workflows.storage.store import JobStore
@@ -99,6 +100,7 @@ async def run_session(
     previous_language_code: str | None = None
     database_path = os.environ.get("SUTO_DB_PATH", "data/suto.db")
     store = JobStore(database_path)
+    sessions = SessionService(SessionStore(store))
     profile = load_settings().profile
     user = store.resolve_channel_identity(
         CLI_STORAGE_INTERFACE,
@@ -113,7 +115,7 @@ async def run_session(
         timezone=profile.timezone,
         locale=profile.locale,
     )
-    conversation = store.get_or_create_conversation(
+    conversation = sessions.resume(
         user.id, CLI_STORAGE_INTERFACE, "local"
     )
     worker = AutomationWorker(store, JobRunner(store))
@@ -153,7 +155,7 @@ async def run_session(
             )
             if outcome.handled:
                 if outcome.conversation_id is not None:
-                    conversation = store.get_or_create_conversation(
+                    conversation = sessions.resume(
                         user.id,
                         CLI_STORAGE_INTERFACE,
                         "local",
@@ -164,8 +166,8 @@ async def run_session(
                     return
                 continue
 
-            history = store.conversation_history(conversation.id)
-            store.add_message(conversation.id, "user", prompt)
+            history = sessions.before_prompt(conversation.id, user.id)
+            sessions.append(conversation.id, user.id, "user", prompt)
             reply_language = await _choose_reply_language_async(
                 prompt,
                 previous_language_code,
@@ -248,15 +250,16 @@ async def run_session(
                             break
                         question = str(result.clarification["question"])
                         options = result.clarification["options"]
-                        store.add_message(
+                        sessions.append(
                             conversation.id,
+                            user.id,
                             "assistant",
                             question + "\n" + "\n".join(
                                 f"- {option}" for option in options
                             ),
                         )
-                        resumed_history = store.conversation_history(conversation.id)
-                        store.add_message(conversation.id, "user", answer)
+                        resumed_history = sessions.before_prompt(conversation.id, user.id)
+                        sessions.append(conversation.id, user.id, "user", answer)
                         start_request_activity()
                         result = await wait_for_request(
                             execute_local_ai(
@@ -280,7 +283,7 @@ async def run_session(
                 if activity_writer is not None:
                     activity_writer(None)
 
-            store.add_message(conversation.id, "assistant", answer)
+            sessions.append(conversation.id, user.id, "assistant", answer)
             print(answer)
     finally:
         await _cancel_tasks(background_tasks)

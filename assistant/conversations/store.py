@@ -100,6 +100,10 @@ class ConversationStore:
                 "DELETE FROM messages WHERE conversation_id=?",
                 (conversation_id,),
             )
+            db.execute(
+                "DELETE FROM session_summaries WHERE conversation_id=?",
+                (conversation_id,),
+            )
         return cursor.rowcount
 
     def reset_conversations(self) -> int:

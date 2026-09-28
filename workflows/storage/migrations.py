@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .locking import ProcessLock
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 HARDENING = """
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -234,6 +234,10 @@ AGENT_ONLY_MODE = """
 UPDATE jobs SET mode = 'agent' WHERE mode IN ('chat', 'home', 'developer');
 """
 
+SESSION_COMPACTION = """
+ALTER TABLE session_summaries ADD COLUMN compacted_through_message_id INTEGER NOT NULL DEFAULT 0;
+"""
+
 
 def backup_database(source: Path, destination: Path) -> Path:
     source, destination = source.resolve(), destination.expanduser().absolute()
@@ -287,11 +291,20 @@ def initialize_database(store) -> None:
                 (9, REMOVE_SEMANTIC_MEMORY),
                 (10, THREE_TIER_MEMORY),
                 (11, AGENT_ONLY_MODE),
+                (12, SESSION_COMPACTION),
             ):
                 if number <= version:
                     continue
                 with store._connect() as connection:
-                    connection.executescript('BEGIN IMMEDIATE;\n' + script)
+                    # A restored database can have the column while its version
+                    # marker still reflects an earlier snapshot.
+                    migration_script = script
+                    if number == 12 and any(
+                        row[1] == 'compacted_through_message_id'
+                        for row in connection.execute('PRAGMA table_info(session_summaries)')
+                    ):
+                        migration_script = ''
+                    connection.executescript('BEGIN IMMEDIATE;\n' + migration_script)
                     connection.execute('INSERT OR REPLACE INTO schema_migrations VALUES (?,?)',
                                        (number, datetime.now(UTC).isoformat()))
                     connection.execute(f'PRAGMA user_version = {number}')

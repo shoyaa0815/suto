@@ -9,6 +9,7 @@ class SessionSummary:
     user_id: str
     summary: str
     updated_at: str
+    compacted_through_message_id: int = 0
 
 
 @dataclass(frozen=True)

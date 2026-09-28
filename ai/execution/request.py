@@ -7,6 +7,7 @@ from application.language import ReplyLanguage, choose_reply_language
 from application.modes import get_mode_policy
 from assistant.context import AssistantContext
 from assistant.memory.tools import MEMORY_TOOL_NAMES
+from context import ContextManager
 from tools import (
     ADVANCED_TOOL_NAMES,
     COMMAND_TOOL_NAMES,
@@ -63,16 +64,6 @@ def _allowed_tools(
     return allowed_job_tools
 
 
-def _history_messages(history: list[dict[str, str]] | None) -> list[dict]:
-    return [
-        {"role": item["role"], "content": item["content"]}
-        for item in (history or [])[-20:]
-        if item.get("role") in {"user", "assistant"}
-        and isinstance(item.get("content"), str)
-        and item["content"]
-    ]
-
-
 def _personal_context(context: AssistantContext | None, prompt: str = "") -> str:
     if context is None:
         return ""
@@ -110,7 +101,7 @@ def _personal_context(context: AssistantContext | None, prompt: str = "") -> str
     if hasattr(context.store, "get_session_summary") and context.conversation_id:
         summary_obj = context.store.get_session_summary(context.conversation_id)
         if summary_obj and summary_obj.summary:
-            payload["session_summary"] = summary_obj.summary
+            payload["session_summary"] = ContextManager().summary(summary_obj.summary)
 
     if hasattr(context.store, "search_memories"):
         items = (
@@ -151,20 +142,17 @@ def prepare_request(
         execution_context,
     )
     _, tool_schemas, tool_guidance = get_tools(allowed_tools)
-    messages = [
-        {
-            "role": "system",
-            "content": prompting.build_system_prompt(
-                policy.prompt,
-                tool_guidance,
-                selected_language,
-                skill_instructions,
-                _personal_context(assistant_context, prompt),
-            ),
-        },
-        *_history_messages(conversation_history),
-        {"role": "user", "content": prompt},
-    ]
+    messages = ContextManager().build(
+        prompting.build_system_prompt(
+            policy.prompt,
+            tool_guidance,
+            selected_language,
+            skill_instructions,
+            _personal_context(assistant_context, prompt),
+        ),
+        prompt,
+        conversation_history,
+    )
     return PreparedRequest(
         attachments=request_attachments,
         reply_language=selected_language,
