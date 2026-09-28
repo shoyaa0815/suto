@@ -184,7 +184,7 @@ and runtime are in scope for the approved command.
 
 ## Local web settings
 
-Run `venv/bin/python main.py settings` to open the Suto Settings editor in the
+Run `venv/bin/python main.py settings` to open the Suto Settings control center in the
 default browser. It binds only to `127.0.0.1:8765`.
 The browser opens after the port is listening. If launching the browser fails,
 use the private link printed in the terminal. Ctrl-C or SIGTERM closes the server.
@@ -196,17 +196,20 @@ APIs require that cookie; writes also require an exact local Origin and JSON
 request header. Host validation rejects alternate hostnames. No remote binding,
 public deployment or reverse-proxy mode is provided.
 
-Settings edits the supported `config.yaml` profile schema as YAML. Validate &
-review shows the normalized diff before Save. Unknown fields, invalid timezones,
-malformed YAML and files over 32 KiB are rejected. Secrets remain in `.env`.
+The dashboard reads recent job status and automation skill names from an existing
+SQLite database without starting workers or creating a database. MCP is shown
+as unsupported; schedules are not shown. These views are read-only.
+The profile form edits the supported `config.yaml` fields. Validate & review
+shows changed values before Save. Unknown fields, invalid timezones, malformed
+YAML and files over 32 KiB are rejected. Secrets remain in `.env`.
 The editor normalizes formatting and removes comments; a byte-level revision
 check detects changes since load, including external edits. Failed validation or
 conflicts preserve the draft and file; Reload requires confirmation for unsaved
 edits. Persistence reuses the existing atomic settings writer. Restart relevant
 Suto processes to apply saved settings; the editor never restarts them.
 
-Opening the settings editor never starts AI, automation, delivery workers, or
-SQLite storage.
+Opening the settings editor never starts AI, automation, or delivery workers,
+and never creates a SQLite database.
 
 ## Local notifications and verification
 

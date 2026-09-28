@@ -1,45 +1,118 @@
-"""The bounded model/tool loop for one prepared AI request."""
+"""Compatibility adapter from Suto's existing AI lifecycle to AgentRuntime."""
 
-import asyncio
-import inspect
-import time
-
-from assistant.tasks.tools import (
-    REMINDER_CREATION_TOOL_NAMES,
-    reminder_creation_requested,
-)
+from agent import AgentRequest, AgentResult, AgentRuntime, RuntimeHooks
+from agent.limits import ExecutionLimits
 from application.modes import CLARIFICATIONS_ENABLED
+from assistant.tasks.tools import REMINDER_CREATION_TOOL_NAMES, reminder_creation_requested
 from tools.clarification import parse_request as parse_clarification_request
+from tools.registry import FunctionTool, ToolRegistry
 from workflows.runtime.context import ApprovalRequired, ExecutionLimitExceeded
 
-from .. import client, config, response
-from ..tooling.events import (
-    audit_tool_arguments,
-    emit_tool_event,
-    tool_call_signature,
-    tool_detail,
-)
+from .. import config, response
+from ..providers.model import ChatModelAdapter
+from ..tooling.events import audit_tool_arguments, emit_tool_event, tool_detail
+
+
+class _LegacyHooks(RuntimeHooks):
+    def __init__(self, owner: "ModelToolLoop") -> None:
+        self.owner = owner
+
+    async def wait(self, awaitable):
+        return await self.owner.guard.wait(awaitable)
+
+    def limit_reason(self, tool_calls, *, pending_model=False, pending_tool=False):
+        return self.owner.guard.limit_reason(
+            tool_calls, pending_model=pending_model, pending_tool=pending_tool
+        )
+
+    async def on_model_requested(self, iteration):
+        await self.owner.progress.emit(
+            "model", f"waiting for AI (loop {iteration}/{self.owner.max_rounds})", iteration
+        )
+
+    async def on_model(self, model_response, iteration):
+        self.owner.progress.record_usage({
+            "prompt_eval_count": model_response.usage.prompt_tokens,
+            "eval_count": model_response.usage.output_tokens,
+        })
+        await self.owner.progress.emit()
+
+    async def on_tool_requested(self, call, iteration):
+        await self.owner.progress.emit("tool", tool_detail(call.name, call.arguments), iteration)
+        if call.name != "ask_user" or not CLARIFICATIONS_ENABLED:
+            return None
+        try:
+            clarification = parse_clarification_request(call.arguments)
+        except ValueError as error:
+            reason = f"failed: invalid clarification request: {error}"
+            self.owner.outcome = reason
+            return AgentResult(None, "no response from ai", "failed", error=reason)
+        await self.on_tool_finished(call, "waiting_input", "", None, 0)
+        self.owner.outcome = "waiting for user clarification"
+        text = clarification["question"] + "\n" + "\n".join(
+            f"- {option}" for option in clarification["options"]
+        )
+        return AgentResult(None, text, "waiting_input", metadata={"clarification": clarification})
+
+    async def authorize(self, name, args):
+        return name in self.owner.tools
+
+    async def on_tool_finished(self, call, status, content, error, elapsed_seconds):
+        arguments = (
+            audit_tool_arguments(call.name, call.arguments)
+            if isinstance(call.arguments, dict)
+            else {"invalid_arguments_type": type(call.arguments).__name__}
+        )
+        await emit_tool_event(
+            self.owner.tool_event_callback,
+            {
+                "job_id": self.owner.execution_context.job_id if self.owner.execution_context else None,
+                "tool_name": call.name,
+                "arguments": arguments,
+                "status": status,
+                "elapsed_seconds": elapsed_seconds,
+                "result_size": len(str(content).encode("utf-8")),
+                "error": error,
+            },
+        )
+        if status == "finished":
+            await self.owner.progress.emit(
+                "tool_done", f"{tool_detail(call.name, call.arguments)}: finished"
+            )
+
+    async def on_final(self, text, completed_tools):
+        owner = self.owner
+        if (
+            owner.assistant_context is not None
+            and reminder_creation_requested(owner.prompt)
+            and not completed_tools & REMINDER_CREATION_TOOL_NAMES
+        ):
+            owner.outcome = "failed: reminder tool was not completed"
+            message = (
+                "สร้างการแจ้งเตือนไม่สำเร็จ กรุณาลองอีกครั้ง"
+                if owner.reply_language.code == "th"
+                else "I couldn't create the reminder. Please try again."
+            )
+            return AgentResult(None, message, "failed", error=owner.outcome)
+        answer = await owner.guard.wait(
+            response.enforce_reply_language(
+                owner.session, text, owner.reply_language, owner.progress
+            )
+        )
+        reason = owner.guard.limit_reason(owner.runtime.state.tool_calls)
+        if reason:
+            owner.outcome = f"blocked: {reason}"
+            return AgentResult(None, reason, "blocked", error=reason)
+        return response.to_ascii_digits(answer)
 
 
 class ModelToolLoop:
+    """Keep the established caller contract while the core loop moves to agent/."""
+
     def __init__(
-        self,
-        *,
-        session,
-        messages: list[dict],
-        tool_schemas: list[dict],
-        tools: dict,
-        max_rounds: int,
-        prompt: str,
-        mode: str,
-        think: bool,
-        reply_language,
-        assistant_context,
-        execution_context,
-        tool_event_callback,
-        progress,
-        guard,
-        build_result,
+        self, *, session, messages, tool_schemas, tools, max_rounds, prompt,
+        mode, think, reply_language, assistant_context, execution_context,
+        tool_event_callback, progress, guard, build_result, attachments=None,
     ) -> None:
         self.session = session
         self.messages = messages
@@ -56,236 +129,52 @@ class ModelToolLoop:
         self.progress = progress
         self.guard = guard
         self.build_result = build_result
+        self.attachments = attachments or {}
         self.outcome = "completed"
-
-    def blocked_result(self, reason: str):
-        self.outcome = f"blocked: {reason}"
-        return self.build_result(reason, status="blocked", error=reason)
+        self.runtime = None
 
     async def run(self):
-        tool_call_count = 0
-        tool_call_counts: dict[str, int] = {}
-        completed_tools: set[str] = set()
-        for round_number in range(1, self.max_rounds + 1):
-            reason = self.guard.limit_reason(tool_call_count, pending_model=True)
-            if reason:
-                return self.blocked_result(reason)
-            await self.progress.emit(
-                "model",
-                f"waiting for AI (loop {round_number}/{self.max_rounds})",
-                round_number,
-            )
-            data = await self.guard.wait(
-                client.chat(
-                    self.session,
-                    self.messages,
-                    self.tool_schemas,
-                    self.think,
-                )
-            )
-            self.progress.record_usage(data)
-            await self.progress.emit()
-            reason = self.guard.limit_reason(tool_call_count)
-            if reason:
-                return self.blocked_result(reason)
-            message = data.get("message", {})
-            tool_calls = message.get("tool_calls")
-
-            if not tool_calls:
-                answer = message.get("content", "").strip()
-                if not answer:
-                    self.outcome = "AI returned an empty response"
-                    return self.build_result(
-                        "no response from ai",
-                        status="failed",
-                        error=self.outcome,
-                    )
-                if (
-                    self.assistant_context is not None
-                    and reminder_creation_requested(self.prompt)
-                    and not completed_tools & REMINDER_CREATION_TOOL_NAMES
-                ):
-                    self.outcome = "failed: reminder tool was not completed"
-                    text = (
-                        "สร้างการแจ้งเตือนไม่สำเร็จ กรุณาลองอีกครั้ง"
-                        if self.reply_language.code == "th"
-                        else "I couldn't create the reminder. Please try again."
-                    )
-                    return self.build_result(
-                        text,
-                        status="failed",
-                        error=self.outcome,
-                    )
-                answer = await self.guard.wait(
-                    response.enforce_reply_language(
-                        self.session,
-                        answer,
-                        self.reply_language,
-                        self.progress,
-                    )
-                )
-                reason = self.guard.limit_reason(tool_call_count)
-                if reason:
-                    return self.blocked_result(reason)
-                return self.build_result(response.to_ascii_digits(answer))
-
-            self.messages.append(message)
-            for call in tool_calls:
-                name = call["function"]["name"]
-                args = call["function"].get("arguments") or {}
-                tool_call_count += 1
-                reason = self.guard.limit_reason(
-                    tool_call_count,
-                    pending_tool=True,
-                )
-                if reason:
-                    return self.blocked_result(reason)
-                signature = tool_call_signature(name, args)
-                repeated = tool_call_counts.get(signature, 0) + 1
-                tool_call_counts[signature] = repeated
-                if (
-                    self.execution_context is not None
-                    and repeated
-                    >= self.execution_context.limits.repeated_tool_call_limit
-                ):
-                    reason = (
-                        f"repeated identical tool call detected: {name} "
-                        f"({repeated} attempts)"
-                    )
-                    await emit_tool_event(
-                        self.tool_event_callback,
-                        {
-                            "job_id": self.execution_context.job_id,
-                            "tool_name": name,
-                            "arguments": audit_tool_arguments(name, args),
-                            "status": "blocked",
-                            "elapsed_seconds": 0,
-                            "result_size": 0,
-                            "error": reason,
-                        },
-                    )
-                    return self.blocked_result(reason)
-                detail = tool_detail(name, args)
-                await self.progress.emit("tool", detail, round_number)
-                reason = self.guard.limit_reason(
-                    tool_call_count,
-                    pending_tool=True,
-                )
-                if reason:
-                    return self.blocked_result(reason)
-                if name == "ask_user" and CLARIFICATIONS_ENABLED:
-                    try:
-                        clarification = parse_clarification_request(args)
-                    except ValueError as error:
-                        self.outcome = f"failed: invalid clarification request: {error}"
-                        return self.build_result(
-                            "no response from ai",
-                            status="failed",
-                            error=self.outcome,
-                        )
-                    await emit_tool_event(
-                        self.tool_event_callback,
-                        {
-                            "job_id": (
-                                self.execution_context.job_id
-                                if self.execution_context is not None
-                                else None
-                            ),
-                            "tool_name": name,
-                            "arguments": audit_tool_arguments(name, args),
-                            "status": "waiting_input",
-                            "elapsed_seconds": 0,
-                            "result_size": 0,
-                            "error": None,
-                        },
-                    )
-                    self.outcome = "waiting for user clarification"
-                    return self.build_result(
-                        clarification["question"]
-                        + "\n"
-                        + "\n".join(
-                            f"- {option}" for option in clarification["options"]
-                        ),
-                        status="waiting_input",
-                        clarification=clarification,
-                    )
-                if name in self.tools:
-                    result, tool_outcome, tool_error, elapsed_ms = (
-                        await self._execute_tool(name, args)
-                    )
-                    if tool_outcome == "finished":
-                        completed_tools.add(name)
-                else:
-                    elapsed_ms = 0
-                    tool_outcome = "blocked"
-                    tool_error = (
-                        f"tool is not available for this request: {name}"
-                    )
-                    result = tool_error
-                await emit_tool_event(
-                    self.tool_event_callback,
-                    {
-                        "job_id": (
-                            self.execution_context.job_id
-                            if self.execution_context is not None
-                            else None
-                        ),
-                        "tool_name": name,
-                        "arguments": audit_tool_arguments(name, args),
-                        "status": tool_outcome,
-                        "elapsed_seconds": elapsed_ms / 1000,
-                        "result_size": len(str(result).encode("utf-8")),
-                        "error": tool_error,
-                    },
-                )
-                if tool_outcome == "blocked":
-                    return self.blocked_result(tool_error or "tool is unavailable")
-                if tool_outcome in {"failed", "timed out"}:
-                    self.outcome = f"{tool_outcome}: {name}"
-                    return self.build_result(
-                        f"tool {tool_outcome}: {name}",
-                        status="failed" if tool_outcome == "failed" else "timed_out",
-                        error=f"tool {tool_outcome}: {name}",
-                    )
-                tool_message = {"role": "tool", "content": str(result)}
-                if call.get("id"):
-                    tool_message["tool_call_id"] = call["id"]
-                self.messages.append(tool_message)
-                await self.progress.emit(
-                    "tool_done",
-                    f"{detail}: {tool_outcome}",
-                    round_number,
-                )
-
-        self.outcome = f"stopped after {self.max_rounds} tool loops"
-        return self.build_result(
-            "no response from ai",
-            status="failed",
-            error=self.outcome,
+        registry = ToolRegistry()
+        schemas = {item["function"]["name"]: item["function"] for item in self.tool_schemas}
+        for name, handler in self.tools.items():
+            schema = schemas[name]
+            parameters = dict(schema["parameters"])
+            parameters.setdefault("additionalProperties", False)
+            registry.register(FunctionTool(
+                name, schema.get("description", ""), parameters, handler
+            ))
+        job_limits = self.execution_context.limits if self.execution_context else None
+        self.runtime = AgentRuntime(
+            ChatModelAdapter(self.session),
+            registry,
+            limits=ExecutionLimits(
+                max_iterations=self.max_rounds,
+                max_tool_calls=job_limits.max_tool_calls if job_limits else 40,
+                model_timeout_seconds=config.AI_TIMEOUT_SECONDS,
+                tool_timeout_seconds=config.AI_TIMEOUT_SECONDS,
+                repeated_tool_call_limit=(job_limits.repeated_tool_call_limit if job_limits else None),
+            ),
+            hooks=_LegacyHooks(self),
+            passthrough_exceptions=(ApprovalRequired, ExecutionLimitExceeded),
         )
-
-    async def _execute_tool(self, name: str, args: dict):
-        func = self.tools[name]
-        tool_started = time.perf_counter()
-        tool_outcome = "finished"
-        tool_error = None
-        try:
-            result = (
-                await self.guard.wait(func(**args))
-                if inspect.iscoroutinefunction(func)
-                else func(**args)
-            )
-        except (ExecutionLimitExceeded, ApprovalRequired):
-            raise
-        except (asyncio.TimeoutError, TimeoutError):
-            tool_outcome = "timed out"
-            tool_error = f"tool timed out: {name}"
-            result = tool_error
-        except Exception as error:
-            tool_outcome = "failed"
-            tool_error = f"{type(error).__name__}: {error}"
-            config.debug(f"[tool] name={name} error={error!r}")
-            result = f"tool failed: {name}: {error}"
-        elapsed_ms = round((time.perf_counter() - tool_started) * 1000)
-        config.debug(f"[timing] event=tool ms={elapsed_ms} name={name}")
-        return result, tool_outcome, tool_error, elapsed_ms
+        result = await self.runtime.run(
+            AgentRequest(
+                self.prompt,
+                session_id=getattr(self.assistant_context, "conversation_id", None),
+                attachments=self.attachments,
+            ),
+            self.messages,
+            generation_options={"think": self.think},
+        )
+        if result.status == "blocked":
+            self.outcome = f"blocked: {result.error}"
+        elif result.status == "timed_out":
+            self.outcome = f"timed out: {result.error}"
+        elif result.status == "failed" and self.outcome == "completed":
+            self.outcome = result.error or "failed"
+        return self.build_result(
+            result.final_text,
+            status=result.status,
+            error=result.error,
+            clarification=result.metadata.get("clarification"),
+        )

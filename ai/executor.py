@@ -131,6 +131,7 @@ async def execute_local_ai(
                 progress=progress,
                 guard=guard,
                 build_result=build_result,
+                attachments=prepared.attachments,
             )
             result = await loop.run()
             outcome = loop.outcome

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from aiohttp import web
 
+from .overview import snapshot as overview_snapshot
 from .settings import SettingsConflict, SettingsEditor
 
 
@@ -54,11 +55,12 @@ async def guard(request, handler):
     return response
 
 
-def create_app(*, config_path=None, browser_opener=None):
+def create_app(*, config_path=None, database_path=None, browser_opener=None):
     app = web.Application(middlewares=[guard], client_max_size=65536)
     state = {
         "bootstrap": secrets.token_urlsafe(32), "session": secrets.token_urlsafe(32),
         "settings": SettingsEditor(Path(config_path or "config.yaml")),
+        "database_path": database_path,
         "browser_opener": browser_opener or webbrowser.open,
     }
     app[STATE] = state
@@ -86,6 +88,20 @@ def create_app(*, config_path=None, browser_opener=None):
             body.get("yaml"), body.get("revision"), save=request.path.endswith("/save"),
         ))
 
+    async def profile(request):
+        if request.method == "GET":
+            return web.json_response(state["settings"].profile_snapshot())
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError("Expected an object")
+        return web.json_response(state["settings"].update_profile(
+            body.get("profile"), body.get("revision"),
+            save=request.path.endswith("/save"),
+        ))
+
+    async def overview(request):
+        return web.json_response(overview_snapshot(state["database_path"]))
+
     async def index(request):
         return web.Response(text=(ASSETS / "index.html").read_text(), content_type="text/html")
 
@@ -102,6 +118,10 @@ def create_app(*, config_path=None, browser_opener=None):
     app.router.add_get("/api/settings", settings)
     app.router.add_post("/api/settings/validate", settings)
     app.router.add_post("/api/settings/save", settings)
+    app.router.add_get("/api/profile", profile)
+    app.router.add_post("/api/profile/validate", profile)
+    app.router.add_post("/api/profile/save", profile)
+    app.router.add_get("/api/overview", overview)
     return app
 
 

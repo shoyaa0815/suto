@@ -31,15 +31,6 @@ AI_BASE_URL=http://localhost:11434
 AI_MODEL=qwen3.5:9b
 ```
 
-Example for OpenAI:
-
-```dotenv
-AI_PROVIDER=openai
-AI_BASE_URL=https://api.openai.com/v1
-AI_MODEL=your-model
-AI_API_KEY=your-secret-key
-```
-
 Never commit `.env` files or API keys to Git.
 
 ## Usage
@@ -61,10 +52,13 @@ and mode, accepts requests in a framed `>` prompt, and leaves each submitted
 user message in its frame. Assistant replies are printed without a name prefix.
 The CLI does not launch a full-screen UI.
 
-`settings` opens a local-only web editor for `config.yaml`. It prints a private
-sign-in link and opens it in the default browser. Validate and review changes
-before saving; restart Suto after saving. The CLI reads these values but cannot
-change them.
+`settings` opens a local-only control center. It prints a private sign-in link
+and opens it in the default browser. The dashboard shows recent job status and
+automation skills from the existing database; these views are read-only and
+show an empty state until the database exists. MCP is marked unsupported.
+The profile form edits `display_name`, `locale`, and `timezone` in `config.yaml`.
+Validate and review changes before saving; restart Suto after saving. The CLI
+reads these values but cannot change them.
 Legacy `SUTO_TIMEZONE`, `SUTO_LOCALE`, and `SUTO_USER_NAME` environment values
 remain fallbacks when the corresponding YAML value is absent. Keep API keys and
 platform tokens in `.env`, never in `config.yaml`.

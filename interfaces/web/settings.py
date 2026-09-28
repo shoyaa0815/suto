@@ -2,6 +2,7 @@
 
 import difflib
 import hashlib
+from dataclasses import asdict
 from pathlib import Path
 
 import yaml
@@ -28,6 +29,19 @@ class SettingsEditor:
         settings = self.parse(raw.decode("utf-8") if raw is not None else "")
         return {"yaml": render_settings(settings),
                 "revision": hashlib.sha256(raw).hexdigest() if raw is not None else "missing"}
+
+    def profile_snapshot(self):
+        snapshot = self.snapshot()
+        return {"profile": asdict(self.parse(snapshot["yaml"]).profile),
+                "revision": snapshot["revision"]}
+
+    def update_profile(self, values, revision, *, save=False):
+        if not isinstance(values, dict) or set(values) != {"display_name", "locale", "timezone"}:
+            raise ValueError("Expected all profile fields")
+        settings = parse_settings({"version": 1, "profile": values})
+        result = self.update(render_settings(settings), revision, save=save)
+        return {"profile": asdict(settings.profile), "revision": result["revision"],
+                **({"saved": True} if save else {"diff": result["diff"]})}
 
     @staticmethod
     def parse(source):

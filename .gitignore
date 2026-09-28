@@ -1,5 +1,6 @@
 .env
 /config.yaml
+/spec.md
 __pycache__/
 venv/
 data/*.db
