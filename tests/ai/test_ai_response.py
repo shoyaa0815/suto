@@ -1,5 +1,6 @@
 import ai
 from tests.support.ai_helpers import FakeClientSession as _FakeClientSession
+from tests.support.ai_helpers import patch_model_chat
 
 
 async def test_attached_file_tool_is_scoped_to_current_request(monkeypatch):
@@ -37,6 +38,7 @@ async def test_attached_file_tool_is_scoped_to_current_request(monkeypatch):
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
 
     answer = await ai.ask_local_ai(
         "read attachment 1",
@@ -60,6 +62,7 @@ async def test_attachment_language_does_not_change_reply_language(monkeypatch):
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
 
     await ai.ask_local_ai(
         "สรุปไฟล์นี้",
@@ -90,6 +93,7 @@ async def test_wrong_language_answer_is_rewritten_without_tools(monkeypatch):
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
 
     answer = await ai.ask_local_ai("สรุปเอกสารนี้", mode="agent")
 
@@ -109,6 +113,7 @@ async def test_correct_language_answer_is_not_rewritten(monkeypatch):
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
 
     answer = await ai.ask_local_ai("ตอบคำถามนี้", mode="agent")
 
@@ -159,6 +164,7 @@ async def test_summary_tool_uses_chunk_completion_without_tools(monkeypatch):
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
 
     answer = await ai.ask_local_ai(
         "สรุปไฟล์นี้",

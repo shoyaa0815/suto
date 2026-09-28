@@ -3,7 +3,35 @@ import asyncio
 import pytest
 
 import ai
+from ai.providers.ollama import OllamaProvider
+from application.language import ReplyLanguage
 from tests.support.ai_helpers import FakeClientSession as _FakeClientSession
+from tests.support.ai_helpers import patch_model_chat
+
+
+async def test_agent_lifecycle_uses_configured_provider_model(monkeypatch):
+    seen = []
+
+    async def fake_provider_chat(self, session, messages, tool_schemas, think=False, max_output_tokens=None):
+        seen.append((self.model, messages[-1]["content"], len(tool_schemas)))
+        return {"message": {"role": "assistant", "content": "The model is ready to help."}}
+
+    monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
+    monkeypatch.setattr(ai.config, "AI_PROVIDER", "ollama")
+    monkeypatch.setattr(ai.config, "AI_MODEL", "configured-model")
+    monkeypatch.setattr(OllamaProvider, "chat", fake_provider_chat)
+    monkeypatch.setattr(ai.response, "detect_language_code", lambda text: "en")
+
+    result = await ai.execute_local_ai(
+        "Please answer in English: are you ready?",
+        reply_language=ReplyLanguage("en", "English", "explicit"),
+    )
+
+    assert result.status == "completed"
+    assert result.text == "The model is ready to help."
+    assert len(seen) == 1
+    assert seen[0][:2] == ("configured-model", "Please answer in English: are you ready?")
+    assert seen[0][2] > 0
 
 
 def test_write_tool_audit_redacts_file_content():
@@ -32,6 +60,7 @@ async def test_agent_mode_exposes_assistant_but_not_developer_tools(monkeypatch)
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
 
     answer = await ai.ask_local_ai("What is the answer?", mode="agent")
 
@@ -51,6 +80,7 @@ async def test_agent_mode_exposes_web_tool_schemas(monkeypatch):
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
 
     await ai.ask_local_ai("question", mode="agent")
 
@@ -73,6 +103,7 @@ async def test_failed_tool_does_not_return_a_model_success_claim(monkeypatch):
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
 
     result = await ai.execute_local_ai("current time", mode="agent")
 
@@ -88,6 +119,7 @@ async def test_parked_clarification_is_not_exposed_to_the_model(monkeypatch):
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
 
     result = await ai.execute_local_ai("question", mode="agent")
 
@@ -107,6 +139,7 @@ async def test_progress_reports_model_usage_and_completion(monkeypatch):
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
     monkeypatch.setattr(ai.response, "detect_language_code", lambda text: "en")
 
     answer = await ai.ask_local_ai(
@@ -134,6 +167,7 @@ async def test_structured_execution_result_contains_usage(monkeypatch):
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
     monkeypatch.setattr(ai.response, "detect_language_code", lambda text: "en")
 
     result = await ai.execute_local_ai(
@@ -158,6 +192,7 @@ async def test_cancelled_execution_reports_cancelled_progress(monkeypatch):
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
 
     task = asyncio.create_task(
         ai.execute_local_ai(
@@ -208,6 +243,7 @@ async def test_progress_reports_tool_and_loop(monkeypatch):
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
 
     answer = await ai.ask_local_ai(
         "current time",
@@ -255,5 +291,6 @@ async def test_tool_result_preserves_provider_tool_call_id(monkeypatch):
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
 
     assert await ai.ask_local_ai("current time", mode="agent") == "done"

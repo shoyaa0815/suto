@@ -3,6 +3,7 @@ import asyncio
 import ai
 from workflows.runtime.context import ExecutionContext, ExecutionLimits
 from tests.support.ai_helpers import FakeClientSession as _FakeClientSession
+from tests.support.ai_helpers import patch_model_chat
 
 
 async def test_developer_job_is_blocked_when_token_budget_is_exceeded(
@@ -17,6 +18,7 @@ async def test_developer_job_is_blocked_when_token_budget_is_exceeded(
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
     context = ExecutionContext(
         "job_budget",
         tmp_path,
@@ -43,6 +45,7 @@ async def test_developer_job_interrupts_work_at_elapsed_time_limit(
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
     context = ExecutionContext(
         "job_timeout",
         tmp_path,
@@ -85,6 +88,7 @@ async def test_developer_job_blocks_repeated_identical_tool_calls(
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
     context = ExecutionContext(
         "job_loop",
         tmp_path,
@@ -132,6 +136,7 @@ async def test_developer_job_blocks_tool_calls_over_budget(monkeypatch, tmp_path
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
     context = ExecutionContext(
         "job_tools",
         tmp_path,

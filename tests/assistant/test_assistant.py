@@ -9,6 +9,7 @@ from assistant.tasks.tools import build_task_tools
 from ai.tooling.assembly import build_runtime_tools
 from workflows.storage.store import JobStore
 from tests.support.ai_helpers import FakeClientSession
+from tests.support.ai_helpers import patch_model_chat
 
 
 def test_identity_links_channels_and_stores_preferences(tmp_path):
@@ -429,6 +430,7 @@ async def test_conversation_history_is_sent_to_the_model(monkeypatch):
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
 
     await ai.ask_local_ai(
         "What did I say?",
@@ -495,6 +497,7 @@ async def test_agent_can_create_task_for_current_user(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
 
     answer = await ai.ask_local_ai(
         "Add calling the customer to my tasks",
@@ -519,6 +522,7 @@ async def test_agent_cannot_claim_uncreated_reminder(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
 
     result = await ai.execute_local_ai(
         "อีก 10 นาทีเตือนให้กินยา",
@@ -563,6 +567,7 @@ async def test_agent_relative_reminder_tool_persists_before_success_reply(
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
 
     result = await ai.execute_local_ai(
         "อีก 10 นาทีเตือนให้พักสายตา",
@@ -612,6 +617,7 @@ async def test_agent_multiple_clock_reminders_persist_before_success_reply(
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
 
     result = await ai.execute_local_ai(
         "เตือนให้กินยา 09:00 และ 18:00",

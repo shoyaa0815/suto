@@ -5,8 +5,10 @@ import pytest
 from ai import config
 from ai.providers.base import ProviderTransientError
 from ai.providers.factory import build_provider
+from ai.providers.factory import build_model_router
 from ai.providers.ollama import OllamaProvider
 from ai.providers.openai_compatible import OpenAICompatibleProvider
+from llm.types import ModelRequest
 
 
 class FakeResponse:
@@ -153,3 +155,80 @@ def test_openai_provider_requires_api_key(monkeypatch):
 
     with pytest.raises(ValueError, match="AI_API_KEY"):
         build_provider()
+
+
+@pytest.mark.asyncio
+async def test_ollama_model_normalizes_tool_call_and_usage():
+    session = FakeSession(FakeResponse({
+        "message": {
+            "role": "assistant", "content": "",
+            "tool_calls": [{"function": {"name": "clock", "arguments": {"city": "BKK"}}}],
+        },
+        "prompt_eval_count": 9,
+        "eval_count": 4,
+        "done_reason": "stop",
+    }))
+    provider = OllamaProvider("http://localhost:11434", "local", 0.2, session=session)
+
+    result = await provider.generate(ModelRequest(
+        [{"role": "user", "content": "time?"}], [], {"think": True, "max_output_tokens": 32}
+    ))
+
+    assert result.tool_calls[0].name == "clock"
+    assert result.tool_calls[0].arguments == {"city": "BKK"}
+    assert result.finish_reason == "tool_calls"
+    assert (result.usage.prompt_tokens, result.usage.output_tokens) == (9, 4)
+    assert session.calls[0][1]["json"]["options"]["num_predict"] == 32
+
+
+@pytest.mark.asyncio
+async def test_openai_model_normalizes_tool_call_and_finish_reason():
+    session = FakeSession(FakeResponse({
+        "choices": [{
+            "finish_reason": "tool_calls",
+            "message": {"role": "assistant", "content": None, "tool_calls": [{
+                "id": "call_1", "type": "function",
+                "function": {"name": "clock", "arguments": '{"city":"BKK"}'},
+            }]},
+        }],
+        "usage": {"prompt_tokens": 8, "completion_tokens": 3},
+    }))
+    provider = OpenAICompatibleProvider("https://example.test/v1", "cloud", "secret", 0.2, session=session)
+
+    result = await provider.generate(ModelRequest([{"role": "user", "content": "time?"}], []))
+
+    assert result.tool_calls[0].id == "call_1"
+    assert result.tool_calls[0].arguments == {"city": "BKK"}
+    assert result.finish_reason == "tool_calls"
+    assert (result.usage.prompt_tokens, result.usage.output_tokens) == (8, 3)
+    assert result.assistant_message["tool_calls"][0]["function"]["arguments"] == {"city": "BKK"}
+
+
+@pytest.mark.asyncio
+async def test_router_uses_configured_default_model(monkeypatch):
+    monkeypatch.setattr(config, "AI_PROVIDER", "openai-compatible")
+    monkeypatch.setattr(config, "AI_BASE_URL", "https://provider.test/v1")
+    monkeypatch.setattr(config, "AI_MODEL", "chosen-model")
+    monkeypatch.setattr(config, "AI_API_KEY", "")
+    session = FakeSession(FakeResponse({
+        "choices": [{"message": {"role": "assistant", "content": "ready"}}]
+    }))
+
+    router = build_model_router(session)
+    result = await router.generate(ModelRequest([{"role": "user", "content": "hello"}], []))
+
+    assert result.text == "ready"
+    assert session.calls[0][1]["json"]["model"] == "chosen-model"
+
+
+@pytest.mark.asyncio
+async def test_openai_model_rejects_invalid_tool_arguments():
+    session = FakeSession(FakeResponse({
+        "choices": [{"message": {"tool_calls": [{
+            "function": {"name": "clock", "arguments": "{"},
+        }]}}],
+    }))
+    provider = OpenAICompatibleProvider("https://example.test/v1", "cloud", "", 0.2, session=session)
+
+    with pytest.raises(ValueError, match="invalid JSON tool arguments"):
+        await provider.generate(ModelRequest([], []))

@@ -2,10 +2,11 @@ import json
 import time
 
 import aiohttp
+from llm.types import ModelRequest, ModelResponse
 
 from .. import config
 
-from .base import raise_for_provider_status
+from .base import model_response, raise_for_provider_status
 
 
 class OpenAICompatibleProvider:
@@ -17,6 +18,8 @@ class OpenAICompatibleProvider:
         model: str,
         api_key: str,
         temperature: float,
+        *,
+        session: aiohttp.ClientSession | None = None,
     ) -> None:
         url = base_url.rstrip("/")
         self.url = (
@@ -25,6 +28,17 @@ class OpenAICompatibleProvider:
         self.model = model
         self.api_key = api_key
         self.temperature = temperature
+        self.session = session
+
+    async def generate(self, request: ModelRequest) -> ModelResponse:
+        if self.session is None:
+            raise RuntimeError("OpenAICompatibleProvider requires a session for generate")
+        data = await self.chat(
+            self.session, request.messages, request.available_tools,
+            think=bool(request.generation_options.get("think", False)),
+            max_output_tokens=request.generation_options.get("max_output_tokens"),
+        )
+        return model_response(data)
 
     @staticmethod
     def _request_messages(messages: list) -> list:
@@ -111,6 +125,7 @@ class OpenAICompatibleProvider:
             "message": self._response_message(choices[0].get("message") or {}),
             "prompt_eval_count": int(usage.get("prompt_tokens") or 0),
             "eval_count": int(usage.get("completion_tokens") or 0),
+            "finish_reason": choices[0].get("finish_reason"),
         }
         elapsed_ms = round((time.perf_counter() - started) * 1000)
         config.debug(

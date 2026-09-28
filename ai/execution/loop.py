@@ -9,7 +9,7 @@ from tools.registry import FunctionTool, ToolRegistry
 from workflows.runtime.context import ApprovalRequired, ExecutionLimitExceeded
 
 from .. import config, response
-from ..providers.model import ChatModelAdapter
+from ..providers.factory import build_model_router
 from ..tooling.events import audit_tool_arguments, emit_tool_event, tool_detail
 
 
@@ -145,7 +145,7 @@ class ModelToolLoop:
             ))
         job_limits = self.execution_context.limits if self.execution_context else None
         self.runtime = AgentRuntime(
-            ChatModelAdapter(self.session),
+            build_model_router(self.session),
             registry,
             limits=ExecutionLimits(
                 max_iterations=self.max_rounds,

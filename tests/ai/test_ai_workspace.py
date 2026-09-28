@@ -2,6 +2,7 @@ import ai
 from workflows.runtime.context import COMMAND_TOOLS, PLANNING_TOOLS, ExecutionContext
 from workflows.storage.store import JobStore
 from tests.support.ai_helpers import FakeClientSession as _FakeClientSession
+from tests.support.ai_helpers import patch_model_chat
 
 
 async def test_developer_job_exposes_workspace_tools_and_audits_calls(
@@ -43,6 +44,7 @@ async def test_developer_job_exposes_workspace_tools_and_audits_calls(
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
 
     result = await ai.execute_local_ai(
         "inspect workspace",
@@ -101,6 +103,7 @@ async def test_developer_job_can_create_a_persistent_plan(monkeypatch, tmp_path)
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
     context = ExecutionContext(
         job.id,
         tmp_path,
@@ -167,6 +170,7 @@ async def test_developer_job_runs_allowlisted_command_and_audits_it(
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
     context = ExecutionContext(
         "job_test",
         tmp_path,
@@ -215,6 +219,7 @@ async def test_disallowed_tool_call_is_not_executed(monkeypatch):
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
 
     result = await ai.execute_local_ai(
         "question", mode="agent", tool_event_callback=tool_events.append

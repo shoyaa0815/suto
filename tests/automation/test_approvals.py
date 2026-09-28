@@ -19,6 +19,7 @@ from workflows.storage.store import JobStore
 from workflows.runtime.worker import AutomationWorker
 from capabilities.developer.command import build_command_tools
 from capabilities.developer.workspace import build_workspace_tools
+from tests.support.ai_helpers import patch_model_chat
 
 
 class _FakeClientSession:
@@ -308,6 +309,7 @@ async def test_ai_executor_turns_tool_approval_into_waiting_status(
 
     monkeypatch.setattr(ai.executor.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    patch_model_chat(monkeypatch)
     store = JobStore(tmp_path / "suto.db")
     job = store.create_job(
         "create note",

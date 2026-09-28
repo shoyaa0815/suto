@@ -12,6 +12,7 @@ from workflows.storage.store import JobStore
 from workflows.runtime.worker import AutomationWorker
 from capabilities.developer.cli import _parse_run
 from tests.automation.test_hardening import eventually
+from tests.support.ai_helpers import patch_model_chat
 from tools.advanced import TOOL_NAMES, build_advanced_tools
 
 
@@ -207,6 +208,7 @@ async def test_advanced_tools_not_exposed_without_job_opt_in(tmp_path, monkeypat
 
     monkeypatch.setattr(ai.client.aiohttp, 'ClientSession', FakeClientSession)
     monkeypatch.setattr(ai.client, 'chat', fake_chat)
+    patch_model_chat(monkeypatch)
     context = ExecutionContext('test', tmp_path)
     await ai.execute_local_ai('inspect', mode='agent', execution_context=context,
                               reply_language=ai.ReplyLanguage('en', 'English', 'test'))
