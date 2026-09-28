@@ -12,9 +12,8 @@ Workspace tools live in `workspace/`: `schemas.py` owns model-facing contracts,
 writes, and `paths.py` centralizes path-containment and hashing safeguards. Import
 the public API from `capabilities.developer.workspace`.
 
-The capability remains covered by tests for future opt-in use. Its internal
-`developer` mode is not exposed by the main entrypoint; the public `agent` mode
-is reserved for personal-assistant work.
+These capabilities run as authorized jobs within Suto's only mode, `agent`.
+Interactive requests do not expose workspace tools without a job context.
 
 Parked CLI parsing and presentation helpers live in `cli.py`; public CLI
 commands belong in `interfaces/cli/commands.py` and must not be added here.

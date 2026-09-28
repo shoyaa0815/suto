@@ -230,6 +230,4 @@ def test_mode_policies():
     assert "research" in agent_policy.allowed_tools
     assert "search_web" in agent_policy.allowed_tools
 
-    chat_policy = get_mode_policy("chat")
-    assert "research" not in chat_policy.allowed_tools
-    assert "search_web" in chat_policy.allowed_tools
+    assert "terminal.run" not in agent_policy.allowed_tools

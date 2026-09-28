@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from application.language import ReplyLanguage, choose_reply_language
 from application.modes import get_mode_policy
 from assistant.context import AssistantContext
+from assistant.memory.tools import MEMORY_TOOL_NAMES
 from tools import (
     ADVANCED_TOOL_NAMES,
     COMMAND_TOOL_NAMES,
@@ -43,7 +44,7 @@ def _allowed_tools(
     if not attachments:
         allowed_tools = allowed_tools - config.ATTACHMENT_TOOL_NAMES
     if assistant_context is None:
-        allowed_tools = allowed_tools - TASK_TOOL_NAMES
+        allowed_tools = allowed_tools - TASK_TOOL_NAMES - MEMORY_TOOL_NAMES
     job_scoped_tools = (
         ALL_WORKSPACE_TOOLS
         | PLANNING_TOOL_NAMES
@@ -59,7 +60,7 @@ def _allowed_tools(
         )
     if execution_context.command_event_callback is None:
         allowed_job_tools = allowed_job_tools - COMMAND_TOOL_NAMES
-    return (allowed_tools - job_scoped_tools) | allowed_job_tools
+    return allowed_job_tools
 
 
 def _history_messages(history: list[dict[str, str]] | None) -> list[dict]:

@@ -584,7 +584,7 @@ class JobStore(
     def create_job(
         self,
         prompt: str,
-        mode: str = "developer",
+        mode: str = "agent",
         source: str = "tui",
         source_ref: str | None = None,
         workspace: str = ".",
@@ -592,6 +592,8 @@ class JobStore(
         allow_command: bool = False,
         options: dict | None = None,
     ) -> Job:
+        if mode != "agent":
+            raise ValueError("only agent mode is supported")
         options = validate_options(options)
         job_id = f"job_{uuid4().hex[:8]}"
         created_at = _now()

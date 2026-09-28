@@ -4,79 +4,24 @@ from application.modes import DEFAULT_MODE, MODE_POLICIES, PUBLIC_MODES, get_mod
 from tools import get_tools
 
 
-def test_public_mode_is_only_agent():
+def test_agent_is_the_only_mode_and_uses_registered_tools():
     assert DEFAULT_MODE == "agent"
     assert PUBLIC_MODES == ("agent",)
+    assert set(MODE_POLICIES) == {"agent"}
 
-
-def test_chat_mode_has_current_tools():
-    policy = get_mode_policy("chat")
-
-    assert "search_web" in policy.allowed_tools
-    assert "fetch_url" in policy.allowed_tools
-    assert "get_current_datetime" in policy.allowed_tools
-    assert "read_attached_file" in policy.allowed_tools
-
-
-def test_agent_mode_has_personal_assistant_memory_and_coding_tools():
     policy = get_mode_policy("agent")
-
-    assert policy.allowed_tools > get_mode_policy("chat").allowed_tools
-    assert "search_web" in policy.allowed_tools
-    assert "create_task" in policy.allowed_tools
-    assert "create_reminder_in" in policy.allowed_tools
-    assert "create_reminder_at" in policy.allowed_tools
-    assert "create_reminders_at" in policy.allowed_tools
-    assert "create_reminder" not in policy.allowed_tools
-    assert "get_daily_briefing" not in policy.allowed_tools
-    assert "set_daily_briefing" not in policy.allowed_tools
-    assert "disable_daily_briefing" not in policy.allowed_tools
-    assert "apply_workspace_patch" not in policy.allowed_tools
-
-    # Memory tools
-    assert "memory.save" in policy.allowed_tools
-    assert "memory.search" in policy.allowed_tools
-
-    # Coding tools
-    assert "terminal.run" in policy.allowed_tools
-    assert "file.read" in policy.allowed_tools
-    assert "file.write" in policy.allowed_tools
-    assert "git.diff" in policy.allowed_tools
-    assert "python.run" in policy.allowed_tools
+    get_tools(policy.allowed_tools)
+    assert {"search_web", "fetch_url", "create_task", "memory.save"} <= policy.allowed_tools
+    assert not policy.allowed_tools.intersection({
+        "list_workspace_files", "apply_workspace_patch", "run_workspace_command",
+    })
+    assert not policy.allowed_tools.intersection({
+        "terminal.run", "terminal_run", "file.write", "file_write",
+        "git.commit", "git_commit", "python.run", "python_run",
+    })
 
 
-def test_home_mode_is_a_reserved_placeholder_without_tools():
-    policy = get_mode_policy("home")
-
-    assert policy.allowed_tools == frozenset()
-
-
-def test_developer_mode_has_restricted_workspace_tools():
-    policy = get_mode_policy("developer")
-
-    expected = {
-        "list_workspace_files",
-        "read_workspace_file",
-        "search_workspace",
-        "apply_workspace_patch",
-        "create_plan",
-        "update_step",
-        "revise_plan",
-        "run_workspace_command",
-    }
-    assert policy.allowed_tools == expected
-
-    tools, schemas, guidance = get_tools(policy.allowed_tools)
-    assert set(tools) == expected
-    assert {schema["function"]["name"] for schema in schemas} == expected
-    assert "write permission" in guidance
-
-
-def test_unknown_mode_is_rejected():
+@pytest.mark.parametrize("mode", ["chat", "home", "developer", "secret"])
+def test_removed_modes_are_rejected(mode):
     with pytest.raises(ValueError, match="unknown mode"):
-        get_mode_policy("secret")
-
-
-def test_all_modes_reference_registered_tools():
-    for policy in MODE_POLICIES.values():
-        get_tools(policy.allowed_tools)
+        get_mode_policy(mode)

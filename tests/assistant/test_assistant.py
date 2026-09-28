@@ -432,7 +432,7 @@ async def test_conversation_history_is_sent_to_the_model(monkeypatch):
 
     await ai.ask_local_ai(
         "What did I say?",
-        mode="chat",
+        mode="agent",
         conversation_history=[
             {"role": "user", "content": "My project is Suto"},
             {"role": "assistant", "content": "Understood"},

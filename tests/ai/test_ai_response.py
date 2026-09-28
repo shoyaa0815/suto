@@ -40,7 +40,7 @@ async def test_attached_file_tool_is_scoped_to_current_request(monkeypatch):
 
     answer = await ai.ask_local_ai(
         "read attachment 1",
-        mode="chat",
+        mode="agent",
         attachments={"1": ("notes.txt", b"chat contents")},
     )
 
@@ -63,7 +63,7 @@ async def test_attachment_language_does_not_change_reply_language(monkeypatch):
 
     await ai.ask_local_ai(
         "สรุปไฟล์นี้",
-        mode="chat",
+        mode="agent",
         attachments={"1": ("english.txt", b"English document contents")},
     )
 
@@ -162,7 +162,7 @@ async def test_summary_tool_uses_chunk_completion_without_tools(monkeypatch):
 
     answer = await ai.ask_local_ai(
         "สรุปไฟล์นี้",
-        mode="chat",
+        mode="agent",
         attachments={"1": ("notes.txt", b"document facts")},
     )
 

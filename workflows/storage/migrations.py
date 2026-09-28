@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .locking import ProcessLock
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 HARDENING = """
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -230,6 +230,10 @@ CREATE TRIGGER IF NOT EXISTS assistant_memories_au AFTER UPDATE ON assistant_mem
 END;
 """
 
+AGENT_ONLY_MODE = """
+UPDATE jobs SET mode = 'agent' WHERE mode IN ('chat', 'home', 'developer');
+"""
+
 
 def backup_database(source: Path, destination: Path) -> Path:
     source, destination = source.resolve(), destination.expanduser().absolute()
@@ -282,6 +286,7 @@ def initialize_database(store) -> None:
                 (8, LEGACY_BRIEFING_SCHEMA),
                 (9, REMOVE_SEMANTIC_MEMORY),
                 (10, THREE_TIER_MEMORY),
+                (11, AGENT_ONLY_MODE),
             ):
                 if number <= version:
                     continue

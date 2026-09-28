@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 
 from ai import ask_local_ai, execute_local_ai
 from application.configuration import load_settings
-from application.modes import CLARIFICATIONS_ENABLED
+from application.modes import CLARIFICATIONS_ENABLED, get_mode_policy
 from assistant import AssistantContext
 from capabilities.developer.cli import (
     TERMINAL_JOB_STATUSES,
@@ -95,6 +95,7 @@ async def run_session(
     mode: str,
     read_prompt: Callable[[], Awaitable[str]],
 ) -> None:
+    get_mode_policy(mode)
     previous_language_code: str | None = None
     database_path = os.environ.get("SUTO_DB_PATH", "data/suto.db")
     store = JobStore(database_path)

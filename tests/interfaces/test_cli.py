@@ -45,17 +45,17 @@ def test_plain_cli_starts_session_and_uses_a_simple_prompt(monkeypatch, capsys):
     monkeypatch.setattr(cli_app, "run_session", fake_session)
     monkeypatch.setattr(cli_app, "PromptReader", FakeReader)
 
-    cli_app.run("chat")
+    cli_app.run("agent")
 
     assert capsys.readouterr().out == ""
     assert calls[0] == "start"
     assert any(
-        call[0] == "write" and "Suto" in call[1] and "chat" in call[1]
+        call[0] == "write" and "Suto" in call[1] and "agent" in call[1]
         for call in calls
         if isinstance(call, tuple) and call[0] == "write"
     )
     assert ("write", "Type /help for commands. PageUp: history · End: latest\n\n") in calls
-    assert ("chat", "hello") in calls
+    assert ("agent", "hello") in calls
     assert calls[-1] == "stop"
 
 
@@ -173,7 +173,7 @@ async def test_cli_cancels_an_active_request_from_the_persistent_reader(
     monkeypatch.setenv("SUTO_DB_PATH", str(tmp_path / "suto.db"))
     monkeypatch.setattr(backend, "ask_local_ai", slow_ask)
 
-    await backend.run_session("chat", Reader())
+    await backend.run_session("agent", Reader())
 
     assert "request cancelled" in capsys.readouterr().out
 
@@ -288,9 +288,7 @@ def test_overdue_reminder_prints_original_time_and_is_not_repeated(
     assert "No pending reminders." in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("mode", ["chat", "agent"])
 async def test_cli_runs_the_real_assistant_session_backend(
-    mode,
     tmp_path,
     monkeypatch,
     capsys,
@@ -298,8 +296,8 @@ async def test_cli_runs_the_real_assistant_session_backend(
     calls = []
 
     async def fake_ask(prompt, **options):
-        assert options["mode"] == mode
-        assert (options["assistant_context"] is not None) == (mode == "agent")
+        assert options["mode"] == "agent"
+        assert options["assistant_context"] is not None
         calls.append((prompt, options["conversation_history"]))
         return f"answer: {prompt}"
 
@@ -310,7 +308,7 @@ async def test_cli_runs_the_real_assistant_session_backend(
     async def read_prompt():
         return next(prompts)
 
-    await backend.run_session(mode, read_prompt)
+    await backend.run_session("agent", read_prompt)
 
     output = capsys.readouterr().out
     assert "answer: hello" in output

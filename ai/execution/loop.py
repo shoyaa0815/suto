@@ -219,7 +219,7 @@ class ModelToolLoop:
                     elapsed_ms = 0
                     tool_outcome = "blocked"
                     tool_error = (
-                        f"tool is not allowed in {self.mode} mode: {name}"
+                        f"tool is not available for this request: {name}"
                     )
                     result = tool_error
                 await emit_tool_event(
@@ -238,6 +238,15 @@ class ModelToolLoop:
                         "error": tool_error,
                     },
                 )
+                if tool_outcome == "blocked":
+                    return self.blocked_result(tool_error or "tool is unavailable")
+                if tool_outcome in {"failed", "timed out"}:
+                    self.outcome = f"{tool_outcome}: {name}"
+                    return self.build_result(
+                        f"tool {tool_outcome}: {name}",
+                        status="failed" if tool_outcome == "failed" else "timed_out",
+                        error=f"tool {tool_outcome}: {name}",
+                    )
                 tool_message = {"role": "tool", "content": str(result)}
                 if call.get("id"):
                     tool_message["tool_call_id"] = call["id"]

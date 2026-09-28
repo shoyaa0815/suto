@@ -39,10 +39,10 @@ async def test_agent_mode_exposes_assistant_but_not_developer_tools(monkeypatch)
     names = {item["function"]["name"] for item in observed["schemas"]}
     assert {"get_current_datetime", "search_web", "fetch_url"} <= names
     assert "apply_workspace_patch" not in names
-    assert "personal assistant mode" in observed["system_prompt"]
+    assert "You are Suto, a personal assistant" in observed["system_prompt"]
 
 
-async def test_chat_mode_exposes_web_tool_schemas(monkeypatch):
+async def test_agent_mode_exposes_web_tool_schemas(monkeypatch):
     observed_names = []
 
     async def fake_chat(session, messages, tool_schemas, think=False):
@@ -52,10 +52,33 @@ async def test_chat_mode_exposes_web_tool_schemas(monkeypatch):
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
 
-    await ai.ask_local_ai("question", mode="chat")
+    await ai.ask_local_ai("question", mode="agent")
 
     assert "search_web" in observed_names
     assert "fetch_url" in observed_names
+
+
+async def test_failed_tool_does_not_return_a_model_success_claim(monkeypatch):
+    calls = 0
+
+    async def fake_chat(session, messages, tool_schemas, think=False):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"message": {"tool_calls": [{"function": {
+                "name": "get_current_datetime",
+                "arguments": {"unexpected": True},
+            }}]}}
+        return {"message": {"content": "Done."}}
+
+    monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
+    monkeypatch.setattr(ai.client, "chat", fake_chat)
+
+    result = await ai.execute_local_ai("current time", mode="agent")
+
+    assert result.status == "failed"
+    assert result.text == "tool failed: get_current_datetime"
+    assert calls == 1
 
 
 async def test_parked_clarification_is_not_exposed_to_the_model(monkeypatch):
@@ -188,7 +211,7 @@ async def test_progress_reports_tool_and_loop(monkeypatch):
 
     answer = await ai.ask_local_ai(
         "current time",
-        mode="chat",
+        mode="agent",
         progress_callback=updates.append,
     )
 
@@ -233,4 +256,4 @@ async def test_tool_result_preserves_provider_tool_call_id(monkeypatch):
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
 
-    assert await ai.ask_local_ai("current time", mode="chat") == "done"
+    assert await ai.ask_local_ai("current time", mode="agent") == "done"

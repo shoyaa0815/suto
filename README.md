@@ -77,12 +77,13 @@ The terminal interface exposes `/help`, `/notification` for pending reminders,
 ambiguous, no reminder is removed and the matches are listed. Personal-service
 integrations are under active development.
 
-## Parked developer capability
+## Workspace automation capability
 
-Workspace editing, coding plans, verification commands, and command sandboxing
-have been moved to `capabilities/developer/`. They remain tested for future
-opt-in use, but the internal `developer` mode is not exposed by the main
-entrypoint.
+Suto has one agent mode. Workspace editing, coding plans, verification commands,
+and command sandboxing remain available only to jobs with an explicit workspace
+and the required permissions. Direct shell, file-write, Git mutation, and Python
+execution tools are disabled in interactive requests until they have the same
+permission checks. Existing jobs retain their permissions when upgraded.
 
 See [developer capability](capabilities/developer/README.md) and
 [operations](docs/operations.md) for the retained implementation details.

@@ -25,7 +25,7 @@ async def test_developer_job_is_blocked_when_token_budget_is_exceeded(
 
     result = await ai.execute_local_ai(
         "inspect",
-        mode="developer",
+        mode="agent",
         execution_context=context,
         reply_language=ai.ReplyLanguage("en", "English", "test"),
     )
@@ -51,7 +51,7 @@ async def test_developer_job_interrupts_work_at_elapsed_time_limit(
 
     result = await ai.execute_local_ai(
         "inspect",
-        mode="developer",
+        mode="agent",
         execution_context=context,
         reply_language=ai.ReplyLanguage("en", "English", "test"),
     )
@@ -93,7 +93,7 @@ async def test_developer_job_blocks_repeated_identical_tool_calls(
 
     result = await ai.execute_local_ai(
         "inspect",
-        mode="developer",
+        mode="agent",
         execution_context=context,
         tool_event_callback=tool_events.append,
         reply_language=ai.ReplyLanguage("en", "English", "test"),
@@ -140,7 +140,7 @@ async def test_developer_job_blocks_tool_calls_over_budget(monkeypatch, tmp_path
 
     result = await ai.execute_local_ai(
         "inspect",
-        mode="developer",
+        mode="agent",
         execution_context=context,
         reply_language=ai.ReplyLanguage("en", "English", "test"),
     )

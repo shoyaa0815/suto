@@ -1,4 +1,4 @@
-"""Plain stdin/stdout application for chat and agent modes."""
+"""Plain stdin/stdout application for Suto's agent mode."""
 
 import asyncio
 from collections.abc import Callable
@@ -307,6 +307,9 @@ class PromptReader:
 
 def run(mode: str) -> None:
     """Run one plain terminal session."""
+    from application.modes import get_mode_policy
+
+    get_mode_policy(mode)
     async def run_prompt_session() -> None:
         reader = PromptReader()
         with route_output(reader.write, reader.set_activity), patch_stdout():

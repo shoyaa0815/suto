@@ -46,7 +46,7 @@ async def test_developer_job_exposes_workspace_tools_and_audits_calls(
 
     result = await ai.execute_local_ai(
         "inspect workspace",
-        mode="developer",
+        mode="agent",
         reply_language=ai.ReplyLanguage("en", "English", "test"),
         execution_context=ExecutionContext("job_test", tmp_path),
         tool_event_callback=tool_events.append,
@@ -110,7 +110,7 @@ async def test_developer_job_can_create_a_persistent_plan(monkeypatch, tmp_path)
 
     result = await ai.execute_local_ai(
         "inspect and report",
-        mode="developer",
+        mode="agent",
         execution_context=context,
         reply_language=ai.ReplyLanguage("en", "English", "test"),
     )
@@ -177,7 +177,7 @@ async def test_developer_job_runs_allowlisted_command_and_audits_it(
 
     result = await ai.execute_local_ai(
         "run checks",
-        mode="developer",
+        mode="agent",
         execution_context=context,
         reply_language=ai.ReplyLanguage("en", "English", "test"),
     )
@@ -190,7 +190,7 @@ async def test_developer_job_runs_allowlisted_command_and_audits_it(
 
 async def test_disallowed_tool_call_is_not_executed(monkeypatch):
     calls = 0
-    tool_results = []
+    tool_events = []
 
     async def fake_chat(session, messages, tool_schemas, think=False):
         nonlocal calls
@@ -203,25 +203,24 @@ async def test_disallowed_tool_call_is_not_executed(monkeypatch):
                     "tool_calls": [
                         {
                             "function": {
-                                "name": "search_web",
-                                "arguments": {"query": "agent request"},
+                                "name": "apply_workspace_patch",
+                                "arguments": {"path": "notes.txt"},
                             }
                         }
                     ],
                 }
             }
 
-        tool_results.extend(
-            message["content"]
-            for message in messages
-            if message["role"] == "tool"
-        )
-        return {"message": {"content": "blocked"}}
+        return {"message": {"content": "I changed the file."}}
 
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
 
-    answer = await ai.ask_local_ai("question", mode="developer")
+    result = await ai.execute_local_ai(
+        "question", mode="agent", tool_event_callback=tool_events.append
+    )
 
-    assert answer == "blocked"
-    assert tool_results == ["tool is not allowed in developer mode: search_web"]
+    assert result.status == "blocked"
+    assert "apply_workspace_patch" in result.text
+    assert calls == 1
+    assert tool_events[0]["status"] == "blocked"

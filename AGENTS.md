@@ -1,7 +1,7 @@
 # AGENTS.md
 
-Applies repository-wide. Suto is a Python 3.12+ local-first assistant with
-`chat` and `agent` modes. The CLI is the supported interface. Discord and LINE
+Applies repository-wide. Suto is a Python 3.12+ local-first assistant with one
+`agent` mode. The CLI is the supported interface. Discord and LINE
 integrations have been retired and are outside the current product scope; do not
 implement or restore them unless the user explicitly reopens that work.
 
@@ -10,8 +10,8 @@ implement or restore them unless the user explicitly reopens that work.
 ```bash
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
-venv/bin/python main.py <chat|agent> cli
-venv/bin/python main.py home
+venv/bin/python main.py
+venv/bin/python main.py settings
 venv/bin/pytest -q
 ```
 
@@ -29,7 +29,7 @@ Run focused tests while developing, then the full suite for shared changes.
   In `interfaces/cli/`, `backend.py` owns session lifecycle, `commands.py` owns
   the public command registry, and `operations.py` owns background delivery.
 - `workflows/`: durable jobs, workers, scheduling, SQLite, and migrations;
-  `capabilities/developer/` is tested but parked and not public.
+  `capabilities/developer/` holds job-scoped workspace tools, not another mode.
   Its `workspace/` package separates schemas, read operations, approved writes,
   and shared path-containment helpers behind one stable package API.
 - `tests/`: pytest suites; `docs/operations.md`: operational lifecycle details.
@@ -80,7 +80,8 @@ flowchart LR
 
 - Trace flows end to end: entry point, validation, tool/business logic, storage,
   worker, side effect, failure handling, and user-visible result.
-- Preserve `chat`, `agent`, and parked `developer` separation.
+- Keep `agent` as the only mode. Expose workspace tools only within authorized
+  jobs; disable interactive tools without a working permission path.
 - Keep the CLI backend thin. Add public slash commands through the command
   registry and keep background loops in operations, not in the session loop.
 - Keep the AI executor thin. Add request shaping, tool assembly, loop behavior,
