@@ -55,7 +55,8 @@ The CLI does not launch a full-screen UI.
 `settings` opens a local-only control center. It prints a private sign-in link
 and opens it in the default browser. The dashboard shows recent job status and
 automation skills from the existing database; these views are read-only and
-show an empty state until the database exists. MCP is marked unsupported.
+show an empty state until the database exists. MCP configuration is managed in
+`mcp.yaml`, outside the settings editor.
 The profile form edits `display_name`, `locale`, and `timezone` in `config.yaml`.
 Validate and review changes before saving; restart Suto after saving. The CLI
 reads these values but cannot change them.
@@ -73,6 +74,20 @@ current CLI run, and `/exit`. See [skills](docs/skills.md) for the file format
 and tool restriction rules. If a reminder name is ambiguous, no reminder is
 removed and the matches are listed. Personal-service
 integrations are under active development.
+
+## MCP tools
+
+Copy `mcp.example.yaml` to the ignored local `mcp.yaml`, configure a stdio
+server, and set `SUTO_MCP_CONFIG` to that file's absolute path in `.env`.
+Set file permissions to `600` on POSIX hosts.
+Without this setting, Suto starts no MCP server. Each `allow_tools` entry is
+an original tool name returned by that server. Suto exposes an enabled tool as
+`mcp.<server>.<tool>`. Tools are
+discovered when an AI request starts and the server process is closed when the
+request ends. Skills can use these names in `allowed_tools` and
+`recommended_tools`. See [operations](docs/operations.md#mcp-server-lifecycle)
+for configuration and permission details. Configured MCP server processes run
+with the Suto host user's permissions and are not sandboxed.
 
 ## Workspace automation capability
 

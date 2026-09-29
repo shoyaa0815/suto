@@ -1,7 +1,8 @@
 """Build one model request from mode, identity, history, and tool policy."""
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING
 
 from application.language import ReplyLanguage, choose_reply_language
 from application.modes import get_mode_policy
@@ -9,6 +10,7 @@ from assistant.context import AssistantContext
 from assistant.memory.service import PersistentMemory
 from assistant.memory.tools import MEMORY_TOOL_NAMES
 from context import ContextManager
+from mcp_integration.config import MCPConfig
 from retrieval.memory import MemoryRetriever
 from skills import SkillRegistry, builtin_registry
 from tools import (
@@ -22,10 +24,40 @@ from workflows.runtime.context import ALL_WORKSPACE_TOOLS, ExecutionContext
 
 from .. import config, prompting
 
+if TYPE_CHECKING:
+    from mcp_integration.adapter import MCPTool
+
 
 RETIRED_PREFERENCE_KEYS = frozenset(
     {"briefing_time", "briefing_delivery_target_id"}
 )
+
+
+def eligible_mcp_config(
+    config: MCPConfig,
+    execution_context: ExecutionContext | None,
+    active_skills: tuple[str, ...],
+    skill_registry: SkillRegistry | None,
+) -> MCPConfig:
+    """Start only servers with tools allowed for this request."""
+    skills = (skill_registry or builtin_registry()).active(active_skills)
+    selected = []
+    for server in config.servers:
+        allowed = set(server.allow_tools)
+        if execution_context is not None:
+            allowed = {
+                name for name in allowed
+                if f"mcp.{server.name}.{name}" in execution_context.allowed_tools
+            }
+        for skill in skills:
+            if skill.allowed_tools is not None:
+                allowed = {
+                    name for name in allowed
+                    if f"mcp.{server.name}.{name}" in skill.allowed_tools
+                }
+        if allowed:
+            selected.append(replace(server, allow_tools=frozenset(allowed)))
+    return MCPConfig(tuple(selected))
 
 
 @dataclass(frozen=True)
@@ -125,21 +157,39 @@ def prepare_request(
     *,
     active_skills: tuple[str, ...] = (),
     skill_registry: SkillRegistry | None = None,
+    mcp_tools: dict[str, "MCPTool"] | None = None,
 ) -> PreparedRequest:
     skills = (skill_registry or builtin_registry()).active(active_skills)
     policy = get_mode_policy(mode)
     selected_language = reply_language or choose_reply_language(prompt)
     request_attachments = attachments or {}
-    allowed_tools = _allowed_tools(
+    native_tools = _allowed_tools(
         mode,
         request_attachments,
         assistant_context,
         execution_context,
     )
+    permitted_mcp = frozenset(mcp_tools or {})
+    if execution_context is not None:
+        permitted_mcp &= execution_context.allowed_tools
+    if native_tools & permitted_mcp:
+        raise ValueError("MCP tool name collides with a native tool")
+    allowed_tools = native_tools | permitted_mcp
     for skill in skills:
         if skill.allowed_tools is not None:
             allowed_tools &= frozenset(skill.allowed_tools)
-    _, tool_schemas, tool_guidance = get_tools(allowed_tools)
+    _, tool_schemas, tool_guidance = get_tools(allowed_tools & native_tools)
+    tool_schemas.extend(
+        {
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": mcp_tools[name].description,
+                "parameters": mcp_tools[name].input_schema,
+            },
+        }
+        for name in sorted(permitted_mcp & allowed_tools)
+    )
     retrieved = []
     if assistant_context is not None and prompt.strip():
         retrieved = MemoryRetriever(

@@ -70,7 +70,7 @@ class _LegacyHooks(RuntimeHooks):
         return AgentResult(None, text, "waiting_input", metadata={"clarification": clarification})
 
     async def authorize(self, name, args):
-        return name in self.owner.tools
+        return name in self.owner.tools or name in self.owner.mcp_tools
 
     async def on_tool_finished(self, call, status, content, error, elapsed_seconds):
         arguments = (
@@ -138,11 +138,13 @@ class ModelToolLoop:
         mode, think, reply_language, assistant_context, execution_context,
         tool_event_callback, progress, guard, build_result,
         agent_request: AgentRequest,
+        mcp_tools=None,
     ) -> None:
         self.session = session
         self.messages = messages
         self.tool_schemas = tool_schemas
         self.tools = tools
+        self.mcp_tools = mcp_tools or {}
         self.max_rounds = max_rounds
         self.prompt = prompt
         self.mode = mode
@@ -169,6 +171,8 @@ class ModelToolLoop:
             registry.register(FunctionTool(
                 name, schema.get("description", ""), parameters, handler
             ))
+        for tool in self.mcp_tools.values():
+            registry.register(tool)
         job_limits = self.execution_context.limits if self.execution_context else None
         model = build_model_router(self.session)
         if self.execution_context is None and Planner.needs_plan(self.prompt):
@@ -215,7 +219,9 @@ class ModelToolLoop:
                 repeated_tool_call_limit=(job_limits.repeated_tool_call_limit if job_limits else None),
             ),
             hooks=_LegacyHooks(self),
-            permissions=PermissionEngine(PermissionPolicy({name: "allow" for name in self.tools})),
+            permissions=PermissionEngine(PermissionPolicy({
+                name: "allow" for name in (*self.tools, *self.mcp_tools)
+            })),
             passthrough_exceptions=(ApprovalRequired, ExecutionLimitExceeded),
         )
         result = await self.runtime.run(

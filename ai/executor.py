@@ -19,7 +19,7 @@ from workflows.runtime.context import (
 from . import client, config, prompting, response
 from .execution.limits import ExecutionGuard
 from .execution.loop import ModelToolLoop
-from .execution.request import prepare_request
+from .execution.request import eligible_mcp_config, prepare_request
 from .models import (
     AIExecutionResult,
     ChangeEventCallback,
@@ -30,6 +30,7 @@ from .progress import RequestProgress
 from retrieval.base import RetrievalError
 from skills import SkillRegistry
 from .tooling.assembly import build_runtime_tools
+from mcp_integration import MCPManager, load_mcp_config
 
 
 __all__ = [
@@ -103,6 +104,23 @@ async def execute_local_ai(
         return build_result(reason, status="blocked", error=reason)
 
     try:
+        mcp_config = load_mcp_config()
+    except ValueError:
+        outcome = "invalid MCP configuration"
+        await progress.emit("finished", outcome)
+        text = (
+            "การตั้งค่า MCP ไม่ถูกต้อง กรุณาตรวจสอบไฟล์การตั้งค่า"
+            if (reply_language or choose_reply_language(prompt)).code == "th"
+            else "MCP configuration is invalid. Check the configuration file."
+        )
+        return build_result(text, status="failed", error=outcome)
+
+    mcp_config = eligible_mcp_config(
+        mcp_config, execution_context, request.active_skills, skill_registry
+    )
+    mcp_manager = MCPManager(mcp_config)
+    try:
+        await mcp_manager.start()
         prepared = prepare_request(
             prompt,
             mode,
@@ -114,8 +132,10 @@ async def execute_local_ai(
             execution_context,
             active_skills=request.active_skills,
             skill_registry=skill_registry,
+            mcp_tools=mcp_manager.allowed_tools(),
         )
     except RetrievalError:
+        await mcp_manager.close()
         outcome = "memory retrieval unavailable"
         config.debug("[ai] memory retrieval unavailable")
         await progress.emit("finished", outcome)
@@ -126,19 +146,24 @@ async def execute_local_ai(
             else "Memory search is unavailable. Please try again."
         )
         return build_result(text, status="failed", error=outcome)
-    guard = ExecutionGuard(execution_context, progress, request_started)
-    timeout = aiohttp.ClientTimeout(
-        total=config.AI_TIMEOUT_SECONDS,
-        connect=10,
-        sock_read=config.AI_TIMEOUT_SECONDS,
-    )
+    except BaseException:
+        await mcp_manager.close()
+        raise
     try:
+        guard = ExecutionGuard(execution_context, progress, request_started)
+        timeout = aiohttp.ClientTimeout(
+            total=config.AI_TIMEOUT_SECONDS,
+            connect=10,
+            sock_read=config.AI_TIMEOUT_SECONDS,
+        )
         progress.start()
         await progress.emit("starting", f"starting {mode} request")
+        for server_name in mcp_manager.failures:
+            await progress.emit("mcp", f"MCP server unavailable: {server_name}")
         async with aiohttp.ClientSession(timeout=timeout) as session:
             tools = build_runtime_tools(
                 session=session,
-                allowed_tools=prepared.allowed_tools,
+                allowed_tools=prepared.allowed_tools - mcp_manager.allowed_tools().keys(),
                 attachments=prepared.attachments,
                 assistant_context=assistant_context,
                 execution_context=execution_context,
@@ -163,6 +188,10 @@ async def execute_local_ai(
                 guard=guard,
                 build_result=build_result,
                 agent_request=request,
+                mcp_tools={
+                    name: tool for name, tool in mcp_manager.allowed_tools().items()
+                    if name in prepared.allowed_tools
+                },
             )
             result = await loop.run()
             outcome = loop.outcome
@@ -209,6 +238,7 @@ async def execute_local_ai(
             error=outcome,
         )
     finally:
+        await mcp_manager.close()
         await progress.stop()
         await progress.emit("finished", outcome)
         elapsed_ms = round((time.perf_counter() - request_started) * 1000)

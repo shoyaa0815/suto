@@ -7,3 +7,4 @@ pypdf>=6.16.1
 lingua-language-detector>=2.2.0,<3
 prompt-toolkit>=3.0.52,<4
 rich>=13.9.4
+mcp>=1.28,<2

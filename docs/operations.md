@@ -16,6 +16,47 @@ unknown profile keys, unsupported config versions, invalid timezones, and
 non-mapping YAML fail closed. `config.yaml` is local and ignored by Git;
 `config.example.yaml` documents the versioned schema.
 
+## MCP server lifecycle
+
+MCP servers are configured separately in ignored `mcp.yaml`. Set
+`SUTO_MCP_CONFIG` to its absolute path in `.env` to activate it; without that
+setting, no MCP command starts, even if a `mcp.yaml` exists in the working
+directory. The path must identify a regular, non-symlink file no larger than
+32 KiB and must not be group or world writable on POSIX hosts. An explicitly
+configured missing or malformed file fails the AI request closed.
+Set file permissions with `chmod 600 mcp.yaml` on POSIX hosts.
+
+`mcp.example.yaml` shows the stdio format. Each server needs a
+`transport: stdio`, absolute executable `command`, optional `args` and `env`,
+and `allow_tools`. The `env` values are names of existing host environment
+variables; Suto resolves their values only when connecting and does not write
+them to configuration or diagnostics. Put credentials in `.env` or the host
+environment, never in command arguments or YAML values. Suto suppresses server
+stderr and SDK transport logs that could quote malformed stdout because either
+may contain private data. MCP argument values are omitted from progress and
+tool audit events.
+
+For each AI request, Suto starts only servers with tools still permitted by the
+request's Skill and job restrictions. It initializes the MCP session, discovers
+all tool pages, checks names and schemas, and registers explicitly enabled
+tools as `mcp.<server>.<tool>`. Duplicate names within one
+server and malformed or unsupported schemas reject that server's discovery;
+other servers remain available. A connection failure likewise leaves that
+server's tools unavailable and reports the server name without exception
+details. Suto closes all connections and child processes at request end.
+
+An MCP tool needs its original name in that server's `allow_tools` list. Skills
+can narrow that list with the same namespaced names as native tools. Automation
+jobs additionally need the namespaced name in their job-scoped tool allowlist.
+The runtime validates arguments, checks the request restriction and permission
+engine, and only then calls the MCP server. Server tools are not trusted just
+because a connection succeeded. The configured stdio command runs as a host
+process with the permissions of the Suto user and is not sandboxed; choose a
+server whose own capabilities and filesystem access are appropriate. Phase 11
+supports stdio
+tools only, with no MCP resources, prompts, remote transport, or live tool-list
+refresh.
+
 ## Database and worker lifecycle
 
 CLI conversations remain in the existing `conversations` and `messages` tables
@@ -226,8 +267,8 @@ request header. Host validation rejects alternate hostnames. No remote binding,
 public deployment or reverse-proxy mode is provided.
 
 The dashboard reads recent job status and automation skill names from an existing
-SQLite database without starting workers or creating a database. MCP is shown
-as unsupported; schedules are not shown. These views are read-only.
+SQLite database without starting workers or creating a database. MCP setup is
+managed in `mcp.yaml`; schedules are not shown. These views are read-only.
 The profile form edits the supported `config.yaml` fields. Validate & review
 shows changed values before Save. Unknown fields, invalid timezones, malformed
 YAML and files over 32 KiB are rejected. Secrets remain in `.env`.

@@ -1,0 +1,13 @@
+# Copy to mcp.yaml, then set SUTO_MCP_CONFIG to its absolute path in .env.
+# This file contains no credential values.
+servers:
+  example:
+    transport: stdio
+    command: /path/to/mcp-server
+    args: []
+    # Values name existing host environment variables, not literal secrets.
+    env:
+      API_TOKEN: SUTO_MCP_API_TOKEN
+    # Original names from this server's tools/list response. Empty means no calls.
+    allow_tools:
+      - search

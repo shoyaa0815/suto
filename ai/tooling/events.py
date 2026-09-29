@@ -7,6 +7,8 @@ from ..models import ToolEventCallback
 
 
 def tool_detail(name: str, args: dict) -> str:
+    if name.startswith("mcp."):
+        return name
     visible = []
     for key in ("query", "url", "path", "attachment_id", "detail"):
         if key not in args:
@@ -21,6 +23,8 @@ def tool_detail(name: str, args: dict) -> str:
 
 def audit_tool_arguments(name: str, args: dict) -> dict:
     """Keep tool audits useful without storing entire file contents."""
+    if name.startswith("mcp."):
+        return {"argument_count": len(args)}
     audited = dict(args)
     if name == "apply_workspace_patch" and "content" in audited:
         content = str(audited.pop("content"))

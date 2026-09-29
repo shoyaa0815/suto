@@ -32,7 +32,7 @@ function skills() {
   const rows = info.skills.map(s => `<tr><td>${esc(s.name)}</td><td>v${esc(s.current_version)}</td><td>${esc(date(s.updated_at))}</td></tr>`).join("");
   return heading("AUTOMATION LIBRARY","Skills",`<span class="pill">อ่านอย่างเดียว</span>`) + `<section class="card"><div class="card-heading"><h3>Skills ของ Suto</h3><span>${info.available ? info.skill_count+" รายการ" : "ยังไม่มีข้อมูล"}</span></div>${rows ? `<div class="table-wrap"><table><thead><tr><th>ชื่อ</th><th>เวอร์ชัน</th><th>แก้ไขล่าสุด</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<p class="empty-message">${info.available ? "ยังไม่มี Skills" : info.error ? "ไม่สามารถอ่านฐานข้อมูล" : "ยังไม่มีข้อมูลการทำงาน"}</p>`}${info.skill_count>info.skills.length ? `<p class="muted footnote">แสดง 100 รายการแรก</p>` : ""}</section>`;
 }
-function mcp() { return heading("INTEGRATIONS","MCP",`<span class="pill">อ่านอย่างเดียว</span>`) + `<section class="card empty"><h3>ยังไม่รองรับ MCP</h3><p>Suto ยังไม่มีการเชื่อมต่อ MCP ในระบบปัจจุบัน</p></section>`; }
+function mcp() { return heading("INTEGRATIONS","MCP",`<span class="pill">อ่านอย่างเดียว</span>`) + `<section class="card empty"><h3>MCP tools</h3><p>ตั้งค่าเซิร์ฟเวอร์ stdio ในไฟล์ mcp.yaml และกำหนด SUTO_MCP_CONFIG ตามคู่มือการใช้งาน</p></section>`; }
 
 function render() {
   document.querySelectorAll("[data-page]").forEach(b => { const selected = b.dataset.page === page; b.classList.toggle("selected",selected); b.setAttribute("aria-current",selected ? "page" : "false"); });
