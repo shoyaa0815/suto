@@ -1,7 +1,13 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 
+from agent import AgentRequest, AgentRuntime
+from llm.types import ModelResponse, ModelUsage
+from tests.support.ai_helpers import FakeClientSession
 from workflows.models import JobStatus, MissedRunPolicy, ScheduleKind, TriggerStatus
+from workflows.runtime.runner import JobRunner
 from workflows.runtime.scheduler import CronExpression, Scheduler
+from workflows.runtime.worker import AutomationWorker
 from workflows.storage.store import JobStore
 
 
@@ -208,3 +214,100 @@ def test_once_schedule_runs_after_restart_only_once(tmp_path):
     assert restarted.tick(start + timedelta(minutes=3)) == 0
     assert restarted.store.get_schedule(schedule.id).next_run_at is None
     assert len(restarted.store.list_trigger_history(schedule.id)) == 1
+
+
+async def test_scheduled_job_reaches_agent_runtime_and_commits_result(tmp_path, monkeypatch):
+    from ai import executor, response
+    from ai.execution import loop
+
+    store = JobStore(tmp_path / "suto.db")
+    scheduler = Scheduler(store)
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    schedule = scheduler.create(
+        kind="once",
+        expression=(start + timedelta(minutes=1)).isoformat(),
+        prompt="Please reply in English: inspect project",
+        workspace=tmp_path,
+        now=start,
+    )
+    assert scheduler.tick(start + timedelta(minutes=1)) == 1
+    job = store.claim_next_job()
+    assert job is not None
+
+    seen_requests = []
+    seen_model_requests = []
+
+    class FakeModel:
+        async def generate(self, request):
+            seen_model_requests.append(request)
+            return ModelResponse("Inspection complete.", usage=ModelUsage(3, 2))
+
+    original_run = AgentRuntime.run
+
+    async def record_run(self, request, messages, **kwargs):
+        seen_requests.append(request)
+        return await original_run(self, request, messages, **kwargs)
+
+    monkeypatch.setattr(executor.aiohttp, "ClientSession", FakeClientSession)
+    monkeypatch.setattr(loop, "build_model_router", lambda session: FakeModel())
+    monkeypatch.setattr(response, "detect_language_code", lambda text: "en")
+    monkeypatch.setattr(AgentRuntime, "run", record_run)
+
+    await JobRunner(store).run(job)
+
+    assert len(seen_requests) == 1
+    assert isinstance(seen_requests[0], AgentRequest)
+    assert seen_requests[0].user_message == schedule.prompt
+    assert seen_requests[0].metadata == {
+        "job_id": job.id,
+        "source": "schedule",
+        "source_ref": schedule.id,
+        "parent_id": None,
+    }
+    available = {tool["function"]["name"] for tool in seen_model_requests[0].available_tools}
+    assert "read_workspace_file" in available
+    assert "apply_workspace_patch" not in available
+    assert "run_workspace_command" not in available
+    completed = store.get_job(job.id)
+    assert completed.status == JobStatus.COMPLETED
+    assert completed.result == "Inspection complete."
+    assert completed.total_tokens == 5
+
+
+async def test_cancelling_scheduled_job_stops_agent_runtime(tmp_path, monkeypatch):
+    from ai import executor
+    from ai.execution import loop
+
+    store = JobStore(tmp_path / "suto.db")
+    started = asyncio.Event()
+    stopped = asyncio.Event()
+
+    class WaitingModel:
+        async def generate(self, request):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+
+    monkeypatch.setattr(executor.aiohttp, "ClientSession", FakeClientSession)
+    monkeypatch.setattr(loop, "build_model_router", lambda session: WaitingModel())
+    schedule = Scheduler(store).create(
+        kind="interval",
+        expression="60",
+        prompt="wait for model",
+        workspace=tmp_path,
+        now=datetime.now(UTC) - timedelta(minutes=2),
+    )
+    worker = AutomationWorker(store, JobRunner(store), poll_interval=0.01)
+    worker_task = asyncio.create_task(worker.start())
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+        job = store.list_jobs()[0]
+        assert job.source_ref == schedule.id
+        assert await worker.cancel(job.id)
+        await asyncio.wait_for(stopped.wait(), timeout=2)
+        assert store.get_job(job.id).status == JobStatus.CANCELLED
+    finally:
+        await worker.stop()
+        await worker_task

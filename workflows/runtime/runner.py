@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
 
+from agent import AgentRequest
 from ai import AIExecutionResult, execute_local_ai
 from application.settings import env_int
 
@@ -40,6 +41,7 @@ class JobRunner:
     ) -> None:
         self.store = store
         self.execute = execute or execute_local_ai
+        self._uses_agent_request = execute is None
         self.retry_delays = retry_delays
 
     @staticmethod
@@ -283,9 +285,18 @@ class JobRunner:
                         ),
                     )
                     try:
+                        request = AgentRequest(
+                            prompt,
+                            metadata={
+                                "job_id": job.id,
+                                "source": job.source,
+                                "source_ref": job.source_ref,
+                                "parent_id": job.parent_id,
+                            },
+                        )
                         result = await asyncio.wait_for(
                             self.execute(
-                                prompt,
+                                request if self._uses_agent_request else prompt,
                                 mode=job.mode,
                                 progress_callback=save_progress,
                                 execution_context=attempt_context,

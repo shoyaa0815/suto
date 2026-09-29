@@ -6,6 +6,7 @@ from dataclasses import replace
 
 import aiohttp
 
+from agent import AgentRequest
 from application.language import ReplyLanguage, choose_reply_language
 from application.modes import DEFAULT_MODE
 from assistant.context import AssistantContext
@@ -40,7 +41,7 @@ _COMPAT_MODULES = (client, prompting, response)
 
 
 async def execute_local_ai(
-    prompt: str,
+    prompt: str | AgentRequest,
     think: bool = False,
     mode: str = DEFAULT_MODE,
     attachments: dict[str, tuple[str, bytes]] | None = None,
@@ -53,6 +54,16 @@ async def execute_local_ai(
     conversation_history: list[dict[str, str]] | None = None,
     assistant_context: AssistantContext | None = None,
 ) -> AIExecutionResult:
+    if isinstance(prompt, AgentRequest):
+        request = replace(prompt, attachments=attachments) if attachments is not None else prompt
+    else:
+        request = AgentRequest(
+            prompt,
+            session_id=getattr(assistant_context, "conversation_id", None),
+            attachments=attachments or {},
+        )
+    prompt = request.user_message
+    attachments = request.attachments
     request_started = time.perf_counter()
     max_tool_rounds = (
         config.MAX_AGENT_TOOL_ROUNDS
@@ -145,7 +156,7 @@ async def execute_local_ai(
                 progress=progress,
                 guard=guard,
                 build_result=build_result,
-                attachments=prepared.attachments,
+                agent_request=request,
             )
             result = await loop.run()
             outcome = loop.outcome

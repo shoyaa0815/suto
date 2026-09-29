@@ -69,6 +69,12 @@ lock is released on process exit; lock files should not be removed while a
 worker may be running. SQLite files and these locks are not a distributed-worker
 protocol and should not be shared across machines using a network filesystem.
 
+The scheduler records each due occurrence as a durable job. The worker claims
+that job and passes an `AgentRequest` with its job and schedule references through
+the same agent runtime used for other requests. The job runner keeps workspace
+permissions, budgets, approvals, retries, and results in the existing workflow
+tables. Cancelling a running scheduled job cancels its active agent request.
+
 Exit, Ctrl-C and SIGTERM stop job admission, cancel active execution, kill command
 process trees and persist interrupted jobs. On a hard crash, the next owning
 worker marks abandoned running jobs `interrupted`; `/resume <job_id>` checks

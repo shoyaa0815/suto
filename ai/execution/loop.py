@@ -116,7 +116,8 @@ class ModelToolLoop:
     def __init__(
         self, *, session, messages, tool_schemas, tools, max_rounds, prompt,
         mode, think, reply_language, assistant_context, execution_context,
-        tool_event_callback, progress, guard, build_result, attachments=None,
+        tool_event_callback, progress, guard, build_result,
+        agent_request: AgentRequest,
     ) -> None:
         self.session = session
         self.messages = messages
@@ -133,7 +134,7 @@ class ModelToolLoop:
         self.progress = progress
         self.guard = guard
         self.build_result = build_result
-        self.attachments = attachments or {}
+        self.agent_request = agent_request
         self.outcome = "completed"
         self.runtime = None
         self.plan = None
@@ -197,11 +198,7 @@ class ModelToolLoop:
             passthrough_exceptions=(ApprovalRequired, ExecutionLimitExceeded),
         )
         result = await self.runtime.run(
-            AgentRequest(
-                self.prompt,
-                session_id=getattr(self.assistant_context, "conversation_id", None),
-                attachments=self.attachments,
-            ),
+            self.agent_request,
             self.messages,
             generation_options={"think": self.think},
         )
