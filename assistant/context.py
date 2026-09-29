@@ -20,3 +20,4 @@ class AssistantContext:
     default_delivery_target: DeliveryTargetContext | None = None
     current_delivery_target: DeliveryTargetContext | None = None
     available_delivery_targets: tuple[DeliveryTargetContext, ...] = ()
+    allow_personal_tools: bool = True

@@ -2,6 +2,7 @@
 
 import asyncio
 import hmac
+import ipaddress
 import secrets
 import signal
 import threading
@@ -10,7 +11,6 @@ from pathlib import Path
 
 from aiohttp import web
 
-from .overview import snapshot as overview_snapshot
 from .settings import SettingsConflict, SettingsEditor
 
 
@@ -27,8 +27,13 @@ def settings_url():
 @web.middleware
 async def guard(request, handler):
     address = request.transport.get_extra_info("sockname") if request.transport else None
+    peer = request.transport.get_extra_info("peername") if request.transport else None
     host = f"{HOST}:{address[1] if address else PORT}"
-    if request.host != host:
+    try:
+        local_peer = peer is not None and ipaddress.ip_address(peer[0]).is_loopback
+    except (ValueError, TypeError):
+        local_peer = False
+    if request.host != host or not local_peer:
         raise web.HTTPForbidden(text="Local settings editor only.")
     if request.method not in {"GET", "HEAD"}:
         if (request.headers.get("Origin") != f"http://{host}"
@@ -55,12 +60,11 @@ async def guard(request, handler):
     return response
 
 
-def create_app(*, config_path=None, database_path=None, browser_opener=None):
+def create_app(*, config_path=None, browser_opener=None):
     app = web.Application(middlewares=[guard], client_max_size=65536)
     state = {
         "bootstrap": secrets.token_urlsafe(32), "session": secrets.token_urlsafe(32),
         "settings": SettingsEditor(Path(config_path or "config.yaml")),
-        "database_path": database_path,
         "browser_opener": browser_opener or webbrowser.open,
     }
     app[STATE] = state
@@ -99,9 +103,6 @@ def create_app(*, config_path=None, database_path=None, browser_opener=None):
             save=request.path.endswith("/save"),
         ))
 
-    async def overview(request):
-        return web.json_response(overview_snapshot(state["database_path"]))
-
     async def index(request):
         return web.Response(text=(ASSETS / "index.html").read_text(), content_type="text/html")
 
@@ -121,7 +122,6 @@ def create_app(*, config_path=None, database_path=None, browser_opener=None):
     app.router.add_get("/api/profile", profile)
     app.router.add_post("/api/profile/validate", profile)
     app.router.add_post("/api/profile/save", profile)
-    app.router.add_get("/api/overview", overview)
     return app
 
 
@@ -160,9 +160,9 @@ async def _serve():
         await runner.cleanup()
 
 
-def run(mode="settings"):
-    if mode != "settings":
-        raise ValueError("Use python main.py settings")
+def run(mode="agent"):
+    if mode != "agent":
+        raise ValueError("Use python3 main.py setting")
     try:
         asyncio.run(_serve())
     except KeyboardInterrupt:

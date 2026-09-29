@@ -1,4 +1,4 @@
-"""Local-only browser editor for Suto settings."""
+"""Local-only browser interface for Suto."""
 
 from .server import create_app, run
 

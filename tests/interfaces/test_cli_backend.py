@@ -28,8 +28,13 @@ def test_print_help_lists_exit_commands(capsys):
     assert "/clear" in output
     assert "/new" not in output
     assert "/setting" not in output
-    assert "/notification" in output
-    assert "/notification remove <name>" in output
+    assert "/reminder" in output
+    assert "/reminder remove <name-or-id>" in output
+    assert "/task" in output
+    assert "/task complete" not in output
+    assert "/task remove <name-or-id>" in output
+    assert "/jobs" in output
+    assert "/notification" not in output
     assert "  /noti  " not in output
     assert "/daily" not in output
     assert "/brief" not in output

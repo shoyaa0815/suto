@@ -2,11 +2,13 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import sqlite3
 from typing import Any
 
 from interfaces.cli import CLI_STORAGE_INTERFACE
 from interfaces.cli.operations import print_pending_reminders
 from interfaces.cli.output import write as print
+from interfaces.cli.reminder_input import parse_reminder_input
 from skills import SkillSelection
 
 
@@ -35,8 +37,11 @@ def print_help(mode: str | None = None) -> None:
     print("  /help  show available commands")
     print("  /clear  clear this chat context")
     print("  /reset all  delete all saved conversations")
-    print("  /notification  show reminders that have not been delivered")
-    print("  /notification remove <name>  remove a pending reminder by name")
+    print("  /reminder [time and title]  list or create reminders")
+    print("  /reminder remove <name-or-id>  delete a pending reminder")
+    print("  /task [title]  list or create personal tasks")
+    print("  /task remove <name-or-id>  delete an open task")
+    print("  /jobs  show recent automation jobs (read-only)")
     print("  /skills  list available and active skills")
     print("  /skill activate <name>  activate a skill for this CLI session")
     print("  /skill deactivate <name>  deactivate a skill")
@@ -53,26 +58,104 @@ def _exit(context: CommandContext, argument: str) -> CommandOutcome:
     return CommandOutcome(handled=True, exit_requested=True)
 
 
-def _notification(context: CommandContext, argument: str) -> CommandOutcome:
+def _jobs(context: CommandContext, argument: str) -> CommandOutcome:
+    if argument:
+        print("usage: /jobs")
+        return CommandOutcome(handled=True)
+    jobs = context.store.list_jobs()
+    if not jobs:
+        print("No automation jobs.")
+        return CommandOutcome(handled=True)
+    print("Recent automation jobs (newest first):")
+    for job in jobs:
+        prompt = " ".join(job.prompt.split())
+        if len(prompt) > 60:
+            prompt = prompt[:57] + "..."
+        print(f"{job.id}  {job.status.value}  {prompt}")
+    return CommandOutcome(handled=True)
+
+
+def _task(context: CommandContext, argument: str) -> CommandOutcome:
+    if not argument:
+        tasks = context.store.list_tasks(context.user.id)
+        if not tasks:
+            print("No open tasks.")
+        else:
+            print("Open tasks:")
+            for task in tasks:
+                print(f"{task.id}  {task.title}")
+        return CommandOutcome(handled=True)
+    if argument.casefold() == "remove":
+        print("usage: /task remove <name-or-id>")
+        return CommandOutcome(handled=True)
+    if argument.casefold().startswith("remove "):
+        reference = argument[7:].strip()
+        try:
+            task, matches = context.store.remove_task(context.user.id, reference)
+        except sqlite3.Error:
+            print("ลบงานไม่สำเร็จ กรุณาลองอีกครั้ง")
+            return CommandOutcome(handled=True)
+        if len(matches) > 1:
+            print(f'Multiple open tasks are named "{reference}":')
+            for match in matches:
+                print(f"{match.id}  {match.title}")
+        elif task is None:
+            print(f"Open task not found: {reference}")
+        else:
+            print(f"Task deleted: {task.title}")
+        return CommandOutcome(handled=True)
+    try:
+        task = context.store.create_task(context.user.id, argument)
+    except ValueError as error:
+        print(str(error))
+    except sqlite3.Error:
+        print("สร้างงานไม่สำเร็จ กรุณาลองอีกครั้ง")
+    else:
+        print(f"Task created: {task.id}  {task.title}")
+    return CommandOutcome(handled=True)
+
+
+def _reminder(context: CommandContext, argument: str) -> CommandOutcome:
     if not argument:
         print_pending_reminders(context.store, context.user.id)
         return CommandOutcome(handled=True)
-    action, _, title = argument.partition(" ")
-    if action.casefold() != "remove" or not title.strip():
-        print("usage: /notification [remove <name>]")
+    if argument.casefold() == "remove":
+        print("usage: /reminder remove <name-or-id>")
         return CommandOutcome(handled=True)
-    reminder, matches = context.store.cancel_reminder_by_title(
-        context.user.id,
-        title,
-    )
-    if len(matches) > 1:
-        print(f'Multiple pending reminders are named "{title.strip()}":')
-        for match in matches:
-            print(f"{match.id}  {match.remind_at}  {match.title}")
-    elif reminder is None:
-        print(f"Reminder not found: {title.strip()}")
+    if argument.casefold().startswith("remove "):
+        reference = argument[7:].strip()
+        try:
+            reminder, matches = context.store.remove_reminder(context.user.id, reference)
+        except sqlite3.Error:
+            print("ลบการแจ้งเตือนไม่สำเร็จ กรุณาลองอีกครั้ง")
+            return CommandOutcome(handled=True)
+        if len(matches) > 1:
+            print(f'Multiple pending reminders are named "{reference}":')
+            for match in matches:
+                print(f"{match.id}  {match.remind_at}  {match.title}")
+        elif reminder is None:
+            print(f"Pending reminder not found: {reference}")
+        else:
+            print(f"Reminder deleted: {reminder.title}")
+        return CommandOutcome(handled=True)
+    try:
+        request = parse_reminder_input(argument)
+        if request.minutes is not None:
+            reminder = context.store.create_relative_reminder(
+                context.user.id, request.title, request.minutes,
+                timezone=context.user.timezone,
+            )
+        else:
+            reminder = context.store.create_clock_reminder(
+                context.user.id, request.title, request.clock_time,
+                timezone=context.user.timezone,
+            )
+    except ValueError as error:
+        print(str(error))
+    except sqlite3.Error:
+        print("สร้างการแจ้งเตือนไม่สำเร็จ กรุณาลองอีกครั้ง")
     else:
-        print(f"Reminder removed: {reminder.title}")
+        print(f"Reminder created: {reminder.id}  {reminder.remind_at}  {reminder.title}")
     return CommandOutcome(handled=True)
 
 
@@ -137,7 +220,9 @@ def _skill(context: CommandContext, argument: str) -> CommandOutcome:
 COMMAND_HANDLERS: dict[str, CommandHandler] = {
     "/help": _help,
     "/exit": _exit,
-    "/notification": _notification,
+    "/reminder": _reminder,
+    "/task": _task,
+    "/jobs": _jobs,
     "/clear": _clear,
     "/reset": _reset,
     "/skills": _skills,

@@ -81,6 +81,8 @@ def _allowed_tools(
         allowed_tools = allowed_tools - config.ATTACHMENT_TOOL_NAMES
     if assistant_context is None:
         allowed_tools = allowed_tools - TASK_TOOL_NAMES - MEMORY_TOOL_NAMES
+    elif not assistant_context.allow_personal_tools:
+        allowed_tools = allowed_tools - TASK_TOOL_NAMES
     job_scoped_tools = (
         ALL_WORKSPACE_TOOLS
         | PLANNING_TOOL_NAMES
@@ -196,6 +198,12 @@ def prepare_request(
         retrieved = MemoryRetriever(
             PersistentMemory(assistant_context.store, assistant_context.user_id)
         ).search_sync(prompt, limit=5)
+    if assistant_context is not None and not assistant_context.allow_personal_tools:
+        tool_guidance += (
+            "\n- Personal tasks and reminders in this CLI are managed only by "
+            "/task and /reminder commands. Do not claim to have created, "
+            "changed, or deleted one from chat."
+        )
     messages = ContextManager().build(
         prompting.build_system_prompt(
             policy.prompt,

@@ -1,5 +1,4 @@
 import json
-import sqlite3
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -9,7 +8,6 @@ from aiohttp.test_utils import make_mocked_request
 from application.configuration import load_settings
 from interfaces.web import server
 from interfaces.web.settings import SettingsEditor, SettingsConflict
-from workflows.storage.store import JobStore
 
 
 @pytest.fixture
@@ -31,20 +29,28 @@ async def request(app, path, *, method="GET", body=None, authenticated=True, ori
     return await server.guard(req, match.handler)
 
 
-async def test_settings_page_is_local_and_unsupported_apis_are_not_exposed(app):
+async def test_web_page_is_local_and_unsupported_apis_are_not_exposed(app):
     page = await request(app, "/", authenticated=False)
     assert "Suto Settings" in page.text
     assert "frame-ancestors 'none'" in page.headers["Content-Security-Policy"]
-    for path in ("/api/sessions", "/api/logs", "/api/models", "/api/system"):
+    for path in ("/api/overview", "/api/sessions", "/api/logs", "/api/models", "/api/system",
+                 "/api/chat", "/api/chat/runs/123"):
         with pytest.raises(web.HTTPNotFound):
             await request(app, path)
+    for path in ("/api/chat", "/api/chat/runs/123/cancel", "/api/chat/runs/123/approval"):
+        with pytest.raises(web.HTTPNotFound):
+            await request(app, path, method="POST", body={})
+    script = (await request(app, "/assets/app.js", authenticated=False)).text
+    assert '<aside class="sidebar">' in script
+    assert '<nav aria-label="Main navigation">' in script
+    assert 'Review changes' not in script
+    assert '/api/chat' not in script
+    assert 'chatView' not in script
 
 
 async def test_authentication_origin_and_host_boundaries(app):
     with pytest.raises(web.HTTPUnauthorized):
         await request(app, "/api/settings", authenticated=False)
-    with pytest.raises(web.HTTPUnauthorized):
-        await request(app, "/api/overview", authenticated=False)
     with pytest.raises(web.HTTPUnauthorized):
         await request(app, "/api/profile", authenticated=False)
     for origin in ("http://evil.test", "null", "http://localhost:8765"):
@@ -57,6 +63,23 @@ async def test_authentication_origin_and_host_boundaries(app):
     response = await request(app, "/api/auth", method="POST", body={"token":app[server.STATE]["bootstrap"]}, authenticated=False)
     assert response.cookies["suto_session"]["httponly"]
     assert response.cookies["suto_session"]["samesite"] == "Strict"
+
+
+async def test_settings_page_does_not_create_a_database(tmp_path, monkeypatch):
+    database = tmp_path / "suto.db"
+    monkeypatch.setenv("SUTO_DB_PATH", str(database))
+    app = server.create_app(config_path=tmp_path / "config.yaml")
+    assert (await request(app, "/api/profile")).status == 200
+    assert not database.exists()
+
+
+async def test_profile_saves_without_a_separate_review_request(app):
+    original = json.loads((await request(app, "/api/profile")).text)
+    profile = {**original["profile"], "display_name": "One click"}
+    saved = await request(app, "/api/profile/save", method="POST",
+                          body={"profile": profile, "revision": original["revision"]})
+    assert json.loads(saved.text)["saved"] is True
+    assert load_settings(app[server.STATE]["settings"].path).profile.display_name == "One click"
 
 
 async def test_profile_form_validates_saves_and_preserves_conflicting_draft(app):
@@ -78,29 +101,6 @@ async def test_profile_form_validates_saves_and_preserves_conflicting_draft(app)
                                  body={"profile":invalid, "revision":json.loads(saved.text)["revision"]})
         assert response.status == 400
         assert load_settings(path).profile.display_name == "Test Owner"
-
-
-async def test_overview_reads_existing_database_without_creating_or_exposing_content(tmp_path):
-    database = tmp_path / "suto.db"
-    app = server.create_app(config_path=tmp_path / "config.yaml", database_path=database)
-    empty = json.loads((await request(app, "/api/overview")).text)
-    assert empty["available"] is False
-    assert not database.exists()
-    database.write_text("not a database")
-    unreadable = json.loads((await request(app, "/api/overview")).text)
-    assert unreadable["error"] is True
-    database.unlink()
-    JobStore(database).create_skill("public_skill", "private instructions")
-    with sqlite3.connect(database) as connection:
-        connection.execute("INSERT INTO jobs(id,prompt,mode,status,source,workspace,created_at) "
-                           "VALUES('job_1','private prompt','agent','completed','manual','.',"
-                           "'2026-01-01T00:00:00+00:00')")
-    result = json.loads((await request(app, "/api/overview")).text)
-    assert result["available"] is True
-    assert result["jobs"]["completed"] == 1
-    assert result["skills"][0]["name"] == "public_skill"
-    assert "private prompt" not in json.dumps(result)
-    assert "private instructions" not in json.dumps(result)
 
 
 async def test_yaml_validate_save_conflict_and_invalid_input(app):

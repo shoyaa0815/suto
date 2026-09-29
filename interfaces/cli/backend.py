@@ -216,7 +216,9 @@ async def run_session(
             previous_language_code = reply_language.code
 
             context = (
-                AssistantContext(store, user.id, conversation.id)
+                AssistantContext(
+                    store, user.id, conversation.id, allow_personal_tools=False
+                )
                 if mode == "agent"
                 else None
             )

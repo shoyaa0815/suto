@@ -8,9 +8,8 @@ from main import _parse_args
     ("args", "expected"),
     [
         ([], ("cli", "agent")),
-        (["settings"], ("settings_web", "settings")),
+        (["setting"], ("setting", "agent")),
         (["api"], ("api", "agent")),
-        (["tui"], ("tui", "agent")),
         (["voice"], ("voice", "agent")),
     ],
 )
@@ -20,10 +19,10 @@ def test_parse_args_accepts_public_entrypoints(args, expected):
 
 @pytest.mark.parametrize(
     "args",
-    [["chat", "cli"], ["agent", "cli"], ["home"], ["web"], ["settings", "extra"]],
+    [["chat", "cli"], ["agent", "cli"], ["home"], ["settings"], ["web"], ["setting", "extra"]],
 )
 def test_parse_args_rejects_removed_entrypoints(args):
-    with pytest.raises(SystemExit, match=r"usage: python3 main.py \[settings\|api\|tui\|voice\]"):
+    with pytest.raises(SystemExit, match=r"usage: python3 main.py \[setting\|api\|voice\]"):
         _parse_args(args)
 
 
@@ -39,16 +38,16 @@ def test_main_starts_the_cli_in_personal_assistant_mode(monkeypatch):
     assert calls == ["agent"]
 
 
-def test_main_dispatches_settings_to_local_web_editor(monkeypatch):
+def test_main_dispatches_settings_interface(monkeypatch):
     import interfaces.web as web
 
     calls = []
-    monkeypatch.setattr(main_module.sys, "argv", ["main.py", "settings"])
+    monkeypatch.setattr(main_module.sys, "argv", ["main.py", "setting"])
     monkeypatch.setattr(web, "run", calls.append)
 
     main_module.main()
 
-    assert calls == ["settings"]
+    assert calls == ["agent"]
 
 
 def test_main_dispatches_api(monkeypatch):
@@ -57,18 +56,6 @@ def test_main_dispatches_api(monkeypatch):
     calls = []
     monkeypatch.setattr(main_module.sys, "argv", ["main.py", "api"])
     monkeypatch.setattr(api, "run", calls.append)
-
-    main_module.main()
-
-    assert calls == ["agent"]
-
-
-def test_main_dispatches_tui(monkeypatch):
-    import interfaces.tui as tui
-
-    calls = []
-    monkeypatch.setattr(main_module.sys, "argv", ["main.py", "tui"])
-    monkeypatch.setattr(tui, "run", calls.append)
 
     main_module.main()
 
@@ -90,6 +77,18 @@ def test_mcp_startup_diagnostic_names_trust_boundary_without_secrets(monkeypatch
 
     monkeypatch.setattr(main_module.sys, "argv", ["main.py"])
     monkeypatch.setattr(cli, "run", lambda mode: None)
+    monkeypatch.setenv("SUTO_MCP_CONFIG", "/private/mcp.yaml")
+    main_module.main()
+    warning = capsys.readouterr().err
+    assert "trusted local executables" in warning
+    assert "/private/mcp.yaml" not in warning
+
+
+def test_setting_mcp_startup_diagnostic_does_not_expose_config_path(monkeypatch, capsys):
+    import interfaces.web as web
+
+    monkeypatch.setattr(main_module.sys, "argv", ["main.py", "setting"])
+    monkeypatch.setattr(web, "run", lambda mode: None)
     monkeypatch.setenv("SUTO_MCP_CONFIG", "/private/mcp.yaml")
     main_module.main()
     warning = capsys.readouterr().err

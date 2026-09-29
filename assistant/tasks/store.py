@@ -177,6 +177,33 @@ class TaskStore:
             )
         return self.get_task(user_id, task_id) if cursor.rowcount else None
 
+    def remove_task(self, user_id: str, reference: str) -> tuple[Task | None, list[Task]]:
+        """Delete one open task owned by the user; keep ambiguous names intact."""
+        wanted = reference.strip().casefold()
+        if not wanted:
+            return None, []
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute(
+                "SELECT * FROM assistant_tasks WHERE user_id=? AND status='open'",
+                (user_id,),
+            ).fetchall()
+            by_id = [self._to_task(row) for row in rows if row["id"] == reference]
+            matches = by_id
+            if not matches and not re.fullmatch(r"task_[0-9a-f]{10}", reference):
+                matches = [
+                    self._to_task(row) for row in rows
+                    if row["title"].strip().casefold() == wanted
+                ]
+            if len(matches) != 1:
+                return None, matches
+            task = matches[0]
+            db.execute(
+                "DELETE FROM assistant_tasks WHERE id=? AND user_id=? AND status='open'",
+                (task.id, user_id),
+            )
+        return task, matches
+
     def create_reminder(
         self,
         user_id: str,
@@ -602,3 +629,33 @@ class TaskStore:
                 (now, reminder.id),
             )
         return self.get_reminder(user_id, reminder.id), matches
+
+    def remove_reminder(
+        self, user_id: str, reference: str
+    ) -> tuple[Reminder | None, list[Reminder]]:
+        """Delete one scheduled reminder and its delivery state atomically."""
+        wanted = reference.strip().casefold()
+        if not wanted:
+            return None, []
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute(
+                "SELECT * FROM reminders WHERE user_id=? AND status='scheduled' "
+                "ORDER BY remind_at",
+                (user_id,),
+            ).fetchall()
+            by_id = [self._to_reminder(row) for row in rows if row["id"] == reference]
+            matches = by_id
+            if not matches and not re.fullmatch(r"rem_[0-9a-f]{10}", reference):
+                matches = [
+                    self._to_reminder(row) for row in rows
+                    if row["title"].strip().casefold() == wanted
+                ]
+            if len(matches) != 1:
+                return None, matches
+            reminder = matches[0]
+            db.execute(
+                "DELETE FROM reminders WHERE id=? AND user_id=? AND status='scheduled'",
+                (reminder.id, user_id),
+            )
+        return reminder, matches

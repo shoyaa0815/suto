@@ -1,15 +1,19 @@
 import asyncio
 import sqlite3
 from contextlib import nullcontext
+from datetime import UTC, datetime, timedelta
 
 import ai
 import pytest
+from ai.execution.request import prepare_request
+from assistant.context import AssistantContext
 from prompt_toolkit.layout.containers import HSplit
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.widgets import TextArea
 
 from interfaces.cli import backend
 from interfaces.cli import app as cli_app
+from interfaces.cli.commands import CommandContext, handle_command
 from interfaces.cli.app import (
     ACTIVITY_ROW_HEIGHT,
     DOT_FRAMES,
@@ -210,17 +214,28 @@ async def test_cli_skill_activation_persists_between_requests_in_one_run(
     assert "unknown skill: missing" in output
 
 
-async def test_session_exposes_notification_command_and_removes_by_name(
+async def test_session_manages_reminders_separately_from_automation_jobs(
     tmp_path, monkeypatch, capsys
 ):
     database_path = tmp_path / "suto.db"
     store = JobStore(database_path)
     user = store.resolve_channel_identity("tui", "local")
+    other = store.resolve_channel_identity("api", "other")
+    personal_task = store.create_task(user.id, "ส่งงาน")
     reminder = store.create_reminder(
         user.id,
         "นัดหมอ",
         "2099-01-02T09:30:00+07:00",
         timezone="Asia/Bangkok",
+    )
+    duplicate_a = store.create_reminder(user.id, "งานซ้ำ", "2099-01-03T09:30:00+07:00")
+    duplicate_b = store.create_reminder(user.id, "งานซ้ำ", "2099-01-04T09:30:00+07:00")
+    other_reminder = store.create_reminder(other.id, "ของคนอื่น", "2099-01-05T09:30:00+07:00")
+    decoy = store.create_reminder(
+        user.id, other_reminder.id, "2099-01-06T09:30:00+07:00"
+    )
+    prefixed_title = store.create_reminder(
+        user.id, "rem_sleep", "2099-01-07T09:30:00+07:00"
     )
     prompts = iter(
         [
@@ -231,9 +246,18 @@ async def test_session_exposes_notification_command_and_removes_by_name(
             "/daily",
             "/noti",
             "/notification",
-            "/notification remove ไม่มีชื่อนี้",
-            "/notification remove นัดหมอ",
-            "/notification",
+            "/task",
+            "/reminder",
+            "/reminder remove",
+            "/reminder remove ไม่มีชื่อนี้",
+            f"/reminder remove {other_reminder.id}",
+            "/reminder remove งานซ้ำ",
+            f"/reminder remove {duplicate_a.id}",
+            "/reminder remove งานซ้ำ",
+            "/reminder remove นัดหมอ",
+            "/reminder remove rem_sleep",
+            f"/reminder remove {decoy.id}",
+            "/reminder",
             "/help",
             "/exit",
         ]
@@ -246,25 +270,190 @@ async def test_session_exposes_notification_command_and_removes_by_name(
     await backend.run_session("agent", read_prompt)
 
     output = capsys.readouterr().out
-    assert "Unknown command: /jobs" in output
+    assert "No automation jobs." in output
     assert "Unknown command: /quit" in output
     assert "Unknown command: /brief" in output
     assert "Unknown command: /setting" in output
     assert "Unknown command: /daily" in output
     assert "Unknown command: /noti" in output
+    assert "Unknown command: /notification" in output
+    assert "Open tasks:" in output
+    assert personal_task.id in output
     assert "Pending reminders:" in output
     assert reminder.id in output
-    assert "นัดหมอ" in output
-    assert "Reminder not found: ไม่มีชื่อนี้" in output
-    assert "Reminder removed: นัดหมอ" in output
+    assert "2099-01-02 09:30" in output
+    assert "usage: /reminder remove <name-or-id>" in output
+    assert "Pending reminder not found: ไม่มีชื่อนี้" in output
+    assert f"Pending reminder not found: {other_reminder.id}" in output
+    assert "Multiple pending reminders are named \"งานซ้ำ\":" in output
+    assert duplicate_a.id in output and duplicate_b.id in output
+    assert "Reminder deleted: งานซ้ำ" in output
+    assert "Reminder deleted: นัดหมอ" in output
     assert "No pending reminders." in output
-    assert store.get_reminder(user.id, reminder.id).status == "cancelled"
+    assert store.get_task(user.id, personal_task.id).status == "open"
+    assert store.get_reminder(user.id, duplicate_a.id) is None
+    assert store.get_reminder(user.id, duplicate_b.id) is None
+    assert store.get_reminder(user.id, reminder.id) is None
+    assert store.get_reminder(user.id, prefixed_title.id) is None
+    assert store.get_reminder(user.id, decoy.id) is None
+    assert store.get_reminder(other.id, other_reminder.id).status == "scheduled"
     assert "  /help" in output
-    assert "  /notification" in output
-    assert "  /notification remove <name>" in output
+    assert "  /reminder" in output
+    assert "  /reminder remove <name-or-id>" in output
+    assert "  /task" in output
+    assert "  /jobs" in output
+    assert "  /task complete" not in output
     assert "  /daily" not in output
     assert "  /exit" in output
     assert "bye" in output
+
+
+def test_jobs_command_shows_jobs_and_task_command_uses_personal_tasks(tmp_path, capsys):
+    store = JobStore(tmp_path / "suto.db")
+    user = store.resolve_channel_identity("tui", "local")
+    personal_task = store.create_task(user.id, "ซื้อยา")
+    job = store.create_job("Inspect project")
+
+    jobs = handle_command(CommandContext(store, user, "conversation", "agent"), "/jobs")
+    tasks = handle_command(CommandContext(store, user, "conversation", "agent"), "/task")
+    created = handle_command(
+        CommandContext(store, user, "conversation", "agent"), "/task run inspect"
+    )
+
+    assert jobs.handled and tasks.handled and created.handled
+    output = capsys.readouterr().out
+    assert "Recent automation jobs (newest first):" in output
+    assert f"{job.id}  queued  Inspect project" in output
+    assert f"{personal_task.id}  ซื้อยา" in output
+    assert "Task created:" in output
+    assert [item.title for item in store.list_tasks(user.id)] == ["ซื้อยา", "run inspect"]
+    assert store.get_job(job.id).status.value == "queued"
+
+
+async def test_slash_commands_create_tasks_and_reminders_without_ai(
+    tmp_path, monkeypatch, capsys
+):
+    database_path = tmp_path / "suto.db"
+    monkeypatch.setenv("SUTO_DB_PATH", str(database_path))
+
+    async def unexpected_ai(*args, **kwargs):
+        raise AssertionError("slash commands must not call AI")
+
+    monkeypatch.setattr(backend, "ask_local_ai", unexpected_ai)
+    prompts = iter([
+        "/reminder อีกห้านาทีเตือนกินข้าว",
+        "/reminder 00.05 เตือนให้เข้านอนหน่อย",
+        "/task ทำอะไรต่างๆบลาๆ",
+        "/reminder อีกศูนย์นาทีเตือนกินข้าว",
+        "/reminder",
+        "/task",
+        "/exit",
+    ])
+
+    async def read_prompt():
+        return next(prompts)
+
+    before = datetime.now(UTC)
+    await backend.run_session("agent", read_prompt)
+    store = JobStore(database_path)
+    user = store.resolve_channel_identity("tui", "local")
+    reminders = store.list_reminders(user.id)
+    assert len(reminders) == 2
+    assert {item.title for item in reminders} == {"กินข้าว", "เข้านอนหน่อย"}
+    relative = next(item for item in reminders if item.title == "กินข้าว")
+    scheduled = datetime.fromisoformat(relative.remind_at)
+    assert before + timedelta(minutes=5) <= scheduled <= datetime.now(UTC) + timedelta(minutes=5)
+    clock = next(item for item in reminders if item.title == "เข้านอนหน่อย")
+    assert datetime.fromisoformat(clock.remind_at).strftime("%H:%M") == "00:05"
+    assert [item.title for item in store.list_tasks(user.id)] == ["ทำอะไรต่างๆบลาๆ"]
+    output = capsys.readouterr().out
+    assert output.count("Reminder created:") == 2
+    assert "Task created:" in output
+    assert "ใช้ /reminder" in output
+    assert "Pending reminders:" in output and "Open tasks:" in output
+
+
+def test_remove_commands_delete_only_one_owned_row_and_delivery_state(tmp_path, capsys):
+    store = JobStore(tmp_path / "suto.db")
+    user = store.resolve_channel_identity("tui", "local")
+    other = store.resolve_channel_identity("api", "other")
+    context = CommandContext(store, user, "conversation", "agent")
+    first = store.create_task(user.id, "ซ้ำ")
+    second = store.create_task(user.id, "ซ้ำ")
+    foreign = store.create_task(other.id, "ของคนอื่น")
+    decoy = store.create_task(user.id, foreign.id)
+    target = store.get_or_create_delivery_target(
+        user.id, "test", "local", "dm", "local"
+    )
+    reminder = store.create_reminder(
+        user.id, "กินยา", "2099-01-02T09:30:00+07:00",
+        delivery_target_id=target.id,
+    )
+    foreign_reminder = store.create_reminder(
+        other.id, "ของคนอื่น", "2099-01-02T09:30:00+07:00"
+    )
+
+    handle_command(context, "/task remove ซ้ำ")
+    assert store.get_task(user.id, first.id) is not None
+    assert store.get_task(user.id, second.id) is not None
+    handle_command(context, f"/task remove {foreign.id}")
+    assert store.get_task(user.id, decoy.id) is not None
+    assert store.get_task(other.id, foreign.id) is not None
+    handle_command(context, f"/task remove {first.id}")
+    assert store.get_task(user.id, first.id) is None
+    handle_command(context, "/task remove ซ้ำ")
+    assert store.get_task(user.id, second.id) is None
+    handle_command(context, "/reminder remove กินยา")
+    assert store.get_reminder(user.id, reminder.id) is None
+    assert store.get_reminder(other.id, foreign_reminder.id) is not None
+    with store._connect() as db:
+        assert db.execute(
+            "SELECT 1 FROM reminder_deliveries WHERE reminder_id=?", (reminder.id,)
+        ).fetchone() is None
+    output = capsys.readouterr().out
+    assert "Multiple open tasks" in output
+    assert "Task deleted: ซ้ำ" in output
+    assert "Reminder deleted: กินยา" in output
+
+
+def test_cli_ai_request_cannot_use_personal_task_or_reminder_tools(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    user = store.resolve_channel_identity("tui", "local")
+    conversation = store.get_or_create_conversation(user.id, "tui", "local")
+    context = AssistantContext(
+        store, user.id, conversation.id, allow_personal_tools=False
+    )
+
+    prepared = prepare_request(
+        "เตือนให้กินข้าวอีกห้านาที", "agent", None,
+        ai.ReplyLanguage("th", "Thai", "test"), "", None, context, None,
+    )
+
+    assert "create_reminder_in" not in prepared.allowed_tools
+    assert "create_task" not in prepared.allowed_tools
+    assert "list_reminders" not in prepared.allowed_tools
+    assert "save_memory" in prepared.allowed_tools
+    assert "/task and /reminder commands" in prepared.messages[0]["content"]
+
+
+def test_remove_command_reports_database_failure_without_claiming_deletion(
+    tmp_path, monkeypatch, capsys
+):
+    store = JobStore(tmp_path / "suto.db")
+    user = store.resolve_channel_identity("tui", "local")
+    task = store.create_task(user.id, "ซื้อยา")
+    context = CommandContext(store, user, "conversation", "agent")
+
+    def fail_remove(*args):
+        raise sqlite3.OperationalError("database unavailable")
+
+    monkeypatch.setattr(store, "remove_task", fail_remove)
+    handle_command(context, f"/task remove {task.id}")
+
+    assert store.get_task(user.id, task.id) is not None
+    output = capsys.readouterr().out
+    assert "ลบงานไม่สำเร็จ" in output
+    assert "Task deleted" not in output
 
 
 async def test_cli_identity_uses_shared_yaml_profile(tmp_path, monkeypatch):

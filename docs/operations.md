@@ -34,35 +34,6 @@ stays completed in SQLite if only TTS or playback fails afterward. There is no
 wake word, always-listening process, voice authentication, or automatic crash
 continuation.
 
-## Terminal UI
-
-Run `venv/bin/python main.py tui` in an interactive terminal. The TUI uses
-`prompt-toolkit`, already used by the CLI. Its session belongs to the local
-`tui` identity and resumes on restart. `/new` starts another session;
-`/session` shows its ID and status; `/resume <id>` opens an existing TUI
-session owned by the same local identity. The viewport reloads up to 100
-recent user and final assistant messages. Session context and messages stay
-in the existing SQLite tables. PageUp scrolls, End returns to the latest
-entry and the input, and F2 inspects the previous tool's name, status, and
-trace IDs. Tool arguments and results are never shown in that detail view.
-
-The TUI consumes normalized `AgentEvent` callbacks from the existing executor.
-It shows run and model status, compact tool outcomes, permission events, and
-child activity using `parent_run_id` and safe child roles. MCP tools use the same display path as
-native tools. Ctrl-C or `/cancel` cancels the executor task, including an
-awaited delegated child; interruption of blocking host operations is best
-effort. A draft sent during a run remains in the input box until the run ends.
-
-`/skills` lists registered Skills; `/skill activate <name>` and
-`/skill deactivate <name>` persist names for this session. Missing registered
-Skills block new runs until deactivated. When an ordinary tool policy requires
-interactive confirmation, `/approve <id>` allows that one call and `/deny <id>`
-denies it. Requests expire after 60 seconds and cancellation removes them.
-Job approvals retain their separate durable job execution workflow.
-The plain CLI uses the same broker and asks for `allow` or `deny` when an
-ordinary tool policy requires confirmation.
-It does not start the CLI's automation or reminder-delivery workers.
-
 ## Local agent API
 
 Run `venv/bin/python main.py api`. The API binds only to `127.0.0.1:8766`;
@@ -111,7 +82,7 @@ Run status, timestamps, sanitized terminal results, and token usage persist in
 the same SQLite database as sessions and traces. Completed, failed, and cancelled
 runs remain queryable after restart. A run owned by a dead process becomes
 `interrupted` on recovery; model and tool calls are not resumed. The database
-reserves one active top-level run per session across API, CLI, and TUI processes.
+reserves one active top-level run per session across API and CLI processes.
 Up to four independent API runs may execute at once. API approval submission is
 not exposed; a request requiring interactive approval fails closed there.
 Pending interactive approvals are memory-only and invalid after restart.
@@ -120,7 +91,8 @@ Trace delivery retains the database's existing durability and backup behavior.
 ## Host-managed settings
 
 Non-secret local profile and new-user defaults live in `config.yaml`; secrets
-remain in `.env`. Run `venv/bin/python main.py settings` to open the local web
+remain in `.env`. Activate `venv` as shown in the README, then run
+`python3 main.py setting` to open the local web
 editor. It prints a private sign-in link, validates edits before saving, and
 persists valid settings atomically. Restart Suto after saving so the CLI uses
 the new values.
@@ -141,7 +113,7 @@ setting, no MCP command starts, even if a `mcp.yaml` exists in the working
 directory. The path must identify a regular, non-symlink file no larger than
 32 KiB and must not be group or world writable on POSIX hosts. An explicitly
 configured missing or malformed file fails the AI request closed.
-CLI, API, and TUI startup print one generic trust-boundary diagnostic when
+CLI, settings, and API startup print one generic trust-boundary diagnostic when
 `SUTO_MCP_CONFIG` is set; it contains no path, command, or secret.
 Set file permissions with `chmod 600 mcp.yaml` on POSIX hosts.
 
@@ -380,7 +352,7 @@ and runtime are in scope for the approved command.
 
 ## Local web settings
 
-Run `venv/bin/python main.py settings` to open the Suto Settings control center in the
+Run `python3 main.py setting` to open Suto Settings in the
 default browser. It binds only to `127.0.0.1:8765`.
 The browser opens after the port is listening. If launching the browser fails,
 use the private link printed in the terminal. Ctrl-C or SIGTERM closes the server.
@@ -392,11 +364,8 @@ APIs require that cookie; writes also require an exact local Origin and JSON
 request header. Host validation rejects alternate hostnames. No remote binding,
 public deployment or reverse-proxy mode is provided.
 
-The dashboard reads recent job status and automation skill names from an existing
-SQLite database without starting workers or creating a database. MCP setup is
-managed in `mcp.yaml`; schedules are not shown. These views are read-only.
-The profile form edits the supported `config.yaml` fields. Validate & review
-shows changed values before Save. Unknown fields, invalid timezones, malformed
+The page edits the supported `config.yaml` profile fields. Save becomes available
+when a field changes and validates before writing. Unknown fields, invalid timezones, malformed
 YAML and files over 32 KiB are rejected. Secrets remain in `.env`.
 The editor normalizes formatting and removes comments; a byte-level revision
 check detects changes since load, including external edits. Failed validation or
@@ -404,8 +373,8 @@ conflicts preserve the draft and file; Reload requires confirmation for unsaved
 edits. Persistence reuses the existing atomic settings writer. Restart relevant
 Suto processes to apply saved settings; the editor never restarts them.
 
-Opening the settings editor never starts AI, automation, or delivery workers,
-and never creates a SQLite database.
+Opening Settings does not start AI, automation, or delivery workers and does
+not create a SQLite database. AI chat and reminder delivery remain in the CLI.
 
 ## Local notifications and verification
 
