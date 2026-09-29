@@ -10,6 +10,7 @@ from main import _parse_args
         ([], ("cli", "agent")),
         (["settings"], ("settings_web", "settings")),
         (["api"], ("api", "agent")),
+        (["tui"], ("tui", "agent")),
     ],
 )
 def test_parse_args_accepts_public_entrypoints(args, expected):
@@ -21,7 +22,7 @@ def test_parse_args_accepts_public_entrypoints(args, expected):
     [["chat", "cli"], ["agent", "cli"], ["home"], ["web"], ["settings", "extra"]],
 )
 def test_parse_args_rejects_removed_entrypoints(args):
-    with pytest.raises(SystemExit, match=r"usage: python3 main.py \[settings\|api\]"):
+    with pytest.raises(SystemExit, match=r"usage: python3 main.py \[settings\|api\|tui\]"):
         _parse_args(args)
 
 
@@ -55,6 +56,18 @@ def test_main_dispatches_api(monkeypatch):
     calls = []
     monkeypatch.setattr(main_module.sys, "argv", ["main.py", "api"])
     monkeypatch.setattr(api, "run", calls.append)
+
+    main_module.main()
+
+    assert calls == ["agent"]
+
+
+def test_main_dispatches_tui(monkeypatch):
+    import interfaces.tui as tui
+
+    calls = []
+    monkeypatch.setattr(main_module.sys, "argv", ["main.py", "tui"])
+    monkeypatch.setattr(tui, "run", calls.append)
 
     main_module.main()
 

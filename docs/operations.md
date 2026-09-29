@@ -1,5 +1,32 @@
 # Operations and advanced features
 
+## Terminal UI
+
+Run `venv/bin/python main.py tui` in an interactive terminal. The TUI uses
+`prompt-toolkit`, already used by the CLI. Its session belongs to the local
+`tui` identity and resumes on restart. `/new` starts another session;
+`/session` shows its ID and status; `/resume <id>` opens an existing TUI
+session owned by the same local identity. The viewport reloads up to 100
+recent user and final assistant messages. Session context and messages stay
+in the existing SQLite tables. PageUp scrolls, End returns to the latest
+entry and the input, and F2 inspects the previous tool's name, status, and
+trace IDs. Tool arguments and results are never shown in that detail view.
+
+The TUI consumes normalized `AgentEvent` callbacks from the existing executor.
+It shows run and model status, compact tool outcomes, permission events, and
+child activity using `parent_run_id`. Child roles are omitted because the
+safe event trace does not contain them. MCP tools use the same display path as
+native tools. Ctrl-C or `/cancel` cancels the executor task, including an
+awaited delegated child; interruption of blocking host operations is best
+effort. A draft sent during a run remains in the input box until the run ends.
+
+`/skills` lists registered Skills; `/skill activate <name>` and
+`/skill deactivate <name>` change selection for later requests. Ordinary
+interactive requests have no resumable approval decision path: the job
+approval service requires a job execution context. The TUI displays
+permission denial or approval-required events but offers no approval buttons.
+It does not start the CLI's automation or reminder-delivery workers.
+
 ## Local agent API
 
 Run `venv/bin/python main.py api`. The API binds only to `127.0.0.1:8766`;

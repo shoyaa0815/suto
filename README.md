@@ -39,6 +39,7 @@ Start Suto:
 
 ```bash
 venv/bin/python main.py
+venv/bin/python main.py tui
 venv/bin/python main.py settings
 venv/bin/python main.py api
 ```
@@ -52,6 +53,15 @@ The `cli` interface is a plain stdin/stdout session. It prints the active model
 and mode, accepts requests in a framed `>` prompt, and leaves each submitted
 user message in its frame. Assistant replies are printed without a name prefix.
 The CLI does not launch a full-screen UI.
+
+`tui` opens a full-screen terminal chat over the same agent executor. It shows
+model, tool, permission, and delegated child activity from the agent event
+trace. PageUp scrolls history; End returns to the latest entry and input;
+F2 shows the previous tool's safe metadata. Ctrl-C or `/cancel` cancels the
+active request. Use `/new`, `/session`, and `/resume <session-id>` to manage
+the local TUI conversation, and `/skills` or `/skill activate|deactivate <name>`
+to select registered Skills. The input remains available while a request runs;
+a draft submitted during an active run stays in the input box.
 
 `api` starts the local agent API on `http://127.0.0.1:8766`. See
 [API operations](docs/operations.md#local-agent-api) for routes, examples,
