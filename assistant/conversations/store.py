@@ -20,6 +20,13 @@ class ConversationStore:
     def _to_message(row) -> Message | None:
         return Message(**dict(row)) if row is not None else None
 
+    def get_conversation(self, conversation_id: str) -> Conversation | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM conversations WHERE id=?", (conversation_id,)
+            ).fetchone()
+        return self._to_conversation(row)
+
     def get_or_create_conversation(
         self,
         user_id: str,

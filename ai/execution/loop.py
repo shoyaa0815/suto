@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import inspect
 
 from agent import AgentRequest, AgentResult, AgentRuntime, RuntimeHooks
 from agent.limits import ExecutionLimits
@@ -33,6 +34,10 @@ class _LegacyHooks(RuntimeHooks):
         )
         if store is not None:
             store.add_run_event(event)
+        if self.owner.agent_event_callback is not None:
+            notified = self.owner.agent_event_callback(event)
+            if inspect.isawaitable(notified):
+                await notified
 
     async def wait(self, awaitable):
         return await self.owner.guard.wait(awaitable)
@@ -142,6 +147,7 @@ class ModelToolLoop:
         agent_request: AgentRequest,
         mcp_tools=None,
         skill_registry=None,
+        agent_event_callback=None,
     ) -> None:
         self.session = session
         self.messages = messages
@@ -161,6 +167,7 @@ class ModelToolLoop:
         self.build_result = build_result
         self.agent_request = agent_request
         self.skill_registry = skill_registry or builtin_registry()
+        self.agent_event_callback = agent_event_callback
         self.outcome = "completed"
         self.runtime = None
         self.plan = None

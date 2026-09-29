@@ -1,5 +1,57 @@
 # Operations and advanced features
 
+## Local agent API
+
+Run `venv/bin/python main.py api`. The API binds only to `127.0.0.1:8766`;
+there is no public binding option. It accepts the numeric loopback Host header,
+checks the connecting peer and Origin, sends no CORS permission, and requires
+`X-Suto-Request: 1` plus JSON content type on POST. Local processes with access
+to the loopback interface can use it; there is no account or token system.
+Do not forward or expose this port on a network. Remote exposure needs separate
+authentication, transport security, and threat review.
+
+Routes:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/health` | Process health (`{"status":"ok"}`) |
+| POST | `/runs` | Start a run; JSON `{"message":"...","session_id":"...","skills":["research"]}` |
+| GET | `/runs/{run_id}` | Status and final result when available |
+| GET | `/runs/{run_id}/events` | SSE trace stream; supports `Last-Event-ID` |
+| POST | `/runs/{run_id}/cancel` | Cancel the active task; send `{}` with required headers |
+
+Only `message` is required. Requests are limited to 16 KiB, messages to 8,000
+characters, and at most eight registry Skill names. Unknown fields and unknown
+Skills are rejected. A new request without `session_id` creates a session in the
+existing SQLite conversation tables. A supplied session must belong to the
+local API identity. API sessions are separate from CLI sessions. The final
+response includes `session_id`, text, status, and token usage. Failed and
+blocked responses use generic public text and error values; provider or tool
+exception details are not exposed.
+
+`POST /runs` returns 202 with an opaque API `run_id` handle immediately. The
+runtime assigns its own `runtime_run_id` when execution begins; it then appears
+in run status and in SSE event `run_id`. SSE replays existing persisted
+`run_events` rows, including the bounded child trace, after the existing event
+sanitizer has removed prompts, tool arguments, observations, and secret fields.
+The stream closes after the run ends. Cancellation cancels the same asyncio
+task that awaits the model, tool, and any delegated child. It is best effort
+for blocking operations that do not support cancellation.
+
+The API passes an `AgentRequest` to the same AI executor as the CLI. The
+executor applies native tool, Skill, MCP, and delegation policy. MCP commands,
+secrets, and job-scoped workspace permissions come only from trusted local
+configuration and cannot be supplied in HTTP payloads. The API starts no
+automation or reminder-delivery worker.
+
+Run status and final results live in this API process and disappear on restart;
+sessions and sanitized trace events remain in SQLite. Up to four independent
+runs may execute at once. One process allows one active run per session and
+returns 409 for a concurrent request on that session. SQLite serializes its
+writes, but separate API processes do not share the in-memory session lock;
+run a single API process per database. Trace delivery polls no external service
+and retains the database's existing durability and backup behavior.
+
 ## Host-managed settings
 
 Non-secret local profile and new-user defaults live in `config.yaml`; secrets

@@ -40,6 +40,7 @@ Start Suto:
 ```bash
 venv/bin/python main.py
 venv/bin/python main.py settings
+venv/bin/python main.py api
 ```
 
 Suto keeps conversation history, uses the local user profile, and can create,
@@ -51,6 +52,10 @@ The `cli` interface is a plain stdin/stdout session. It prints the active model
 and mode, accepts requests in a framed `>` prompt, and leaves each submitted
 user message in its frame. Assistant replies are printed without a name prefix.
 The CLI does not launch a full-screen UI.
+
+`api` starts the local agent API on `http://127.0.0.1:8766`. See
+[API operations](docs/operations.md#local-agent-api) for routes, examples,
+security boundaries, and run lifecycle.
 
 `settings` opens a local-only control center. It prints a private sign-in link
 and opens it in the default browser. The dashboard shows recent job status and

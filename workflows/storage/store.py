@@ -731,6 +731,15 @@ class JobStore(
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_run_tree_events(self, run_id: str) -> list[dict]:
+        """Read the persisted parent trace and its bounded child trace in order."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM run_events WHERE run_id=? OR parent_run_id=? ORDER BY rowid",
+                (run_id, run_id),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def latest_run_id(self, job_id: str) -> str | None:
         with self._connect() as connection:
             row = connection.execute(

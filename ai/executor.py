@@ -3,10 +3,12 @@
 import asyncio
 import time
 from dataclasses import replace
+from collections.abc import Callable, Awaitable
 
 import aiohttp
 
 from agent import AgentRequest
+from agent.events import AgentEvent
 from application.language import ReplyLanguage, choose_reply_language
 from application.modes import DEFAULT_MODE
 from assistant.context import AssistantContext
@@ -57,6 +59,7 @@ async def execute_local_ai(
     assistant_context: AssistantContext | None = None,
     active_skills: tuple[str, ...] = (),
     skill_registry: SkillRegistry | None = None,
+    agent_event_callback: Callable[[AgentEvent], Awaitable[None] | None] | None = None,
 ) -> AIExecutionResult:
     if isinstance(prompt, AgentRequest):
         request = replace(prompt, attachments=attachments) if attachments is not None else prompt
@@ -189,6 +192,7 @@ async def execute_local_ai(
                 build_result=build_result,
                 agent_request=request,
                 skill_registry=skill_registry,
+                agent_event_callback=agent_event_callback,
                 mcp_tools={
                     name: tool for name, tool in mcp_manager.allowed_tools().items()
                     if name in prepared.allowed_tools

@@ -9,6 +9,7 @@ from main import _parse_args
     [
         ([], ("cli", "agent")),
         (["settings"], ("settings_web", "settings")),
+        (["api"], ("api", "agent")),
     ],
 )
 def test_parse_args_accepts_public_entrypoints(args, expected):
@@ -20,7 +21,7 @@ def test_parse_args_accepts_public_entrypoints(args, expected):
     [["chat", "cli"], ["agent", "cli"], ["home"], ["web"], ["settings", "extra"]],
 )
 def test_parse_args_rejects_removed_entrypoints(args):
-    with pytest.raises(SystemExit, match="usage: python3 main.py \\[settings\\]"):
+    with pytest.raises(SystemExit, match=r"usage: python3 main.py \[settings\|api\]"):
         _parse_args(args)
 
 
@@ -46,3 +47,15 @@ def test_main_dispatches_settings_to_local_web_editor(monkeypatch):
     main_module.main()
 
     assert calls == ["settings"]
+
+
+def test_main_dispatches_api(monkeypatch):
+    import interfaces.api as api
+
+    calls = []
+    monkeypatch.setattr(main_module.sys, "argv", ["main.py", "api"])
+    monkeypatch.setattr(api, "run", calls.append)
+
+    main_module.main()
+
+    assert calls == ["agent"]

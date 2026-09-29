@@ -5,11 +5,13 @@ DEFAULT_MODE = "agent"
 
 
 def _parse_args(args: list[str]) -> tuple[str, str]:
-    usage = "usage: python3 main.py [settings]"
+    usage = "usage: python3 main.py [settings|api]"
     if not args:
         return "cli", DEFAULT_MODE
     if args == ["settings"]:
         return "settings_web", "settings"
+    if args == ["api"]:
+        return "api", DEFAULT_MODE
     raise SystemExit(usage)
 
 
@@ -21,8 +23,10 @@ def main():
     load_dotenv()
     if name == "cli":
         from interfaces.cli import run
-    else:
+    elif name == "settings_web":
         from interfaces.web import run
+    else:
+        from interfaces.api import run
     run(mode)
 
 
