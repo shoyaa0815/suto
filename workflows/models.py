@@ -131,6 +131,7 @@ class JobEvent:
     elapsed_seconds: float
     total_tokens: int
     created_at: str
+    run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -144,6 +145,8 @@ class ToolEvent:
     result_size: int
     error: str | None
     created_at: str
+    run_id: str | None = None
+    tool_call_id: str | None = None
 
 
 @dataclass(frozen=True)

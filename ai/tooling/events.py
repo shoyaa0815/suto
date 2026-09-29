@@ -46,4 +46,4 @@ async def emit_tool_event(
         if inspect.isawaitable(result):
             await result
     except Exception as error:
-        config.debug(f"[tool_audit] callback failed: {error!r}")
+        config.debug(f"[tool_audit] callback failed: {type(error).__name__}")

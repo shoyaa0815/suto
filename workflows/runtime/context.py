@@ -71,6 +71,8 @@ class ExecutionContext:
     budget_seconds: object | None = None
 
     def __post_init__(self) -> None:
+        if self.sandbox not in {"process", "bwrap"}:
+            raise ValueError("sandbox must be process or bwrap")
         resolved = self.workspace.expanduser().resolve()
         if not resolved.is_dir():
             raise ValueError(f"workspace is not a directory: {resolved}")

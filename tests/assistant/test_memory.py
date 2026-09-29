@@ -152,6 +152,13 @@ def test_personal_context_injection(store, user):
         "source": "memory", "id": store.list_memories(user.id)[0].id,
         "category": "preference", "content": "Favorite language is Rust",
     }]
+    stranger = store.resolve_channel_identity("cli", "stranger")
+    mismatched = prepare_request(
+        "Tell me about Rust", "agent", None,
+        ReplyLanguage("en", "English", "test"), "", None,
+        AssistantContext(store, stranger.id, conv.id), None,
+    )
+    assert "Working on refactoring memory module" not in mismatched.messages[0]["content"]
 
 
 @pytest.mark.asyncio

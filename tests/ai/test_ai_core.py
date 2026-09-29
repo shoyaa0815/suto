@@ -1,11 +1,14 @@
 import asyncio
 import sqlite3
+import time
 
 import pytest
 
 import ai
 from assistant.context import AssistantContext
 from ai.providers.ollama import OllamaProvider
+from ai.progress import RequestProgress
+from ai.tooling.events import emit_tool_event
 from application.language import ReplyLanguage
 from tests.support.ai_helpers import FakeClientSession as _FakeClientSession
 from tests.support.ai_helpers import patch_model_chat
@@ -42,7 +45,8 @@ async def test_memory_index_failure_returns_safe_result_without_model_call(
 ):
     store = JobStore(tmp_path / "suto.db")
     user = store.resolve_channel_identity("cli", "local")
-    context = AssistantContext(store, user.id, "conversation")
+    conversation = store.get_or_create_conversation(user.id, "cli", "local")
+    context = AssistantContext(store, user.id, conversation.id)
     original_search = store.search_memories
     calls = []
     updates = []
@@ -80,6 +84,42 @@ async def test_memory_index_failure_returns_safe_result_without_model_call(
     assert recovered.status == "completed"
     assert recovered.text == "model answer"
     assert calls == ["model"]
+
+
+async def test_provider_failure_does_not_expose_exception_details(monkeypatch, capsys):
+    secret = "token-private-123"
+
+    async def broken_chat(self, session, messages, tool_schemas, think=False, max_output_tokens=None):
+        raise RuntimeError(f"provider URL contained {secret}")
+
+    monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
+    monkeypatch.setattr(ai.config, "AI_PROVIDER", "ollama")
+    monkeypatch.setattr(OllamaProvider, "chat", broken_chat)
+    monkeypatch.setattr(ai.config, "_debug_logs", True)
+
+    result = await ai.execute_local_ai(
+        "hello", reply_language=ReplyLanguage("en", "English", "test")
+    )
+
+    assert result.status == "failed"
+    assert result.text == "AI request failed. Please try again."
+    assert result.error == "failed: RuntimeError"
+    assert secret not in result.text + result.error + capsys.readouterr().out
+
+
+async def test_observability_callback_failure_hides_exception_details(monkeypatch, capsys):
+    secret = "callback-private-123"
+
+    def broken_callback(_event):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(ai.config, "_debug_logs", True)
+    await RequestProgress(broken_callback, time.perf_counter()).emit("model")
+    await emit_tool_event(broken_callback, {"tool_name": "test.echo"})
+
+    output = capsys.readouterr().out
+    assert secret not in output
+    assert "callback failed: RuntimeError" in output
 
 
 def test_write_tool_audit_redacts_file_content():

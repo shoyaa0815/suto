@@ -176,7 +176,7 @@ async def test_developer_job_runs_allowlisted_command_and_audits_it(
         tmp_path,
         allowed_tools=COMMAND_TOOLS,
         command_event_callback=command_events.append,
-        approval_callback=lambda *args: None,
+        approval_callback=lambda *args: True,
     )
 
     result = await ai.execute_local_ai(

@@ -17,6 +17,7 @@ class RequestProgress:
     activity: str = "starting"
     detail: str = "starting request"
     round_number: int | None = None
+    run_id: str | None = None
     activity_started: float = field(default_factory=time.perf_counter)
     _heartbeat_task: asyncio.Task | None = field(default=None, init=False)
 
@@ -57,13 +58,14 @@ class RequestProgress:
             "output_tokens": self.output_tokens,
             "total_tokens": self.total_tokens,
             "heartbeat": heartbeat,
+            "run_id": self.run_id,
         }
         try:
             result = self.callback(update)
             if inspect.isawaitable(result):
                 await result
         except Exception as error:
-            print(f"[progress] callback failed: {error!r}")
+            print(f"[progress] callback failed: {type(error).__name__}")
 
     async def _heartbeat(self) -> None:
         while True:

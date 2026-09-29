@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .locking import ProcessLock
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 HARDENING = """
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -238,6 +238,35 @@ SESSION_COMPACTION = """
 ALTER TABLE session_summaries ADD COLUMN compacted_through_message_id INTEGER NOT NULL DEFAULT 0;
 """
 
+CORE_TRACE_AND_MESSAGES = """
+CREATE TABLE messages_v13(
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+ role TEXT NOT NULL CHECK(role IN ('system','user','assistant','tool')),
+ content TEXT NOT NULL, created_at TEXT NOT NULL,
+ metadata TEXT NOT NULL DEFAULT '{}');
+INSERT INTO messages_v13(id,conversation_id,role,content,created_at)
+ SELECT id,conversation_id,role,content,created_at FROM messages;
+DROP TABLE messages;
+ALTER TABLE messages_v13 RENAME TO messages;
+CREATE INDEX messages_conversation_idx ON messages(conversation_id,id);
+CREATE TABLE run_events(
+ event_id TEXT PRIMARY KEY,
+ run_id TEXT NOT NULL,
+ job_id TEXT REFERENCES jobs(id) ON DELETE CASCADE,
+ session_id TEXT REFERENCES conversations(id) ON DELETE CASCADE,
+ parent_run_id TEXT,
+ tool_call_id TEXT,
+ event_type TEXT NOT NULL,
+ data TEXT NOT NULL DEFAULT '{}',
+ created_at TEXT NOT NULL);
+CREATE INDEX run_events_run_idx ON run_events(run_id,created_at);
+CREATE INDEX run_events_job_idx ON run_events(job_id,created_at);
+ALTER TABLE job_events ADD COLUMN run_id TEXT;
+ALTER TABLE tool_events ADD COLUMN run_id TEXT;
+ALTER TABLE tool_events ADD COLUMN tool_call_id TEXT;
+"""
+
 
 def backup_database(source: Path, destination: Path) -> Path:
     source, destination = source.resolve(), destination.expanduser().absolute()
@@ -292,7 +321,10 @@ def initialize_database(store) -> None:
                 (10, THREE_TIER_MEMORY),
                 (11, AGENT_ONLY_MODE),
                 (12, SESSION_COMPACTION),
+                (13, CORE_TRACE_AND_MESSAGES),
             ):
+                if number > SCHEMA_VERSION:
+                    break
                 if number <= version:
                     continue
                 with store._connect() as connection:
@@ -304,6 +336,21 @@ def initialize_database(store) -> None:
                         for row in connection.execute('PRAGMA table_info(session_summaries)')
                     ):
                         migration_script = ''
+                    if number == 13:
+                        message_columns = {row[1] for row in connection.execute('PRAGMA table_info(messages)')}
+                        job_event_columns = {row[1] for row in connection.execute('PRAGMA table_info(job_events)')}
+                        tool_event_columns = {row[1] for row in connection.execute('PRAGMA table_info(tool_events)')}
+                        markers = (
+                            'metadata' in message_columns,
+                            connection.execute("SELECT 1 FROM sqlite_master WHERE name='run_events'").fetchone() is not None,
+                            'run_id' in job_event_columns,
+                            'run_id' in tool_event_columns,
+                            'tool_call_id' in tool_event_columns,
+                        )
+                        if all(markers):
+                            migration_script = ''
+                        elif any(markers):
+                            raise RuntimeError('database has a partial core trace migration; restore a verified backup')
                     connection.executescript('BEGIN IMMEDIATE;\n' + migration_script)
                     connection.execute('INSERT OR REPLACE INTO schema_migrations VALUES (?,?)',
                                        (number, datetime.now(UTC).isoformat()))

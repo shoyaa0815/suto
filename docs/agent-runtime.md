@@ -27,3 +27,34 @@ including tool calls, usage and finish reason. The runtime receives only the
 router's `Model` interface. There is no new user-facing setting or command.
 Later phases can replace the compatibility hooks with
 context, session and permission ports without changing the runtime loop.
+
+## Phase 9 stabilization note
+
+The CLI and scheduled jobs both enter the same runtime through `execute_local_ai`.
+Provider errors that escape this path are returned as a localized generic failure;
+the public result and debug output contain only the exception type, never its
+message. Scheduled job tests cover a reopened database, provider tool-call
+normalization, a workspace read, the tool observation, and committed job state.
+
+## Phase 9.1 core hardening
+
+`AgentRuntime` denies tool execution by default. The CLI/job adapter supplies an
+explicit allow policy for the request-scoped registry; an ambiguous decision,
+missing policy, or non-boolean authorization response blocks execution. The
+tool executor requires a grant from that authorization path. A tool's own
+workspace/action checks and exact write/command approval still apply.
+
+The runtime emits safe lifecycle, model, permission, and tool events. The
+existing SQLite store persists these in `run_events` with `run_id`, optional
+`job_id`/`session_id`/`parent_run_id`, and `tool_call_id`. Job progress and tool
+audit rows keep their established views and now carry matching IDs. Trace tool
+call IDs are generated locally; provider-supplied IDs remain only in the
+conversation exchange needed to resume model messages. Trace data
+contains only event type, counts, statuses, and registered tool names; prompts,
+arguments, observations, credentials, and environment values are excluded.
+
+The `messages` table retains old rows and now supports `system`, `user`,
+`assistant`, and `tool` roles. The CLI stores completed assistant tool calls
+and their observations together in one transaction. Session history reconstructs
+their model-facing fields after restart; compaction still keeps raw rows. Existing
+jobs continue to use their durable job checkpoint rather than CLI sessions.

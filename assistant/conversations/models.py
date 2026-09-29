@@ -18,3 +18,4 @@ class Message:
     role: str
     content: str
     created_at: str
+    metadata: str = "{}"

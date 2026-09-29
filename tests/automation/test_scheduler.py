@@ -263,6 +263,7 @@ async def test_scheduled_job_reaches_agent_runtime_and_commits_result(tmp_path, 
         "source": "schedule",
         "source_ref": schedule.id,
         "parent_id": None,
+        "parent_run_id": None,
     }
     available = {tool["function"]["name"] for tool in seen_model_requests[0].available_tools}
     assert "read_workspace_file" in available
@@ -272,6 +273,114 @@ async def test_scheduled_job_reaches_agent_runtime_and_commits_result(tmp_path, 
     assert completed.status == JobStatus.COMPLETED
     assert completed.result == "Inspection complete."
     assert completed.total_tokens == 5
+
+
+async def test_restarted_worker_runs_scheduled_job_through_provider_and_read_tool(tmp_path, monkeypatch):
+    from ai import config, executor, response
+
+    (tmp_path / "source.txt").write_text("verified input", encoding="utf-8")
+    database = tmp_path / "suto.db"
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    scheduler = Scheduler(JobStore(database))
+    schedule = scheduler.create(
+        kind="once",
+        expression=(start + timedelta(minutes=1)).isoformat(),
+        prompt="Read source.txt and report its contents.",
+        workspace=tmp_path,
+        now=start,
+    )
+    assert scheduler.tick(start + timedelta(minutes=1)) == 1
+
+    requests = []
+    finished = asyncio.Event()
+    provider_responses = iter([
+        {
+            "choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [{
+                "id": "read-1", "type": "function",
+                "function": {"name": "read_workspace_file", "arguments": '{"path":"source.txt"}'},
+            }]}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+        },
+        {
+            "choices": [{"message": {"role": "assistant", "content": "verified input"}}],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 2},
+        },
+    ])
+
+    class FakeResponse:
+        status = 200
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def raise_for_status(self):
+            pass
+
+        async def json(self):
+            return self.payload
+
+    class FakeProviderSession(FakeClientSession):
+        def post(self, url, **kwargs):
+            requests.append(kwargs["json"])
+            return FakeResponse(next(provider_responses))
+
+    monkeypatch.setattr(executor.aiohttp, "ClientSession", FakeProviderSession)
+    monkeypatch.setattr(config, "AI_PROVIDER", "openai-compatible")
+    monkeypatch.setattr(config, "AI_BASE_URL", "https://provider.test/v1")
+    monkeypatch.setattr(config, "AI_MODEL", "test-model")
+    monkeypatch.setattr(config, "AI_API_KEY", "")
+    monkeypatch.setattr(response, "detect_language_code", lambda text: "en")
+
+    reopened = JobStore(database)
+    original_complete = reopened.complete_job
+
+    def record_completion(*args, **kwargs):
+        result = original_complete(*args, **kwargs)
+        finished.set()
+        return result
+
+    monkeypatch.setattr(reopened, "complete_job", record_completion)
+    worker = AutomationWorker(reopened, JobRunner(reopened), poll_interval=0.01)
+    worker_task = asyncio.create_task(worker.start())
+    try:
+        await asyncio.wait_for(finished.wait(), timeout=2)
+    finally:
+        await worker.stop()
+        await worker_task
+
+    job = reopened.list_jobs()[0]
+    assert job.source_ref == schedule.id
+    assert job.status == JobStatus.COMPLETED
+    assert job.result == "verified input"
+    assert job.total_tokens == 11
+    assert len(requests) == 2
+    first_tools = {item["function"]["name"] for item in requests[0]["tools"]}
+    assert "read_workspace_file" in first_tools
+    assert "apply_workspace_patch" not in first_tools
+    assert "run_workspace_command" not in first_tools
+    assert "verified input" in requests[1]["messages"][-1]["content"]
+    assert requests[1]["messages"][-1]["tool_call_id"] == "read-1"
+    tool_events = reopened.list_tool_events(job.id)
+    assert len(tool_events) == 1
+    assert tool_events[0].tool_name == "read_workspace_file"
+    assert tool_events[0].status == "finished"
+    assert tool_events[0].tool_call_id == f"{tool_events[0].run_id}:1:1"
+    assert tool_events[0].run_id
+    trace = reopened.list_run_events(tool_events[0].run_id)
+    assert {event["job_id"] for event in trace} == {job.id}
+    assert {event["event_type"] for event in trace} >= {
+        "agent.preparing", "model.requested", "model.completed",
+        "tool.requested", "permission.allowed", "tool.started",
+        "tool.completed", "tool.observed", "agent.completed",
+    }
+    assert {event["tool_call_id"] for event in trace if event["event_type"].startswith("tool.")} == {tool_events[0].tool_call_id}
+    assert any(event.run_id == tool_events[0].run_id for event in reopened.list_events(job.id))
 
 
 async def test_cancelling_scheduled_job_stops_agent_runtime(tmp_path, monkeypatch):

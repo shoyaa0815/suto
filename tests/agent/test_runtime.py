@@ -6,8 +6,11 @@ from agent import AgentRequest, AgentRuntime, RunState, RuntimeHooks
 from agent.limits import ExecutionLimits
 from llm.types import ModelResponse, ModelUsage, ToolCall
 from permissions import PermissionEngine, PermissionPolicy
+from permissions.models import PermissionDecision
+from tools.executor import AuthorizedTool, ToolExecutor
 from tools.registry import FunctionTool, ToolRegistry, ToolValidationError
 from tools.types import ToolResult
+from workflows.storage.store import JobStore
 
 
 class FakeModel:
@@ -36,9 +39,110 @@ def registry(handler=None):
     return tools
 
 
+def allowed_runtime(model, tools, **kwargs):
+    kwargs.setdefault("permissions", PermissionEngine(PermissionPolicy({
+        tool.name: "allow" for tool in tools.list_tools()
+    })))
+    return AgentRuntime(model, tools, **kwargs)
+
+
+@pytest.mark.parametrize("permissions", [
+    None,
+    PermissionEngine(None),
+    PermissionEngine(PermissionPolicy({"test.echo": "deny"})),
+    PermissionEngine(PermissionPolicy({"test.echo": "require_approval"})),
+    PermissionEngine(PermissionPolicy({"test.echo": "unknown"})),
+])
+async def test_runtime_permission_fail_closed_without_explicit_allow(permissions):
+    called = []
+    runtime = AgentRuntime(
+        FakeModel(ModelResponse("", [ToolCall("test.echo", {"value": "x"})])),
+        registry(lambda value: called.append(value)), permissions=permissions,
+    )
+
+    result = await runtime.run(AgentRequest("echo"), [])
+
+    assert result.status == "blocked"
+    assert called == []
+    assert any(event.type == "permission.denied" for event in runtime.events)
+    assert all(event.type != "tool.started" for event in runtime.events)
+
+
+@pytest.mark.parametrize("decision", [
+    None, True, "allow", {"allowed": True},
+    PermissionDecision("yes"), PermissionDecision(True, True),
+])
+async def test_malformed_permission_result_never_executes_tool(decision):
+    class BrokenEngine:
+        def decide(self, action):
+            return decision
+
+    called = []
+    runtime = AgentRuntime(
+        FakeModel(ModelResponse("", [ToolCall("test.echo", {"value": "x"})])),
+        registry(lambda value: called.append(value)), permissions=BrokenEngine(),
+    )
+
+    assert (await runtime.run(AgentRequest("echo"), [])).status == "blocked"
+    assert called == []
+
+
+async def test_non_boolean_authorization_hook_does_not_execute_tool():
+    class AmbiguousHooks(RuntimeHooks):
+        async def authorize(self, name, args):
+            return None
+
+    called = []
+    runtime = allowed_runtime(
+        FakeModel(ModelResponse("", [ToolCall("test.echo", {"value": "x"})])),
+        registry(lambda value: called.append(value)), hooks=AmbiguousHooks(),
+    )
+
+    assert (await runtime.run(AgentRequest("echo"), [])).status == "blocked"
+    assert called == []
+
+
+async def test_tool_executor_requires_grant_from_its_authorization_path():
+    called = []
+    executor = ToolExecutor(registry(lambda value: called.append(value)))
+    prepared = executor.prepare("test.echo", {"value": "x"})
+
+    with pytest.raises(PermissionError, match="authorization is required"):
+        await executor.execute(prepared)
+    with pytest.raises(PermissionError, match="authorization is required"):
+        await executor.execute(AuthorizedTool(prepared, object()))
+    with pytest.raises(PermissionError, match="authorization is required"):
+        executor.authorize(prepared, PermissionDecision(False), True)
+    assert called == []
+
+
+async def test_persistent_trace_excludes_tool_inputs_outputs_and_provider_id(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    job = store.create_job("trace", workspace=str(tmp_path))
+    secret = "private-value-123"
+
+    class StoreEvents(RuntimeHooks):
+        async def on_event(self, event):
+            store.add_run_event(event)
+
+    runtime = allowed_runtime(
+        FakeModel(
+            ModelResponse("", [ToolCall("test.echo", {"value": secret}, secret)]),
+            ModelResponse("done"),
+        ),
+        registry(lambda value: value), hooks=StoreEvents(),
+    )
+    result = await runtime.run(AgentRequest("trace", metadata={"job_id": job.id}), [])
+
+    assert result.status == "completed"
+    events = store.list_run_events(runtime.run_id)
+    assert any(event["event_type"] == "tool.completed" for event in events)
+    assert all(secret not in event["data"] + str(event["tool_call_id"]) for event in events)
+
+
 async def test_final_result_has_usage_session_and_terminal_event():
     model = FakeModel(ModelResponse("hello", usage=ModelUsage(3, 2)))
-    runtime = AgentRuntime(model, registry())
+    runtime = allowed_runtime(model, registry())
 
     result = await runtime.run(AgentRequest("hi", session_id="session-1"), [{"role": "user", "content": "hi"}])
 
@@ -48,7 +152,8 @@ async def test_final_result_has_usage_session_and_terminal_event():
     assert result.usage == {"prompt_tokens": 3, "output_tokens": 2}
     assert runtime.state.status == RunState.COMPLETED
     assert [event.type for event in runtime.events] == [
-        "agent.preparing", "agent.thinking", "agent.completed"
+        "agent.preparing", "agent.thinking", "model.requested",
+        "model.completed", "agent.completed",
     ]
     assert {event.run_id for event in runtime.events} == {runtime.events[0].run_id}
 
@@ -60,7 +165,7 @@ async def test_tool_call_is_validated_executed_and_observed():
         ModelResponse("", [ToolCall("test.echo", {"value": "ok"}, "call-1")]),
         ModelResponse("done"),
     )
-    runtime = AgentRuntime(model, tools)
+    runtime = allowed_runtime(model, tools)
     messages = [{"role": "user", "content": "echo"}]
 
     result = await runtime.run(AgentRequest("echo"), messages)
@@ -80,7 +185,7 @@ async def test_tool_call_is_validated_executed_and_observed():
 async def test_invalid_arguments_never_reach_tool(arguments):
     called = []
     model = FakeModel(ModelResponse("", [ToolCall("test.echo", arguments)]))
-    runtime = AgentRuntime(model, registry(lambda **kwargs: called.append(kwargs)))
+    runtime = allowed_runtime(model, registry(lambda **kwargs: called.append(kwargs)))
 
     result = await runtime.run(AgentRequest("echo"), [])
 
@@ -99,7 +204,7 @@ async def test_invalid_arguments_are_rejected_before_permission_check():
             return True
 
     hooks = RecordAuthorization()
-    runtime = AgentRuntime(
+    runtime = allowed_runtime(
         FakeModel(ModelResponse("", [ToolCall("test.echo", {"value": 42})])),
         registry(), hooks=hooks,
     )
@@ -129,7 +234,7 @@ async def test_registered_tool_is_available_without_runtime_changes():
         ModelResponse("", [ToolCall("test.upper", {"text": "hello"}, "call-2")]),
         ModelResponse("done"),
     )
-    runtime = AgentRuntime(model, tools)
+    runtime = allowed_runtime(model, tools)
 
     result = await runtime.run(AgentRequest("upper"), [])
 
@@ -148,7 +253,7 @@ async def test_permission_hook_cannot_change_validated_execution_arguments():
             return True
 
     called = []
-    runtime = AgentRuntime(
+    runtime = allowed_runtime(
         FakeModel(
             ModelResponse("", [ToolCall("test.echo", {"value": "safe"})]),
             ModelResponse("done"),
@@ -164,7 +269,7 @@ async def test_permission_hook_cannot_change_validated_execution_arguments():
 async def test_tool_result_failure_cannot_be_wrapped_as_success():
     tools = registry(lambda value: ToolResult(False, "rejected", error="write rejected"))
     model = FakeModel(ModelResponse("", [ToolCall("test.echo", {"value": "x"})]))
-    runtime = AgentRuntime(model, tools)
+    runtime = allowed_runtime(model, tools)
     messages = []
 
     result = await runtime.run(AgentRequest("echo"), messages)
@@ -177,21 +282,21 @@ async def test_tool_result_failure_cannot_be_wrapped_as_success():
 
 async def test_unknown_tool_and_denied_tool_do_not_execute():
     called = []
-    unknown = AgentRuntime(FakeModel(ModelResponse("", [ToolCall("missing", {})])), registry())
+    unknown = allowed_runtime(FakeModel(ModelResponse("", [ToolCall("missing", {})])), registry())
     assert (await unknown.run(AgentRequest("x"), [])).status == "blocked"
 
     class Deny(RuntimeHooks):
         async def authorize(self, name, args):
             return False
 
-    denied = AgentRuntime(
+    denied = allowed_runtime(
         FakeModel(ModelResponse("", [ToolCall("test.echo", {"value": "x"})])),
         registry(lambda **kwargs: called.append(kwargs)), hooks=Deny(),
     )
     assert (await denied.run(AgentRequest("x"), [])).status == "blocked"
     assert called == []
 
-    policy_denied = AgentRuntime(
+    policy_denied = allowed_runtime(
         FakeModel(ModelResponse("", [ToolCall("test.echo", {"value": "x"})])),
         registry(lambda **kwargs: called.append(kwargs)),
         permissions=PermissionEngine(PermissionPolicy({"test.echo": "deny"})),
@@ -205,7 +310,7 @@ async def test_tool_failure_and_iteration_limit_cannot_claim_success():
     def fail(value):
         raise RuntimeError("broken")
 
-    failing = AgentRuntime(
+    failing = allowed_runtime(
         FakeModel(ModelResponse("", [ToolCall("test.echo", {"value": "x"})])),
         registry(fail),
     )
@@ -214,7 +319,7 @@ async def test_tool_failure_and_iteration_limit_cannot_claim_success():
     assert failure.error == "tool failed: test.echo"
     assert failing.state.status == RunState.FAILED
 
-    looping = AgentRuntime(
+    looping = allowed_runtime(
         FakeModel(ModelResponse("", [ToolCall("test.echo", {"value": "x"})])),
         registry(), limits=ExecutionLimits(max_iterations=1),
     )
@@ -224,7 +329,7 @@ async def test_tool_failure_and_iteration_limit_cannot_claim_success():
 
 
 async def test_model_error_and_cancellation_record_terminal_state():
-    failing = AgentRuntime(FakeModel(RuntimeError("model unavailable")), registry())
+    failing = allowed_runtime(FakeModel(RuntimeError("model unavailable")), registry())
     with pytest.raises(RuntimeError, match="model unavailable"):
         await failing.run(AgentRequest("x"), [])
     assert failing.state.status == RunState.FAILED
@@ -236,7 +341,7 @@ async def test_model_error_and_cancellation_record_terminal_state():
             started.set()
             await asyncio.Event().wait()
 
-    waiting = AgentRuntime(WaitingModel(), registry())
+    waiting = allowed_runtime(WaitingModel(), registry())
     task = asyncio.create_task(waiting.run(AgentRequest("x"), []))
     await asyncio.wait_for(started.wait(), timeout=1)
     task.cancel()
@@ -249,7 +354,7 @@ async def test_tool_timeout_and_approval_keep_correct_terminal_states():
     async def wait_forever(value):
         await asyncio.Event().wait()
 
-    timed_out = AgentRuntime(
+    timed_out = allowed_runtime(
         FakeModel(ModelResponse("", [ToolCall("test.echo", {"value": "x"})])),
         registry(wait_forever),
         limits=ExecutionLimits(tool_timeout_seconds=0.01),
@@ -264,7 +369,7 @@ async def test_tool_timeout_and_approval_keep_correct_terminal_states():
     def ask_approval(value):
         raise ApprovalNeeded()
 
-    approving = AgentRuntime(
+    approving = allowed_runtime(
         FakeModel(ModelResponse("", [ToolCall("test.echo", {"value": "x"})])),
         registry(ask_approval),
         passthrough_exceptions=(ApprovalNeeded,),
@@ -272,6 +377,7 @@ async def test_tool_timeout_and_approval_keep_correct_terminal_states():
     with pytest.raises(ApprovalNeeded):
         await approving.run(AgentRequest("x"), [])
     assert approving.state.status == RunState.WAITING_FOR_APPROVAL
+    assert any(event.type == "permission.approval_required" for event in approving.events)
 
 
 def test_registry_rejects_duplicates_and_enforces_nested_schema():

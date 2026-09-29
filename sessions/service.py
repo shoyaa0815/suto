@@ -28,5 +28,6 @@ class SessionService:
             max_chars=self.budget.max_history_chars,
         ))
 
-    def append(self, session_id: str, user_id: str, role: str, content: str):
-        return self.store.append(session_id, user_id, role, content)
+    def append(self, session_id: str, user_id: str, role: str, content: str,
+               metadata: dict | None = None):
+        return self.store.append(session_id, user_id, role, content, metadata)

@@ -446,6 +446,7 @@ class JobStore(
             elapsed_seconds=row["elapsed_seconds"],
             total_tokens=row["total_tokens"],
             created_at=row["created_at"],
+            run_id=row["run_id"],
         )
 
     @staticmethod
@@ -462,6 +463,8 @@ class JobStore(
             result_size=row["result_size"],
             error=row["error"],
             created_at=row["created_at"],
+            run_id=row["run_id"],
+            tool_call_id=row["tool_call_id"],
         )
 
     @staticmethod
@@ -595,6 +598,7 @@ class JobStore(
         if mode != "agent":
             raise ValueError("only agent mode is supported")
         options = validate_options(options)
+        options.setdefault("sandbox", "process")
         job_id = f"job_{uuid4().hex[:8]}"
         created_at = _now()
         with self._connect() as connection:
@@ -690,8 +694,8 @@ class JobStore(
                 """
                 INSERT INTO job_events (
                     job_id, event_type, detail, elapsed_seconds,
-                    total_tokens, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    total_tokens, created_at, run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -700,8 +704,40 @@ class JobStore(
                     float(update.get("elapsed_seconds", 0)),
                     int(update.get("total_tokens", 0)),
                     _now(),
+                    update.get("run_id"),
                 ),
             )
+
+    def add_run_event(self, event) -> None:
+        """Persist the runtime's safe metadata without copying prompts or observations."""
+        safe_keys = {"iteration", "prompt_tokens", "output_tokens", "tool_calls", "status", "tool_name", "error_type"}
+        data = {key: value for key, value in event.data.items() if key in safe_keys}
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO run_events(event_id,run_id,job_id,session_id,parent_run_id,"
+                "tool_call_id,event_type,data,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    event.event_id, event.run_id, event.job_id, event.session_id,
+                    event.parent_run_id, event.tool_call_id, event.type,
+                    json.dumps(redact_value(data), ensure_ascii=False, sort_keys=True),
+                    event.timestamp.isoformat(),
+                ),
+            )
+
+    def list_run_events(self, run_id: str) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM run_events WHERE run_id=? ORDER BY rowid", (run_id,)
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def latest_run_id(self, job_id: str) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT run_id FROM run_events WHERE job_id=? ORDER BY rowid DESC LIMIT 1",
+                (job_id,),
+            ).fetchone()
+        return row["run_id"] if row is not None else None
 
     def list_events(self, job_id: str, limit: int = 50) -> list[JobEvent]:
         safe_limit = min(max(int(limit), 1), 200)
@@ -734,8 +770,8 @@ class JobStore(
                 """
                 INSERT INTO tool_events (
                     job_id, tool_name, arguments, status, elapsed_seconds,
-                    result_size, error, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    result_size, error, created_at, run_id, tool_call_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -746,6 +782,8 @@ class JobStore(
                     int(event.get("result_size", 0)),
                     redact_text(event["error"]) if event.get("error") else None,
                     _now(),
+                    event.get("run_id"),
+                    event.get("tool_call_id"),
                 ),
             )
 

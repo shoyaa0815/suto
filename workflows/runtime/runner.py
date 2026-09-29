@@ -188,6 +188,7 @@ class JobRunner:
             )
             if not authorized:
                 raise ApprovalRequired(approval.id, approval.action_summary)
+            return True
 
         try:
             if checkpoint_error := self._checkpoint_error(job):
@@ -292,6 +293,7 @@ class JobRunner:
                                 "source": job.source,
                                 "source_ref": job.source_ref,
                                 "parent_id": job.parent_id,
+                                "parent_run_id": self.store.latest_run_id(job.parent_id) if job.parent_id else None,
                             },
                         )
                         result = await asyncio.wait_for(

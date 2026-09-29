@@ -189,7 +189,10 @@ leave Phase 9 capabilities disabled.
 /run --workspace /path/to/project --allow-command --sandbox bwrap run pytest
 ```
 
-`process` preserves the existing allowlist/process-group behavior. The optional
+New jobs persist their selected sandbox mode explicitly; omitted configuration
+means `process` for compatibility with older jobs. `process` preserves the
+existing allowlist/process-group behavior and does not provide a mount or
+network namespace. The optional
 `bwrap` backend requires Linux, [Bubblewrap](https://github.com/containers/bubblewrap),
 `prlimit`, and a host that permits unprivileged user namespaces. It fails closed
 without falling back if the backend is missing or namespace creation fails.
@@ -254,7 +257,7 @@ not included.
 
 ```bash
 venv/bin/pytest -q
-venv/bin/pytest tests/tools/test_sandbox.py -q
+venv/bin/pytest -q -rs tests/tools/test_sandbox.py
 ```
 
 Tests cover migration rollback/backup, process locks, quotas, shutdown,
@@ -263,4 +266,8 @@ staleness, subtask joins/cancellation/budgets, and real namespace behavior.
 Embedding protocol and semantic ranking use deterministic test doubles; a live
 embedding model must be configured separately. Namespace tests skip when the
 execution environment forbids namespace creation; run them on the deployment
-host to validate filesystem/network isolation and descendant cleanup.
+host to validate filesystem/network isolation and descendant cleanup. On a
+supported Linux host, install `bwrap` and `prlimit`, permit unprivileged user
+namespaces, and run the command above outside a restrictive test container.
+A skip means namespace isolation was not verified on that host. The `bwrap`
+setting never falls back to `process` when setup or namespace creation fails.

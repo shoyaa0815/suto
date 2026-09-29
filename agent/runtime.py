@@ -11,6 +11,7 @@ from uuid import uuid4
 from llm.base import Model
 from llm.types import ModelRequest, ModelResponse, ToolCall
 from permissions import PermissionEngine, PermissionPolicy
+from permissions.models import PermissionDecision
 from tools.executor import ToolExecutor, ToolNotFoundError
 from tools.registry import ToolRegistry, ToolValidationError
 
@@ -52,6 +53,9 @@ class RuntimeHooks:
     async def on_final(self, text: str, completed_tools: set[str]) -> str | AgentResult:
         return text
 
+    async def on_tool_exchange(self, assistant: dict[str, Any], observations: list[dict[str, Any]]) -> None:
+        pass
+
 
 class AgentRuntime:
     def __init__(
@@ -71,16 +75,29 @@ class AgentRuntime:
         self.hooks = hooks or RuntimeHooks()
         # Registration limits which tools exist; this policy governs requests
         # for those tools without coupling the runtime to concrete tool names.
-        self.permissions = permissions or PermissionEngine(PermissionPolicy(default="allow"))
+        self.permissions = permissions if permissions is not None else PermissionEngine(PermissionPolicy())
         self.passthrough_exceptions = passthrough_exceptions
         self.state = AgentState()
         self.events: list[AgentEvent] = []
+        self.run_id: str | None = None
+        self.current_tool_call_id: str | None = None
+        self.request: AgentRequest | None = None
+
+    async def _emit(self, kind: str, run_id: str, session_id: str | None,
+                    data: dict[str, Any] | None = None) -> None:
+        metadata = self.request.metadata if self.request is not None else {}
+        event = AgentEvent(
+            run_id, session_id, kind, data or {},
+            job_id=metadata.get("job_id"),
+            parent_run_id=metadata.get("parent_run_id"),
+            tool_call_id=self.current_tool_call_id,
+        )
+        self.events.append(event)
+        await self.hooks.on_event(event)
 
     async def _transition(self, target: RunState, run_id: str, session_id: str | None) -> None:
         self.state.transition(target)
-        event = AgentEvent(run_id, session_id, f"agent.{target.value}")
-        self.events.append(event)
-        await self.hooks.on_event(event)
+        await self._emit(f"agent.{target.value}", run_id, session_id)
 
     async def _wait(self, awaitable: Awaitable[Any], timeout: float | None) -> Any:
         if timeout is not None:
@@ -97,6 +114,9 @@ class AgentRuntime:
         self.state = AgentState()
         self.events = []
         run_id = uuid4().hex
+        self.run_id = run_id
+        self.request = request
+        self.current_tool_call_id = None
         session_id = request.session_id
         usage = {"prompt_tokens": 0, "output_tokens": 0}
         tool_counts: dict[str, int] = {}
@@ -109,17 +129,28 @@ class AgentRuntime:
                 if reason:
                     return await self._stop("blocked", reason, reason, run_id, session_id, usage)
                 await self._transition(RunState.THINKING, run_id, session_id)
+                await self._emit("model.requested", run_id, session_id, {"iteration": iteration})
                 await self.hooks.on_model_requested(iteration)
                 model_request = ModelRequest(
                     messages=messages,
                     available_tools=self.tools.export_model_schemas(),
                     generation_options=generation_options or {},
                 )
-                response = await self._wait(
-                    self.model.generate(model_request), self.limits.model_timeout_seconds
-                )
+                try:
+                    response = await self._wait(
+                        self.model.generate(model_request), self.limits.model_timeout_seconds
+                    )
+                except Exception as error:
+                    await self._emit("model.failed", run_id, session_id, {"error_type": type(error).__name__})
+                    raise
                 usage["prompt_tokens"] += response.usage.prompt_tokens
                 usage["output_tokens"] += response.usage.output_tokens
+                await self._emit("model.completed", run_id, session_id, {
+                    "iteration": iteration,
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "output_tokens": response.usage.output_tokens,
+                    "tool_calls": len(response.tool_calls),
+                })
                 await self.hooks.on_model(response, iteration)
                 reason = self.hooks.limit_reason(self.state.tool_calls)
                 if reason:
@@ -142,14 +173,19 @@ class AgentRuntime:
                     await self._transition(RunState.COMPLETED, run_id, session_id)
                     return AgentResult(session_id, finalized, "completed", usage)
 
-                messages.append(response.assistant_message or {
+                assistant_message = response.assistant_message or {
                     "role": "assistant", "content": response.text or "", "tool_calls": [
                         {"id": call.id, "function": {"name": call.name, "arguments": call.arguments}}
                         for call in response.tool_calls
                     ],
-                })
-                for call in response.tool_calls:
+                }
+                messages.append(assistant_message)
+                observations: list[dict[str, Any]] = []
+                for call_index, call in enumerate(response.tool_calls, start=1):
+                    # Trace IDs are internal so provider-supplied IDs never enter audit tables.
+                    self.current_tool_call_id = f"{run_id}:{iteration}:{call_index}"
                     await self._transition(RunState.ACTION_REQUESTED, run_id, session_id)
+                    await self._emit("tool.requested", run_id, session_id, {"iteration": iteration})
                     self.state.tool_calls += 1
                     reason = self.hooks.limit_reason(self.state.tool_calls, pending_tool=True)
                     if reason:
@@ -168,21 +204,44 @@ class AgentRuntime:
                     try:
                         prepared = self.tool_executor.prepare(call.name, call.arguments)
                     except ToolNotFoundError:
+                        await self._emit("tool.failed", run_id, session_id, {"status": "unknown"})
                         reason = f"tool is not available for this request: {call.name}"
                         await self.hooks.on_tool_finished(call, "blocked", reason, reason, 0)
                         return await self._stop("blocked", reason, reason, run_id, session_id, usage)
                     except ToolValidationError as error:
+                        await self._emit("tool.failed", run_id, session_id, {"status": "invalid_arguments"})
                         reason = f"invalid tool arguments: {call.name}: {error}"
                         await self.hooks.on_tool_finished(call, "failed", reason, reason, 0)
                         return await self._stop("failed", f"tool failed: {call.name}", reason, run_id, session_id, usage)
-                    decision = self.permissions.decide(call.name)
-                    if not decision.allowed or not await self.hooks.authorize(call.name, deepcopy(prepared.arguments)):
+                    await self._emit("permission.requested", run_id, session_id)
+                    try:
+                        decision = self.permissions.decide(call.name)
+                    except Exception:
+                        decision = PermissionDecision(False, reason="permission decision failed")
+                    if (
+                        not isinstance(decision, PermissionDecision)
+                        or type(decision.allowed) is not bool
+                        or type(decision.requires_confirmation) is not bool
+                        or not isinstance(decision.reason, str)
+                        or (decision.allowed and decision.requires_confirmation)
+                    ):
+                        decision = PermissionDecision(False, reason="invalid permission decision")
+                    authorized = False
+                    if decision.allowed is True and decision.requires_confirmation is False:
+                        try:
+                            authorized = await self.hooks.authorize(call.name, deepcopy(prepared.arguments)) is True
+                        except Exception:
+                            authorized = False
+                    if not authorized:
+                        await self._emit("permission.denied", run_id, session_id)
                         reason = (
                             decision.reason if not decision.allowed else
                             f"tool is not allowed for this request: {call.name}"
                         )
                         await self.hooks.on_tool_finished(call, "blocked", reason, reason, 0)
                         return await self._stop("blocked", reason, reason, run_id, session_id, usage)
+                    granted = self.tool_executor.authorize(prepared, decision, authorized)
+                    await self._emit("permission.allowed", run_id, session_id)
                     early_result = await self.hooks.on_tool_requested(call, iteration)
                     if early_result is not None:
                         target = RunState.WAITING_FOR_INPUT if early_result.status == "waiting_input" else RunState.FAILED
@@ -192,14 +251,20 @@ class AgentRuntime:
                     if reason:
                         return await self._stop("blocked", reason, reason, run_id, session_id, usage)
                     await self._transition(RunState.EXECUTING, run_id, session_id)
+                    await self._emit("tool.started", run_id, session_id, {"tool_name": call.name})
                     try:
                         execution = await self.tool_executor.execute(
-                            prepared,
+                            granted,
                             timeout=self.limits.tool_timeout_seconds,
                             wait=self._wait,
                             passthrough_exceptions=self.passthrough_exceptions,
                         )
                     except self.passthrough_exceptions as error:
+                        await self._emit(
+                            "permission.approval_required" if hasattr(error, "approval_id") else "tool.failed",
+                            run_id, session_id,
+                            {} if hasattr(error, "approval_id") else {"status": "blocked"},
+                        )
                         await self._transition(
                             RunState.WAITING_FOR_APPROVAL if hasattr(error, "approval_id") else RunState.FAILED,
                             run_id, session_id,
@@ -207,6 +272,7 @@ class AgentRuntime:
                         raise
                     result = execution.result
                     if not result.ok:
+                        await self._emit("tool.failed", run_id, session_id, {"status": execution.status})
                         reason = result.error or f"tool failed: {call.name}"
                         await self.hooks.on_tool_finished(
                             call, execution.status, result.content, reason, execution.elapsed_seconds
@@ -218,6 +284,7 @@ class AgentRuntime:
                             execution.reported_error or reason, run_id, session_id, usage,
                         )
                     completed_tools.add(call.name)
+                    await self._emit("tool.completed", run_id, session_id, {"tool_name": call.name})
                     await self.hooks.on_tool_finished(
                         call, "finished", result.content, None, execution.elapsed_seconds
                     )
@@ -226,6 +293,10 @@ class AgentRuntime:
                     if call.id:
                         observation["tool_call_id"] = call.id
                     messages.append(observation)
+                    observations.append(observation)
+                    await self._emit("tool.observed", run_id, session_id)
+                await self.hooks.on_tool_exchange(assistant_message, observations)
+                self.current_tool_call_id = None
                 # The next model call starts from the latest observation.
             reason = f"stopped after {self.limits.max_iterations} tool loops"
             return await self._stop("failed", "no response from ai", reason, run_id, session_id, usage)

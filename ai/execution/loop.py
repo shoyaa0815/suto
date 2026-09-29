@@ -8,6 +8,8 @@ from agent.limits import ExecutionLimits
 from application.modes import CLARIFICATIONS_ENABLED
 from assistant.tasks.tools import REMINDER_CREATION_TOOL_NAMES, reminder_creation_requested
 from planning import Planner, Replanner
+from permissions import PermissionEngine, PermissionPolicy
+from sessions import SessionStore
 from tools.clarification import parse_request as parse_clarification_request
 from tools.registry import FunctionTool, ToolRegistry
 from workflows.runtime.context import ApprovalRequired, ExecutionLimitExceeded
@@ -20,6 +22,15 @@ from ..tooling.events import audit_tool_arguments, emit_tool_event, tool_detail
 class _LegacyHooks(RuntimeHooks):
     def __init__(self, owner: "ModelToolLoop") -> None:
         self.owner = owner
+
+    async def on_event(self, event):
+        self.owner.progress.run_id = event.run_id
+        context = self.owner.assistant_context
+        store = context.store if context is not None else (
+            self.owner.execution_context.plan_store if self.owner.execution_context is not None else None
+        )
+        if store is not None:
+            store.add_run_event(event)
 
     async def wait(self, awaitable):
         return await self.owner.guard.wait(awaitable)
@@ -71,6 +82,8 @@ class _LegacyHooks(RuntimeHooks):
             self.owner.tool_event_callback,
             {
                 "job_id": self.owner.execution_context.job_id if self.owner.execution_context else None,
+                "run_id": self.owner.runtime.run_id,
+                "tool_call_id": self.owner.runtime.current_tool_call_id,
                 "tool_name": call.name,
                 "arguments": arguments,
                 "status": status,
@@ -82,6 +95,13 @@ class _LegacyHooks(RuntimeHooks):
         if status == "finished":
             await self.owner.progress.emit(
                 "tool_done", f"{tool_detail(call.name, call.arguments)}: finished"
+            )
+
+    async def on_tool_exchange(self, assistant, observations):
+        context = self.owner.assistant_context
+        if context is not None and context.conversation_id:
+            SessionStore(context.store).append_exchange(
+                context.conversation_id, context.user_id, assistant, observations
             )
 
     async def on_final(self, text, completed_tools):
@@ -195,6 +215,7 @@ class ModelToolLoop:
                 repeated_tool_call_limit=(job_limits.repeated_tool_call_limit if job_limits else None),
             ),
             hooks=_LegacyHooks(self),
+            permissions=PermissionEngine(PermissionPolicy({name: "allow" for name in self.tools})),
             passthrough_exceptions=(ApprovalRequired, ExecutionLimitExceeded),
         )
         result = await self.runtime.run(

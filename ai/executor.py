@@ -175,17 +175,15 @@ async def execute_local_ai(
         )
     except aiohttp.ClientConnectorError as error:
         outcome = "AI server connection failed"
-        config.debug(f"[ai] connection failed: {error!r}")
+        config.debug(f"[ai] connection failed: {type(error).__name__}")
         return build_result(
             "can't connect check ai server",
             status="failed",
             error=outcome,
         )
-    except (asyncio.TimeoutError, TimeoutError) as error:
+    except (asyncio.TimeoutError, TimeoutError):
         outcome = f"timed out after {config.AI_TIMEOUT_SECONDS}s"
-        config.debug(
-            f"[ai] timeout after {config.AI_TIMEOUT_SECONDS}s: {error!r}"
-        )
+        config.debug(f"[ai] timeout after {config.AI_TIMEOUT_SECONDS}s")
         if prepared.reply_language.code == "th":
             text = "AI ใช้เวลาประมวลผลนานเกินไป กรุณาลองใหม่อีกครั้ง"
         else:
@@ -193,9 +191,14 @@ async def execute_local_ai(
         return build_result(text, status="timed_out", error=outcome)
     except Exception as error:
         outcome = f"failed: {type(error).__name__}"
-        config.debug(f"[ai] {type(error).__name__}: {error!r}")
+        config.debug(f"[ai] {type(error).__name__}")
+        text = (
+            "คำขอ AI ล้มเหลว กรุณาลองใหม่อีกครั้ง"
+            if prepared.reply_language.code == "th"
+            else "AI request failed. Please try again."
+        )
         return build_result(
-            f"error: {error}",
+            text,
             status="failed",
             error=outcome,
         )

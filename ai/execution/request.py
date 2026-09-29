@@ -102,7 +102,7 @@ def _personal_context(context: AssistantContext | None) -> str:
     }
     if hasattr(context.store, "get_session_summary") and context.conversation_id:
         summary_obj = context.store.get_session_summary(context.conversation_id)
-        if summary_obj and summary_obj.summary:
+        if summary_obj and summary_obj.user_id == context.user_id and summary_obj.summary:
             payload["session_summary"] = ContextManager().summary(summary_obj.summary)
 
     return json.dumps(

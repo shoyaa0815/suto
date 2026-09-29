@@ -15,7 +15,7 @@ def _context(tmp_path, *, allow_write=False):
         "job_test",
         tmp_path,
         allowed_tools=allowed,
-        approval_callback=lambda *args: None,
+        approval_callback=lambda *args: True,
     )
 
 
@@ -64,7 +64,7 @@ async def test_command_runs_check_and_persists_audit(tmp_path):
         tmp_path,
         allowed_tools=COMMAND_TOOLS,
         command_event_callback=lambda event: store.add_command_event(job.id, event),
-        approval_callback=lambda *args: None,
+        approval_callback=lambda *args: True,
     )
     tool = build_command_tools(
         context,

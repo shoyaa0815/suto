@@ -4,11 +4,15 @@ import sqlite3
 
 import pytest
 
+import ai
 from assistant.context import AssistantContext
+from ai.execution import loop
 from ai.execution.request import prepare_request
 from application.language import ReplyLanguage
 from context import Compactor, ContextBudget, ContextManager
+from llm.types import ModelResponse, ToolCall
 from sessions import SessionService, SessionStore
+from tests.support.ai_helpers import FakeClientSession
 from workflows.storage.store import JobStore
 
 
@@ -99,6 +103,18 @@ def test_context_budget_bounds_recent_history():
     ]
 
 
+def test_context_keeps_complete_tool_exchanges_and_drops_orphans():
+    context = ContextManager()
+    tool_call = {"role": "assistant", "content": "", "tool_calls": [
+        {"function": {"name": "get_current_datetime", "arguments": {}}},
+    ]}
+    tool_result = {"role": "tool", "content": "12:00"}
+    assert context.history([tool_call, tool_result]) == [tool_call, tool_result]
+    assert context.history([tool_result, {"role": "assistant", "content": "done"}]) == [
+        {"role": "assistant", "content": "done"},
+    ]
+
+
 def test_compactor_keeps_latest_excerpt_within_budget():
     budget = ContextBudget(max_summary_chars=80)
     summary = Compactor(budget).compact(
@@ -161,3 +177,117 @@ def test_existing_summary_migrates_with_unprocessed_cursor(tmp_path):
     summary = migrated.get_session_summary(session.id)
     assert summary.summary == "previous note"
     assert summary.compacted_through_message_id == 0
+
+
+def test_version_12_messages_migrate_without_losing_history(tmp_path, monkeypatch):
+    from workflows.storage import migrations
+
+    database = tmp_path / "legacy.db"
+    monkeypatch.setattr(migrations, "SCHEMA_VERSION", 12)
+    old = JobStore(database)
+    user = old.resolve_channel_identity("cli", "local")
+    session = old.get_or_create_conversation(user.id, "cli", "local")
+    with old._connect() as db:
+        first = db.execute(
+            "INSERT INTO messages(conversation_id,role,content,created_at) VALUES (?,?,?,?)",
+            (session.id, "user", "before migration", "2026-01-01T00:00:00+00:00"),
+        ).lastrowid
+        db.execute(
+            "INSERT INTO messages(conversation_id,role,content,created_at) VALUES (?,?,?,?)",
+            (session.id, "assistant", "kept reply", "2026-01-01T00:00:01+00:00"),
+        )
+    monkeypatch.setattr(migrations, "SCHEMA_VERSION", 13)
+
+    upgraded = JobStore(database)
+
+    messages = upgraded.list_messages(session.id)
+    assert [item.content for item in messages] == ["before migration", "kept reply"]
+    assert messages[0].id == first
+    assert [item.role for item in messages] == ["user", "assistant"]
+    assert all(item.metadata == "{}" for item in messages)
+    assert upgraded.add_message(session.id, "tool", "observed", {"tool_call_id": "call-1"}).role == "tool"
+    assert SessionService(SessionStore(upgraded)).append(
+        session.id, user.id, "system", "trusted context"
+    ).role == "system"
+    with upgraded._connect() as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 13
+
+
+def test_partial_message_migration_refuses_to_claim_success(tmp_path, monkeypatch):
+    from workflows.storage import migrations
+
+    database = tmp_path / "partial.db"
+    monkeypatch.setattr(migrations, "SCHEMA_VERSION", 12)
+    JobStore(database)
+    with sqlite3.connect(database) as db:
+        db.execute("ALTER TABLE messages ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
+    monkeypatch.setattr(migrations, "SCHEMA_VERSION", 13)
+
+    with pytest.raises(RuntimeError, match="partial core trace migration"):
+        JobStore(database)
+    with sqlite3.connect(database) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 12
+
+
+async def test_tool_exchange_persists_and_reconstructs_after_restart(tmp_path, monkeypatch):
+    database = tmp_path / "suto.db"
+    store = JobStore(database)
+    user = store.resolve_channel_identity("cli", "local")
+    service = SessionService(SessionStore(store))
+    session = service.resume(user.id, "cli", "local")
+    prompt = "What time is it?"
+    history = service.before_prompt(session.id, user.id)
+    service.append(session.id, user.id, "user", prompt)
+
+    class FakeModel:
+        def __init__(self):
+            self.responses = iter([
+                ModelResponse("", [ToolCall("get_current_datetime", {}, "clock-1")],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": [{
+                        "id": "clock-1", "type": "function",
+                        "function": {"name": "get_current_datetime", "arguments": {}},
+                    }]}),
+                ModelResponse("It is noon."),
+            ])
+
+        async def generate(self, request):
+            return next(self.responses)
+
+    monkeypatch.setattr(ai.client.aiohttp, "ClientSession", FakeClientSession)
+    monkeypatch.setattr(loop, "build_model_router", lambda session: FakeModel())
+    monkeypatch.setattr("ai.tooling.assembly.get_current_datetime", lambda timezone: "12:00")
+    monkeypatch.setattr(ai.response, "detect_language_code", lambda text: "en")
+    result = await ai.execute_local_ai(
+        prompt,
+        reply_language=ReplyLanguage("en", "English", "test"),
+        conversation_history=history,
+        assistant_context=AssistantContext(store, user.id, session.id),
+    )
+    assert result.status == "completed"
+    service.append(session.id, user.id, "assistant", result.text)
+
+    reopened = JobStore(database)
+    resumed = SessionService(SessionStore(reopened))
+    assert resumed.resume(user.id, "cli", "local").id == session.id
+    reconstructed = resumed.before_prompt(session.id, user.id)
+    assert [item["role"] for item in reconstructed] == [
+        "user", "assistant", "tool", "assistant",
+    ]
+    assert reconstructed[1]["tool_calls"][0]["id"] == "clock-1"
+    assert reconstructed[2] == {
+        "role": "tool", "content": "12:00", "tool_call_id": "clock-1",
+    }
+    prepared = prepare_request(
+        "Continue", "agent", None, ReplyLanguage("en", "English", "test"),
+        "", reconstructed, AssistantContext(reopened, user.id, session.id), None,
+    )
+    assert prepared.messages[1:-1] == reconstructed
+    with reopened._connect() as db:
+        run_id = db.execute("SELECT run_id FROM run_events WHERE session_id=? LIMIT 1", (session.id,)).fetchone()[0]
+    events = reopened.list_run_events(run_id)
+    assert {item["event_type"] for item in events} >= {
+        "model.requested", "model.completed", "tool.requested",
+        "permission.allowed", "tool.completed", "tool.observed", "agent.completed",
+    }
+    assert {item["tool_call_id"] for item in events if item["event_type"].startswith("tool.")} == {f"{run_id}:1:1"}
+    assert "12:00" not in "".join(item["data"] for item in events)

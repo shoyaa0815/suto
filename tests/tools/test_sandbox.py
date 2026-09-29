@@ -19,6 +19,18 @@ def test_missing_namespace_backend_fails_closed(tmp_path, monkeypatch):
         sandbox_command(context, ['true'], str(tmp_path), 10)
 
 
+def test_sandbox_mode_is_persisted_and_invalid_mode_fails_before_execution(tmp_path):
+    from workflows.storage.store import JobStore
+
+    store = JobStore(tmp_path / 'suto.db')
+    default = store.create_job('inspect', workspace=str(tmp_path))
+    isolated = store.create_job('inspect again', workspace=str(tmp_path), options={'sandbox': 'bwrap'})
+    assert store.get_job(default.id).options['sandbox'] == 'process'
+    assert store.get_job(isolated.id).options['sandbox'] == 'bwrap'
+    with pytest.raises(ValueError, match='sandbox must'):
+        ExecutionContext('invalid', tmp_path, sandbox='unknown')
+
+
 def test_sandbox_runtime_boundary(tmp_path):
     if not shutil.which('bwrap'):
         pytest.skip('bubblewrap is not installed')
@@ -67,7 +79,7 @@ async def test_approved_bwrap_command_and_timeout_kill_descendants(tmp_path):
     if not shutil.which('bwrap'):
         pytest.skip('bubblewrap is not installed')
     context = ExecutionContext('sandbox', tmp_path, allowed_tools=COMMAND_TOOLS | WRITE_WORKSPACE_TOOLS,
-                               sandbox='bwrap', approval_callback=lambda *args: None)
+                               sandbox='bwrap', approval_callback=lambda *args: True)
     events = []
     command = build_command_tools(context, events.append)['run_workspace_command']
     (tmp_path / 'test_simple.py').write_text('def test_simple():\n    assert 2 + 2 == 4\n')

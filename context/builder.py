@@ -12,19 +12,51 @@ class ContextManager:
     def __init__(self, budget: ContextBudget | None = None) -> None:
         self.budget = budget or ContextBudget()
 
-    def history(self, items: list[dict[str, str]] | None) -> list[dict[str, str]]:
-        selected: list[dict[str, str]] = []
+    def history(self, items: list[dict] | None) -> list[dict]:
+        selected: list[dict] = []
         used = 0
         for item in reversed((items or [])[-self.budget.max_history_messages:]):
             role = item.get("role")
             content = item.get("content")
-            if role not in {"user", "assistant"} or not isinstance(content, str) or not content:
+            if role not in {"system", "user", "assistant", "tool"} or not isinstance(content, str):
                 continue
-            if used + len(content) > self.budget.max_history_chars:
+            if not content and not (
+                (role == "assistant" and item.get("tool_calls"))
+                or role == "tool"
+            ):
+                continue
+            prepared = {"role": role, "content": content}
+            for key in ("tool_calls", "tool_call_id"):
+                if key in item:
+                    prepared[key] = item[key]
+            metadata = {key: value for key, value in prepared.items() if key not in {"role", "content"}}
+            cost = len(content) + (len(json.dumps(metadata)) if metadata else 0)
+            if used + cost > self.budget.max_history_chars:
                 break
-            selected.append({"role": role, "content": content})
-            used += len(content)
-        return list(reversed(selected))
+            selected.append(prepared)
+            used += cost
+        history = list(reversed(selected))
+        coherent = []
+        index = 0
+        while index < len(history):
+            item = history[index]
+            calls = item.get("tool_calls") if item["role"] == "assistant" else None
+            if calls:
+                observations = history[index + 1:index + 1 + len(calls)]
+                if len(observations) == len(calls) and all(
+                    observation["role"] == "tool"
+                    and (not call.get("id") or observation.get("tool_call_id") == call["id"])
+                    for call, observation in zip(calls, observations)
+                ):
+                    coherent.extend([item, *observations])
+                    index += 1 + len(calls)
+                    continue
+                index += 1
+                continue
+            if item["role"] != "tool":
+                coherent.append(item)
+            index += 1
+        return coherent
 
     def summary(self, content: str) -> str:
         return content[-self.budget.max_summary_chars:]

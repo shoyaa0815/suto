@@ -27,10 +27,12 @@ def test_permission_decisions_and_exact_approval():
     assert calls == []
 
     engine.require("file.read")
-    engine.require("file.write", approval=request, approval_callback=calls.append)
+    engine.require("file.write", approval=request, approval_callback=lambda approval: calls.append(approval) or True)
     assert calls == [request]
     with pytest.raises(PermissionError, match="approval denied"):
         engine.require("file.write", approval=request, approval_callback=lambda _: False)
+    with pytest.raises(PermissionError, match="approval denied"):
+        engine.require("file.write", approval=request, approval_callback=lambda _: None)
 
 
 def test_invalid_policy_fails_closed():

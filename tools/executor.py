@@ -7,6 +7,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from permissions.models import PermissionDecision
+
 from .base import Tool
 from .registry import ToolRegistry
 from .types import ToolResult
@@ -20,6 +22,12 @@ class ToolNotFoundError(LookupError):
 class PreparedTool:
     tool: Tool
     arguments: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class AuthorizedTool:
+    prepared: PreparedTool
+    issuer: object
 
 
 @dataclass(frozen=True)
@@ -39,6 +47,7 @@ async def _wait(awaitable: Awaitable[ToolResult], timeout: float | None) -> Tool
 class ToolExecutor:
     def __init__(self, registry: ToolRegistry) -> None:
         self.registry = registry
+        self._issuer = object()
 
     def prepare(self, name: str, arguments: Any) -> PreparedTool:
         tool = self.registry.resolve(name)
@@ -46,14 +55,29 @@ class ToolExecutor:
             raise ToolNotFoundError(name)
         return PreparedTool(tool, deepcopy(self.registry.validate(tool, arguments)))
 
+    def authorize(self, prepared: PreparedTool, decision: PermissionDecision,
+                  hook_allowed: bool) -> AuthorizedTool:
+        if (
+            not isinstance(decision, PermissionDecision)
+            or decision.allowed is not True
+            or decision.requires_confirmation is not False
+            or hook_allowed is not True
+            or self.registry.resolve(prepared.tool.name) is not prepared.tool
+        ):
+            raise PermissionError("tool authorization is required")
+        return AuthorizedTool(prepared, self._issuer)
+
     async def execute(
         self,
-        prepared: PreparedTool,
+        authorized: AuthorizedTool,
         *,
         timeout: float | None = None,
         wait: Callable[[Awaitable[ToolResult], float | None], Awaitable[ToolResult]] = _wait,
         passthrough_exceptions: tuple[type[Exception], ...] = (),
     ) -> ToolExecution:
+        if not isinstance(authorized, AuthorizedTool) or authorized.issuer is not self._issuer:
+            raise PermissionError("tool authorization is required")
+        prepared = authorized.prepared
         name = prepared.tool.name
         started = time.perf_counter()
         try:
