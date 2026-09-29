@@ -188,6 +188,7 @@ async def execute_local_ai(
                 guard=guard,
                 build_result=build_result,
                 agent_request=request,
+                skill_registry=skill_registry,
                 mcp_tools={
                     name: tool for name, tool in mcp_manager.allowed_tools().items()
                     if name in prepared.allowed_tools

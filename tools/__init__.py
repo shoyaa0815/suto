@@ -10,6 +10,7 @@
 # outside this package needs to change. The AI executor asks this registry for tools
 # allowed by the active mode instead of exposing every tool globally.
 from .datetime_tool import get_current_datetime
+from .delegation import DELEGATE_SCHEMA
 from .clarification import PROMPT as CLARIFICATION_PROMPT
 from .clarification import SCHEMA as CLARIFICATION_SCHEMA
 from assistant.tasks.tools import build_task_tools
@@ -125,6 +126,7 @@ ALL_TOOLS = {
     "update_step": _workspace_unavailable,
     "revise_plan": _workspace_unavailable,
     "run_workspace_command": _workspace_unavailable,
+    "agent.delegate": _workspace_unavailable,
 }
 
 ALL_TOOL_SCHEMAS = {
@@ -154,6 +156,7 @@ ALL_TOOL_SCHEMAS = {
         UPDATE_STEP_SCHEMA,
         REVISE_PLAN_SCHEMA,
         COMMAND_SCHEMA,
+        {"type": "function", "function": {"name": "agent.delegate", "description": "Delegate one bounded task to a restricted child agent", "parameters": DELEGATE_SCHEMA}},
     ]
 }
 
@@ -182,6 +185,7 @@ ALL_TOOL_GUIDANCE = {
     "update_step": PLANNING_PROMPT,
     "revise_plan": PLANNING_PROMPT,
     "run_workspace_command": COMMAND_PROMPT,
+    "agent.delegate": "Delegate a bounded research, coding, or review task when it helps. Supply only relevant context.",
 }
 
 

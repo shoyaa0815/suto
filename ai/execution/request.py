@@ -86,9 +86,10 @@ def _allowed_tools(
         | PLANNING_TOOL_NAMES
         | COMMAND_TOOL_NAMES
         | ADVANCED_TOOL_NAMES
+        | frozenset({"agent.delegate"})
     )
     if execution_context is None:
-        return allowed_tools - job_scoped_tools
+        return allowed_tools - (job_scoped_tools - {"agent.delegate"})
     allowed_job_tools = job_scoped_tools & execution_context.allowed_tools
     if execution_context.plan_store is None:
         allowed_job_tools = (

@@ -710,7 +710,7 @@ class JobStore(
 
     def add_run_event(self, event) -> None:
         """Persist the runtime's safe metadata without copying prompts or observations."""
-        safe_keys = {"iteration", "prompt_tokens", "output_tokens", "tool_calls", "status", "tool_name", "error_type"}
+        safe_keys = {"iteration", "prompt_tokens", "output_tokens", "tool_calls", "status", "tool_name", "error_type", "child_run_id"}
         data = {key: value for key, value in event.data.items() if key in safe_keys}
         with self._connect() as connection:
             connection.execute(

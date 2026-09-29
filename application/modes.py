@@ -70,6 +70,7 @@ MODE_POLICIES = {
             | PERSONAL_TASK_TOOLS
             | ASSISTANT_MEMORY_TOOLS
             | frozenset({"research"})
+            | frozenset({"agent.delegate"})
         ),
     ),
 }

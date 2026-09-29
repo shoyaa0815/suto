@@ -5,6 +5,7 @@ import json
 
 from agent import AgentRequest, AgentResult, AgentRuntime, RuntimeHooks
 from agent.limits import ExecutionLimits
+from agent.subagents import DELEGATE_NAME, SubAgentManager
 from application.modes import CLARIFICATIONS_ENABLED
 from assistant.tasks.tools import REMINDER_CREATION_TOOL_NAMES, reminder_creation_requested
 from planning import Planner, Replanner
@@ -12,6 +13,7 @@ from permissions import PermissionEngine, PermissionPolicy
 from sessions import SessionStore
 from tools.clarification import parse_request as parse_clarification_request
 from tools.registry import FunctionTool, ToolRegistry
+from skills import builtin_registry
 from workflows.runtime.context import ApprovalRequired, ExecutionLimitExceeded
 
 from .. import config, response
@@ -139,6 +141,7 @@ class ModelToolLoop:
         tool_event_callback, progress, guard, build_result,
         agent_request: AgentRequest,
         mcp_tools=None,
+        skill_registry=None,
     ) -> None:
         self.session = session
         self.messages = messages
@@ -157,6 +160,7 @@ class ModelToolLoop:
         self.guard = guard
         self.build_result = build_result
         self.agent_request = agent_request
+        self.skill_registry = skill_registry or builtin_registry()
         self.outcome = "completed"
         self.runtime = None
         self.plan = None
@@ -224,6 +228,13 @@ class ModelToolLoop:
             })),
             passthrough_exceptions=(ApprovalRequired, ExecutionLimitExceeded),
         )
+        if DELEGATE_NAME in self.tools:
+            manager = SubAgentManager(self.runtime, self.skill_registry)
+            registry.unregister(DELEGATE_NAME)
+            registry.register(FunctionTool(
+                DELEGATE_NAME, "Delegate one bounded task to a restricted child agent",
+                schemas[DELEGATE_NAME]["parameters"], manager.delegate,
+            ))
         result = await self.runtime.run(
             self.agent_request,
             self.messages,

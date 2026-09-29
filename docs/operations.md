@@ -283,6 +283,28 @@ and never creates a SQLite database.
 
 ## Local notifications and verification
 
+### Bounded agent delegation
+
+The `agent.delegate` tool delegates one task to a `research`, `coding`, or
+`review` child. It is available in interactive agent requests unless an active
+Skill excludes it. Jobs must explicitly include `agent.delegate` in their
+allowed tools. The child receives its task and optional selected context, not
+the parent's conversation or memory. Coding jobs can delegate authorized MCP
+tools only when the delegation names them explicitly; research and review
+children cannot use MCP tools. Tool access is intersected with the parent's
+registered tools, role, active Skill restrictions, and parent permission checks.
+The same request-level authorization and underlying sandbox/approval path still
+run for each child tool call.
+
+One child may be spawned per parent run; children cannot delegate. Each child
+has at most three model iterations, six tool calls, 30 seconds per model/tool
+call, and 60 seconds overall, further bounded by the parent's limits. Parent
+cancellation cancels the awaited child and closes the request's MCP manager.
+The child's final status, text, usage, and run ID return as one tool observation.
+Child model/tool activity and the parent delegation result are stored in the
+existing `run_events` table, linked by `parent_run_id` and `child_run_id`.
+Intermediate child messages do not enter the user session.
+
 Lifecycle transitions to completed, failed, blocked, interrupted, cancelled or
 waiting_approval create a durable local inbox item in the same transaction.
 
