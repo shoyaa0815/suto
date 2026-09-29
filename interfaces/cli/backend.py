@@ -4,10 +4,12 @@ import asyncio
 import os
 from collections.abc import Awaitable, Callable
 
+from agent import AgentRequest
 from ai import ask_local_ai, execute_local_ai
 from application.configuration import load_settings
 from application.modes import CLARIFICATIONS_ENABLED, get_mode_policy
 from assistant import AssistantContext
+from permissions import ApprovalBroker
 from capabilities.developer.cli import (
     TERMINAL_JOB_STATUSES,
     _definition_options,
@@ -51,6 +53,7 @@ from skills import SkillSelection, builtin_registry
 from workflows.runtime.runner import JobRunner
 from workflows.runtime.worker import AutomationWorker
 from workflows.storage.store import JobStore
+from workflows.storage.runs import SessionBusyError, TERMINAL
 
 
 EXIT_COMMANDS = frozenset({"/exit"})
@@ -103,6 +106,22 @@ async def run_session(
     store = JobStore(database_path)
     sessions = SessionService(SessionStore(store))
     skills = SkillSelection(builtin_registry())
+    async def on_approval(request):
+        set_activity(None)
+        activity_writer = getattr(read_prompt, "set_activity", None)
+        if activity_writer is not None:
+            activity_writer(None)
+        print(f"Approve {request.tool_name} for this call? Type allow or deny (ID {request.id})")
+        try:
+            answer = (await read_prompt()).strip().casefold()
+        except (EOFError, KeyboardInterrupt):
+            answer = "deny"
+        finally:
+            if activity_writer is not None:
+                activity_writer("Suto is thinking")
+        approvals.submit(request.id, "allow_once" if answer == "allow" else "deny")
+
+    approvals = ApprovalBroker(on_approval)
     profile = load_settings().profile
     user = store.resolve_channel_identity(
         CLI_STORAGE_INTERFACE,
@@ -120,6 +139,7 @@ async def run_session(
     conversation = sessions.resume(
         user.id, CLI_STORAGE_INTERFACE, "local"
     )
+    skills.bind(store, conversation.id)
     worker = AutomationWorker(store, JobRunner(store))
     worker_task = asyncio.create_task(worker.start())
     notification_task = (
@@ -162,18 +182,37 @@ async def run_session(
                         CLI_STORAGE_INTERFACE,
                         "local",
                     )
+                    skills.bind(store, conversation.id)
                 if outcome.reset_language:
                     previous_language_code = None
                 if outcome.exit_requested:
                     return
                 continue
 
-            history = sessions.before_prompt(conversation.id, user.id)
-            sessions.append(conversation.id, user.id, "user", prompt)
-            reply_language = await _choose_reply_language_async(
-                prompt,
-                previous_language_code,
-            )
+            try:
+                active_skills = skills.require_available()
+                run_id = store.begin_agent_run(conversation.id)
+            except ValueError as error:
+                print(f"Selected Skill unavailable: {error}")
+                continue
+            except SessionBusyError:
+                print("Session already has an active run")
+                continue
+            store.start_agent_run(run_id)
+            run_status = "failed"
+            run_text = "Request failed."
+            run_usage = {}
+            try:
+                history = sessions.before_prompt(conversation.id, user.id)
+                sessions.append(conversation.id, user.id, "user", prompt)
+                reply_language = await _choose_reply_language_async(
+                    prompt,
+                    previous_language_code,
+                )
+            except BaseException as error:
+                status = "cancelled" if isinstance(error, asyncio.CancelledError) else "failed"
+                store.finish_agent_run(run_id, status, final_text="Request did not complete.", error=status)
+                raise
             previous_language_code = reply_language.code
 
             context = (
@@ -222,6 +261,13 @@ async def run_session(
             try:
                 start_request_activity()
                 if clarification_reader is None:
+                    def record_result(result):
+                        nonlocal run_status, run_text, run_usage
+                        run_status = result.status if result.status in TERMINAL else "failed"
+                        run_text = result.text if result.status == "completed" else "Request did not complete."
+                        run_usage = {"prompt_tokens": result.prompt_tokens,
+                                     "output_tokens": result.output_tokens}
+
                     answer = await wait_for_request(
                         ask_local_ai(
                             prompt,
@@ -230,22 +276,34 @@ async def run_session(
                             progress_callback=report_progress,
                             conversation_history=history,
                             assistant_context=context,
-                            active_skills=skills.names,
+                            active_skills=active_skills,
+                            run_id=run_id,
+                            result_callback=record_result,
+                            approval_broker=approvals,
                         )
                     )
+                    if run_status == "failed" and run_text == "Request failed.":
+                        # Compatibility callers may replace ask_local_ai in tests.
+                        run_status, run_text = "completed", answer
                 else:
                     result = await wait_for_request(
                         execute_local_ai(
-                            prompt,
+                            AgentRequest(prompt, session_id=conversation.id,
+                                         active_skills=active_skills, run_id=run_id),
                             mode=mode,
                             reply_language=reply_language,
                             progress_callback=report_progress,
                             conversation_history=history,
                             assistant_context=context,
-                            active_skills=skills.names,
+                            active_skills=active_skills,
+                            approval_broker=approvals,
                         )
                     )
                     while result.status == "waiting_input" and result.clarification:
+                        store.finish_agent_run(run_id, "waiting_input", final_text=result.text,
+                                               usage={"prompt_tokens": result.prompt_tokens,
+                                                      "output_tokens": result.output_tokens})
+                        run_id = None
                         if activity_writer is not None:
                             activity_writer(None)
                         answer = await clarification_reader(result.clarification)
@@ -264,26 +322,40 @@ async def run_session(
                         )
                         resumed_history = sessions.before_prompt(conversation.id, user.id)
                         sessions.append(conversation.id, user.id, "user", answer)
+                        run_id = store.begin_agent_run(conversation.id)
+                        store.start_agent_run(run_id)
                         start_request_activity()
                         result = await wait_for_request(
                             execute_local_ai(
-                                f"Original request: {prompt}\nUser's answer: {answer}",
+                                AgentRequest(f"Original request: {prompt}\nUser's answer: {answer}",
+                                             session_id=conversation.id,
+                                             active_skills=active_skills, run_id=run_id),
                                 mode=mode,
                                 reply_language=reply_language,
                                 progress_callback=report_progress,
                                 conversation_history=resumed_history,
                                 assistant_context=context,
-                                active_skills=skills.names,
+                                active_skills=active_skills,
+                                approval_broker=approvals,
                             )
                         )
                     else:
                         answer = result.text
+                    run_status = result.status if result.status in TERMINAL else "failed"
+                    run_text = result.text if result.status == "completed" else "Request did not complete."
+                    run_usage = {"prompt_tokens": result.prompt_tokens,
+                                 "output_tokens": result.output_tokens}
                     if result.status == "waiting_input":
                         continue
             except KeyboardInterrupt:
+                run_status, run_text = "cancelled", "Request cancelled."
                 print("\nrequest cancelled")
                 continue
             finally:
+                if run_id is not None:
+                    store.finish_agent_run(run_id, run_status, final_text=run_text,
+                                           error=None if run_status == "completed" else run_status,
+                                           usage=run_usage)
                 set_activity(None)
                 if activity_writer is not None:
                     activity_writer(None)

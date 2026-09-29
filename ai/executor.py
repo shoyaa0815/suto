@@ -60,6 +60,7 @@ async def execute_local_ai(
     active_skills: tuple[str, ...] = (),
     skill_registry: SkillRegistry | None = None,
     agent_event_callback: Callable[[AgentEvent], Awaitable[None] | None] | None = None,
+    approval_broker=None,
 ) -> AIExecutionResult:
     if isinstance(prompt, AgentRequest):
         request = replace(prompt, attachments=attachments) if attachments is not None else prompt
@@ -193,6 +194,7 @@ async def execute_local_ai(
                 agent_request=request,
                 skill_registry=skill_registry,
                 agent_event_callback=agent_event_callback,
+                approval_broker=approval_broker,
                 mcp_tools={
                     name: tool for name, tool in mcp_manager.allowed_tools().items()
                     if name in prepared.allowed_tools
@@ -264,10 +266,14 @@ async def ask_local_ai(
     assistant_context: AssistantContext | None = None,
     active_skills: tuple[str, ...] = (),
     skill_registry: SkillRegistry | None = None,
+    run_id: str | None = None,
+    result_callback: Callable[[AIExecutionResult], None] | None = None,
+    approval_broker=None,
 ) -> str:
     """Compatibility wrapper for chat interfaces that only need answer text."""
     result = await execute_local_ai(
-        prompt,
+        AgentRequest(prompt, session_id=getattr(assistant_context, "conversation_id", None),
+                     active_skills=active_skills, run_id=run_id) if run_id else prompt,
         think=think,
         mode=mode,
         attachments=attachments,
@@ -277,5 +283,8 @@ async def ask_local_ai(
         assistant_context=assistant_context,
         active_skills=active_skills,
         skill_registry=skill_registry,
+        approval_broker=approval_broker,
     )
+    if result_callback is not None:
+        result_callback(result)
     return result.text

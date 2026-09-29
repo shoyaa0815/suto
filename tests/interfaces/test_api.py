@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import sqlite3
 
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -71,7 +72,7 @@ async def test_health_direct_response_session_continuation_and_trace(tmp_path, m
         assert result["status"] == "completed"
         assert result["result"]["final_text"] == "Answer one"
         assert result["result"]["session_id"] == first["session_id"]
-        assert result["runtime_run_id"] != first["run_id"]
+        assert result["runtime_run_id"] == first["run_id"]
 
         stream = await client.get(f"/runs/{first['run_id']}/events")
         assert stream.status == 200
@@ -226,6 +227,18 @@ async def test_known_skill_is_selected_only_through_registry(tmp_path, monkeypat
         assert "Gather relevant information" in model.requests[0].messages[0]["content"]
 
 
+async def test_missing_persisted_skill_blocks_api_resume(tmp_path, monkeypatch):
+    app, store = setup(tmp_path, monkeypatch, lambda: Model(ModelResponse("done")))
+    user = app[STATE]["user"]
+    session = store.get_or_create_conversation(user.id, "api", "saved")
+    store.set_session_skills(session.id, ("removed_skill",))
+    async with TestClient(TestServer(app)) as client:
+        response, body = await start(client, session_id=session.id)
+        assert response.status == 400
+        assert "unavailable" in body["error"]
+        assert store.get_session_skills(session.id) == ("removed_skill",)
+
+
 async def test_bad_requests_skills_identity_and_local_guard(tmp_path, monkeypatch):
     app, store = setup(tmp_path, monkeypatch, lambda: Model(ModelResponse("done")))
     foreign = store.resolve_channel_identity("tui", "local")
@@ -319,6 +332,8 @@ async def test_delegated_child_events_keep_parent_correlation(tmp_path, monkeypa
         events = [json.loads(line[6:]) for line in stream.splitlines() if line.startswith("data: ")]
         children = [event for event in events if event["parent_run_id"] == status["runtime_run_id"]]
         assert children
+        assert all(event["data"]["child_role"] == "research" for event in children)
+        assert store.get_agent_run(children[0]["run_id"])["parent_run_id"] == status["run_id"]
         assert {event["run_id"] for event in children} != {status["runtime_run_id"]}
         assert all(event["session_id"] == run["session_id"] for event in children)
         assert len(store.list_run_tree_events(status["runtime_run_id"])) == len(events)
@@ -354,3 +369,46 @@ async def test_api_cancel_reaches_delegated_child(tmp_path, monkeypatch):
         events = await (await client.get(f"/runs/{run['run_id']}/events")).text()
         assert "delegation.cancelled" in events
         assert events.count("agent.cancelled") >= 2
+
+
+async def test_completed_and_interrupted_runs_are_queryable_after_api_restart(tmp_path, monkeypatch):
+    app, store = setup(tmp_path, monkeypatch, lambda: Model(ModelResponse("done")))
+    async with TestClient(TestServer(app)) as client:
+        _, submitted = await start(client)
+        await finished(app, submitted["run_id"])
+    orphan = store.begin_agent_run(submitted["session_id"])
+    store.start_agent_run(orphan)
+    with sqlite3.connect(store.path) as db:
+        db.execute("UPDATE agent_runs SET owner_pid=-1 WHERE id=?", (orphan,))
+    restarted = create_app(store=JobStore(store.path))
+    async with TestClient(TestServer(restarted)) as client:
+        completed = await (await client.get(f"/runs/{submitted['run_id']}")).json()
+        interrupted = await (await client.get(f"/runs/{orphan}")).json()
+        assert completed["status"] == "completed"
+        assert completed["result"]["final_text"] == "done"
+        assert interrupted["status"] == "interrupted"
+        assert interrupted["result"]["error"] == "interrupted"
+
+
+async def test_independent_api_instances_share_session_reservation(tmp_path, monkeypatch):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class WaitingModel:
+        async def generate(self, request):
+            entered.set()
+            await release.wait()
+            return ModelResponse("done")
+
+    app, store = setup(tmp_path, monkeypatch, lambda: WaitingModel())
+    other = create_app(store=JobStore(store.path))
+    async with TestClient(TestServer(app)) as first, TestClient(TestServer(other)) as second:
+        _, submitted = await start(first)
+        await entered.wait()
+        conflict, _ = await start(second, session_id=submitted["session_id"])
+        assert conflict.status == 409
+        release.set()
+        await finished(app, submitted["run_id"])
+        retried, _ = await start(second, session_id=submitted["session_id"])
+        assert retried.status == 202
+        await finished(other, (await retried.json())["run_id"])

@@ -79,6 +79,31 @@ class _LegacyHooks(RuntimeHooks):
     async def authorize(self, name, args):
         return name in self.owner.tools or name in self.owner.mcp_tools
 
+    async def request_approval(self, run_id, tool_call_id, tool_name):
+        broker = self.owner.approval_broker
+        if broker is None:
+            return None
+        return await broker.request(run_id, tool_call_id, tool_name)
+
+    async def on_child_started(self, run_id, session_id, parent_run_id):
+        context = self.owner.assistant_context
+        if context is not None and session_id is not None:
+            context.store.begin_agent_run(session_id, run_id=run_id,
+                                          parent_run_id=parent_run_id)
+            try:
+                context.store.start_agent_run(run_id)
+            except Exception:
+                context.store.finish_agent_run(run_id, "failed", final_text="Child execution failed",
+                                               error="failed")
+                raise
+
+    async def on_child_finished(self, run_id, status, text, usage):
+        context = self.owner.assistant_context
+        if context is not None:
+            context.store.finish_agent_run(run_id, status, final_text=text,
+                                           error=None if status == "completed" else status,
+                                           usage=usage)
+
     async def on_tool_finished(self, call, status, content, error, elapsed_seconds):
         arguments = (
             audit_tool_arguments(call.name, call.arguments)
@@ -148,6 +173,7 @@ class ModelToolLoop:
         mcp_tools=None,
         skill_registry=None,
         agent_event_callback=None,
+        approval_broker=None,
     ) -> None:
         self.session = session
         self.messages = messages
@@ -168,6 +194,7 @@ class ModelToolLoop:
         self.agent_request = agent_request
         self.skill_registry = skill_registry or builtin_registry()
         self.agent_event_callback = agent_event_callback
+        self.approval_broker = approval_broker
         self.outcome = "completed"
         self.runtime = None
         self.plan = None

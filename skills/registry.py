@@ -43,11 +43,23 @@ class SkillRegistry:
 
 
 class SkillSelection:
-    """Active names for one interface session; no global activation state."""
+    """Active Skill identities for one persistent session."""
 
     def __init__(self, registry: SkillRegistry) -> None:
         self.registry = registry
         self._names: list[str] = []
+        self._store = None
+        self._session_id: str | None = None
+
+    def bind(self, store, session_id: str) -> None:
+        self._store = store
+        self._session_id = session_id
+        self._names = list(store.get_session_skills(session_id))
+
+    def require_available(self) -> tuple[str, ...]:
+        names = self.names
+        self.registry.active(names)
+        return names
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -57,11 +69,15 @@ class SkillSelection:
         self.registry.resolve(name)
         if name not in self._names:
             self._names.append(name)
+            if self._store is not None:
+                self._store.set_session_skills(self._session_id, self.names)
 
     def deactivate(self, name: str) -> None:
         if name not in self._names:
             raise ValueError(f"skill is not active: {name}")
         self._names.remove(name)
+        if self._store is not None:
+            self._store.set_session_skills(self._session_id, self.names)
 
 
 @lru_cache(maxsize=1)

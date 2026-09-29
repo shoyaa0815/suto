@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from permissions import Approval, PermissionEngine, PermissionPolicy
-from sandbox import Sandbox, SandboxPolicy
+from sandbox import Sandbox, SandboxCapability, SandboxPolicy
 
 
 def test_permission_decisions_and_exact_approval():
@@ -44,6 +44,7 @@ def test_invalid_policy_fails_closed():
 def test_sandbox_policy_is_independent_of_permission_decision(tmp_path, monkeypatch):
     monkeypatch.setattr("sandbox.runtime.shutil.which", lambda name, **_: f"/usr/bin/{name}")
     monkeypatch.setattr("sandbox.runtime.sys.platform", "linux")
+    monkeypatch.setattr(Sandbox, "capability", lambda self: SandboxCapability("available", "test"))
     command = ["/usr/bin/git", "status"]
     temp_dir = str(tmp_path / "temp")
     for writable, binding in ((False, "--ro-bind"), (True, "--bind")):

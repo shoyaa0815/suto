@@ -9,10 +9,12 @@ from agent import AgentRequest
 from ai import execute_local_ai
 from application.configuration import load_settings
 from assistant import AssistantContext
+from permissions import ApprovalBroker
 from sessions import SessionService, SessionStore
 from skills import SkillSelection, builtin_registry
 from workflows.storage.redaction import redact_text
 from workflows.storage.store import JobStore
+from workflows.storage.runs import SessionBusyError, TERMINAL
 
 from .state import UIState
 
@@ -30,6 +32,7 @@ class TUIController:
         self.on_change = on_change or (lambda: None)
         self.sessions = SessionService(SessionStore(self.store))
         self.skills = SkillSelection(builtin_registry())
+        self.approvals = ApprovalBroker(self._approval_requested)
         profile = load_settings().profile
         user = self.store.resolve_channel_identity(
             INTERFACE, "local", display_name=profile.display_name,
@@ -54,11 +57,16 @@ class TUIController:
         self.on_change()
 
     def _select_session(self, conversation) -> None:
+        self.skills.bind(self.store, conversation.id)
         messages = self.store.list_messages(conversation.id, limit=100)
         self.state.reset_history(conversation.id, messages)
         self.state.run_status = "idle"
         self.state.model_status = "idle"
         self._pending_clarification = None
+        try:
+            self.skills.require_available()
+        except ValueError as error:
+            self.state.info(f"Selected Skill unavailable: {error}. Deactivate it before running.")
         self._changed()
 
     def submit(self, text: str) -> bool:
@@ -68,6 +76,13 @@ class TUIController:
             return True
         if prompt == "/cancel":
             self.cancel()
+            return True
+        if prompt.startswith("/approve ") or prompt.startswith("/deny "):
+            command, _, request_id = prompt.partition(" ")
+            choice = "allow_once" if command == "/approve" else "deny"
+            self.state.info("Approval submitted" if self.approvals.submit(request_id, choice)
+                            else "Approval unavailable or expired")
+            self._changed()
             return True
         if prompt in {"/exit", "/quit"}:
             self.exit_requested = True
@@ -79,7 +94,7 @@ class TUIController:
             self._changed()
             return True
         if prompt == "/help":
-            self.state.info("/new · /session · /resume ID · /skills · /skill activate NAME · /skill deactivate NAME · /cancel · /exit")
+            self.state.info("/new · /session · /resume ID · /skills · /skill activate NAME · /skill deactivate NAME · /approve ID · /deny ID · /cancel · /exit")
             self._changed()
             return True
         if self.busy:
@@ -128,14 +143,21 @@ class TUIController:
         session_id = self.state.session_id
         prior = self._pending_clarification
         self._pending_clarification = None
+        run_id = None
+        run_status = "failed"
+        final_text = "Request failed."
+        usage = {}
         try:
+            active_skills = self.skills.require_available()
+            run_id = self.store.begin_agent_run(session_id)
+            self.store.start_agent_run(run_id)
             history = self.sessions.before_prompt(session_id, self.user.id)
             message = self.sessions.append(session_id, self.user.id, "user", prompt)
             self.state.turn("user", message.content)
             self._changed()
             request_text = f"Original request: {prior}\nUser's answer: {prompt}" if prior else prompt
             request = AgentRequest(request_text, session_id=session_id,
-                                   active_skills=self.skills.names)
+                                   active_skills=active_skills, run_id=run_id)
 
             def on_event(event) -> None:
                 self.state.apply_event(event)
@@ -146,8 +168,13 @@ class TUIController:
                 assistant_context=AssistantContext(self.store, self.user.id, session_id),
                 skill_registry=self.skills.registry,
                 agent_event_callback=on_event,
+                approval_broker=self.approvals,
             )
-            self.state.run_status = result.status
+            run_status = result.status if result.status in TERMINAL else "failed"
+            self.state.run_status = run_status
+            final_text = redact_text(result.text) if run_status in {"completed", "waiting_input"} else "Request did not complete."
+            usage = {"prompt_tokens": getattr(result, "prompt_tokens", 0),
+                     "output_tokens": getattr(result, "output_tokens", 0)}
             if result.status in {"completed", "waiting_input"}:
                 answer = self.sessions.append(
                     session_id, self.user.id, "assistant", redact_text(result.text)
@@ -159,17 +186,34 @@ class TUIController:
                 self.state.info(f"Request {result.status}. Details are available in the local trace.")
         except asyncio.CancelledError:
             self.state.run_status = "cancelled"
+            run_status, final_text = "cancelled", "Request cancelled."
             self.state.info("Request cancelled")
             raise
+        except SessionBusyError:
+            self.state.run_status = "blocked"
+            self.state.info("Session already has an active run")
+        except ValueError as error:
+            self.state.run_status = "blocked"
+            self.state.info(f"Selected Skill unavailable: {error}")
         except Exception:
             self.state.run_status = "failed"
             self.state.info("Request failed. Details are available in the local trace.")
         finally:
+            if run_id is not None:
+                self.store.finish_agent_run(run_id, run_status, final_text=final_text,
+                                            error=None if run_status == "completed" else run_status,
+                                            usage=usage)
             self._changed()
 
     def cancel(self) -> None:
         if self.busy:
+            for request in tuple(self.approvals.pending.values()):
+                self.approvals.cancel_run(request[0].run_id)
             self._task.cancel()
+
+    def _approval_requested(self, request) -> None:
+        self.state.info(f"Approval {request.id}: {request.tool_name}. /approve {request.id} or /deny {request.id}")
+        self._changed()
 
     async def wait_current(self) -> None:
         if self._task is not None:

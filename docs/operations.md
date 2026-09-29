@@ -14,17 +14,19 @@ trace IDs. Tool arguments and results are never shown in that detail view.
 
 The TUI consumes normalized `AgentEvent` callbacks from the existing executor.
 It shows run and model status, compact tool outcomes, permission events, and
-child activity using `parent_run_id`. Child roles are omitted because the
-safe event trace does not contain them. MCP tools use the same display path as
+child activity using `parent_run_id` and safe child roles. MCP tools use the same display path as
 native tools. Ctrl-C or `/cancel` cancels the executor task, including an
 awaited delegated child; interruption of blocking host operations is best
 effort. A draft sent during a run remains in the input box until the run ends.
 
 `/skills` lists registered Skills; `/skill activate <name>` and
-`/skill deactivate <name>` change selection for later requests. Ordinary
-interactive requests have no resumable approval decision path: the job
-approval service requires a job execution context. The TUI displays
-permission denial or approval-required events but offers no approval buttons.
+`/skill deactivate <name>` persist names for this session. Missing registered
+Skills block new runs until deactivated. When an ordinary tool policy requires
+interactive confirmation, `/approve <id>` allows that one call and `/deny <id>`
+denies it. Requests expire after 60 seconds and cancellation removes them.
+Job approvals retain their separate durable job execution workflow.
+The plain CLI uses the same broker and asks for `allow` or `deny` when an
+ordinary tool policy requires confirmation.
 It does not start the CLI's automation or reminder-delivery workers.
 
 ## Local agent API
@@ -56,9 +58,9 @@ response includes `session_id`, text, status, and token usage. Failed and
 blocked responses use generic public text and error values; provider or tool
 exception details are not exposed.
 
-`POST /runs` returns 202 with an opaque API `run_id` handle immediately. The
-runtime assigns its own `runtime_run_id` when execution begins; it then appears
-in run status and in SSE event `run_id`. SSE replays existing persisted
+`POST /runs` returns 202 with the canonical `run_id` immediately. The executor,
+runtime, trace, child-parent links, cancellation, and result use that ID. The
+legacy `runtime_run_id` response field equals `run_id`. SSE replays persisted
 `run_events` rows, including the bounded child trace, after the existing event
 sanitizer has removed prompts, tool arguments, observations, and secret fields.
 The stream closes after the run ends. Cancellation cancels the same asyncio
@@ -71,13 +73,15 @@ secrets, and job-scoped workspace permissions come only from trusted local
 configuration and cannot be supplied in HTTP payloads. The API starts no
 automation or reminder-delivery worker.
 
-Run status and final results live in this API process and disappear on restart;
-sessions and sanitized trace events remain in SQLite. Up to four independent
-runs may execute at once. One process allows one active run per session and
-returns 409 for a concurrent request on that session. SQLite serializes its
-writes, but separate API processes do not share the in-memory session lock;
-run a single API process per database. Trace delivery polls no external service
-and retains the database's existing durability and backup behavior.
+Run status, timestamps, sanitized terminal results, and token usage persist in
+the same SQLite database as sessions and traces. Completed, failed, and cancelled
+runs remain queryable after restart. A run owned by a dead process becomes
+`interrupted` on recovery; model and tool calls are not resumed. The database
+reserves one active top-level run per session across API, CLI, and TUI processes.
+Up to four independent API runs may execute at once. API approval submission is
+not exposed; a request requiring interactive approval fails closed there.
+Pending interactive approvals are memory-only and invalid after restart.
+Trace delivery retains the database's existing durability and backup behavior.
 
 ## Host-managed settings
 
@@ -103,6 +107,8 @@ setting, no MCP command starts, even if a `mcp.yaml` exists in the working
 directory. The path must identify a regular, non-symlink file no larger than
 32 KiB and must not be group or world writable on POSIX hosts. An explicitly
 configured missing or malformed file fails the AI request closed.
+CLI, API, and TUI startup print one generic trust-boundary diagnostic when
+`SUTO_MCP_CONFIG` is set; it contains no path, command, or secret.
 Set file permissions with `chmod 600 mcp.yaml` on POSIX hosts.
 
 `mcp.example.yaml` shows the stdio format. Each server needs a
@@ -162,6 +168,10 @@ The unversioned Phase 0–7 database is schema 0. Startup migrates to version 1
 (production controls) and version 2 (advanced features). Each version runs in a
 transaction, is recorded in `schema_migrations`, and updates `PRAGMA user_version`.
 A newer, unsupported database is rejected without changing its schema.
+Version 14 adds `agent_runs` and `session_skills`. It preserves existing
+conversations, messages, traces, jobs, and backups. The run table stores only
+sanitized terminal text and bounded usage counters; active ownership is tied
+to the host PID and Linux process start marker for crash recovery.
 
 Existing databases receive a uniquely named, integrity-checked snapshot under
 `<database directory>/backups/` before upgrade. Backups use the
@@ -316,6 +326,9 @@ network namespace. The optional
 `bwrap` backend requires Linux, [Bubblewrap](https://github.com/containers/bubblewrap),
 `prlimit`, and a host that permits unprivileged user namespaces. It fails closed
 without falling back if the backend is missing or namespace creation fails.
+`Sandbox.capability()` reports `available`, `unavailable`, `misconfigured`, or
+`policy-disabled` before a required command starts. A namespace probe uses the
+same unshare mode as command execution and never substitutes `process` isolation.
 The selected backend is included in the exact command approval digest/preview.
 
 The sandbox isolates process, network and mount namespaces, drops capabilities,
@@ -411,5 +424,7 @@ execution environment forbids namespace creation; run them on the deployment
 host to validate filesystem/network isolation and descendant cleanup. On a
 supported Linux host, install `bwrap` and `prlimit`, permit unprivileged user
 namespaces, and run the command above outside a restrictive test container.
-A skip means namespace isolation was not verified on that host. The `bwrap`
+A skip means namespace isolation was not verified on that host. Run
+`venv/bin/pytest -q -rs tests/tools/test_sandbox.py` directly on a supported
+Linux host to exercise the integration tests. The `bwrap`
 setting never falls back to `process` when setup or namespace creation fails.

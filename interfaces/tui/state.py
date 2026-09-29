@@ -79,7 +79,9 @@ class UIState:
             if not child:
                 self.run_status = status
             if status in {"preparing", "completed", "failed", "cancelled", "waiting_for_approval"}:
-                label = f"child {event.run_id[:8]} {status}" if child else f"agent {status}"
+                role = event.data.get("child_role")
+                child_name = f"child {role}" if role in {"research", "coding", "review"} else "child"
+                label = f"{child_name} {event.run_id[:8]} {status}" if child else f"agent {status}"
                 self.entries.append(Entry(label, "event", event.run_id, event.parent_run_id))
         elif kind.startswith("model."):
             status = kind.removeprefix("model.")
@@ -114,7 +116,7 @@ class UIState:
                 item.status = status
         elif kind.startswith("permission."):
             status = kind.removeprefix("permission.")
-            if status in {"requested", "denied", "approval_required"}:
+            if status in {"requested", "denied", "approval_required", "approval_requested"}:
                 if status in {"denied", "approval_required"} and event.tool_call_id:
                     tool = self._tools.get(event.tool_call_id)
                     if tool is not None:
@@ -125,7 +127,8 @@ class UIState:
             status = kind.removeprefix("delegation.")
             if status in {"started", "completed", "failed", "cancelled"}:
                 child_id = event.data.get("child_run_id")
-                label = f"delegation {status}"
+                role = event.data.get("child_role")
+                label = f"delegation {role} {status}" if role in {"research", "coding", "review"} else f"delegation {status}"
                 if isinstance(child_id, str) and child_id.isalnum():
                     label += f" · child {child_id[:8]}"
                 self.entries.append(Entry(label, "event", event.run_id, event.parent_run_id))

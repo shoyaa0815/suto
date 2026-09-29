@@ -1,3 +1,4 @@
+import os
 import sys
 
 
@@ -23,6 +24,9 @@ def main():
     from dotenv import load_dotenv
 
     load_dotenv()
+    if name in {"cli", "api", "tui"} and os.environ.get("SUTO_MCP_CONFIG"):
+        print("MCP stdio servers are trusted local executables running with your user permissions.",
+              file=sys.stderr)
     if name == "cli":
         from interfaces.cli import run
     elif name == "settings_web":

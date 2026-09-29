@@ -98,6 +98,7 @@ async def test_delegation_reuses_runtime_and_persists_correlated_trace(tmp_path)
     assert child_id != runtime.run_id
     parent_events = store.list_run_events(runtime.run_id)
     child_events = store.list_run_events(child_id)
+    assert all(json.loads(event["data"]).get("child_role") == "research" for event in child_events)
     assert any(item["event_type"] == "delegation.completed" and
                json.loads(item["data"])["child_run_id"] == child_id for item in parent_events)
     assert child_events and all(item["parent_run_id"] == runtime.run_id for item in child_events)

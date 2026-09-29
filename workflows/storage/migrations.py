@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .locking import ProcessLock
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 HARDENING = """
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -267,6 +267,32 @@ ALTER TABLE tool_events ADD COLUMN run_id TEXT;
 ALTER TABLE tool_events ADD COLUMN tool_call_id TEXT;
 """
 
+RUN_LIFECYCLE = """
+CREATE TABLE agent_runs(
+ id TEXT PRIMARY KEY,
+ session_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+ parent_run_id TEXT,
+ status TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ started_at TEXT,
+ completed_at TEXT,
+ final_text TEXT,
+ error TEXT,
+ usage_json TEXT NOT NULL DEFAULT '{}',
+ owner_pid INTEGER NOT NULL,
+ owner_start TEXT NOT NULL
+);
+CREATE UNIQUE INDEX agent_runs_active_session_idx ON agent_runs(session_id)
+ WHERE parent_run_id IS NULL AND status IN ('queued','running');
+CREATE TABLE session_skills(
+ session_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+ skill_name TEXT NOT NULL,
+ position INTEGER NOT NULL,
+ PRIMARY KEY(session_id, skill_name),
+ UNIQUE(session_id, position)
+);
+"""
+
 
 def backup_database(source: Path, destination: Path) -> Path:
     source, destination = source.resolve(), destination.expanduser().absolute()
@@ -322,6 +348,7 @@ def initialize_database(store) -> None:
                 (11, AGENT_ONLY_MODE),
                 (12, SESSION_COMPACTION),
                 (13, CORE_TRACE_AND_MESSAGES),
+                (14, RUN_LIFECYCLE),
             ):
                 if number > SCHEMA_VERSION:
                     break
@@ -351,6 +378,18 @@ def initialize_database(store) -> None:
                             migration_script = ''
                         elif any(markers):
                             raise RuntimeError('database has a partial core trace migration; restore a verified backup')
+                    if number == 14:
+                        markers = tuple(
+                            connection.execute(
+                                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                                (name,),
+                            ).fetchone() is not None
+                            for name in ('agent_runs', 'session_skills')
+                        )
+                        if all(markers):
+                            migration_script = ''
+                        elif any(markers):
+                            raise RuntimeError('database has a partial run lifecycle migration; restore a verified backup')
                     connection.executescript('BEGIN IMMEDIATE;\n' + migration_script)
                     connection.execute('INSERT OR REPLACE INTO schema_migrations VALUES (?,?)',
                                        (number, datetime.now(UTC).isoformat()))

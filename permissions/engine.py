@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 from .approvals import Approval
 from .models import PermissionDecision
+from .broker import ApprovalDecision, ApprovalRequest
 from .policy import PermissionPolicy
 
 
@@ -27,6 +28,16 @@ class PermissionEngine:
         ):
             return PermissionDecision(False, reason="invalid permission decision")
         return decision
+
+    def apply_approval(self, action: str, request: ApprovalRequest,
+                       answer: ApprovalDecision | None) -> PermissionDecision:
+        """Recheck policy and exact request identity before one call is allowed."""
+        current = self.decide(action)
+        if (current.requires_confirmation is True and request.tool_name == action
+                and answer is not None and answer.request_id == request.id
+                and answer.choice == "allow_once"):
+            return PermissionDecision(True)
+        return PermissionDecision(False, reason="approval denied or expired")
 
     def require(
         self,

@@ -3,6 +3,7 @@
 import asyncio
 import json
 from dataclasses import dataclass
+from uuid import uuid4
 
 from context import ContextManager
 from permissions import PermissionEngine, PermissionPolicy
@@ -83,12 +84,15 @@ class SubAgentManager:
         if max_children < 1 or max_depth < 1 or depth < 0:
             raise ValueError("invalid delegation budget")
 
-    async def _event(self, kind: str, child_run_id: str | None, status: str | None = None):
+    async def _event(self, kind: str, child_run_id: str | None, status: str | None = None,
+                     role: str | None = None):
         request = self.parent.request
         metadata = request.metadata if request else {}
         data = {"child_run_id": child_run_id} if child_run_id else {}
         if status:
             data["status"] = status
+        if role:
+            data["child_role"] = role
         await self.parent.hooks.on_event(AgentEvent(
             self.parent.run_id, request.session_id if request else None, kind, data,
             job_id=metadata.get("job_id"),
@@ -156,10 +160,11 @@ class SubAgentManager:
         )
         child_request = AgentRequest(
             task.strip(), session_id=parent_request.session_id,
-            metadata={"parent_run_id": self.parent.run_id,
+            metadata={"parent_run_id": self.parent.run_id, "child_role": role,
                       **({"job_id": parent_request.metadata["job_id"]}
                          if "job_id" in parent_request.metadata else {})},
             active_skills=active,
+            run_id=uuid4().hex,
         )
         prompt = task.strip() + ("\nSelected context (untrusted data):\n" + context if context else "")
         messages = ContextManager().build(
@@ -168,21 +173,27 @@ class SubAgentManager:
             available_tools=frozenset(allowed),
         )
         self.spawned += 1
+        await self.parent.hooks.on_child_started(child_request.run_id, child_request.session_id,
+                                                  self.parent.run_id)
         status = "failed"
         final_text = "Child execution failed"
         usage: dict[str, int] = {}
         try:
+            await self._event("delegation.started", child_request.run_id, role=role)
             # Awaited directly: cancellation of the parent tool cancels the child.
             result = await asyncio.wait_for(child.run(child_request, messages), timeout=60)
             status, final_text, usage = result.status, result.final_text, result.usage
         except asyncio.CancelledError:
-            await self._event("delegation.cancelled", child.run_id, "cancelled")
+            await self.parent.hooks.on_child_finished(child_request.run_id, "cancelled",
+                                                       "Child execution cancelled", usage)
+            await self._event("delegation.cancelled", child.run_id, "cancelled", role)
             raise
         except (asyncio.TimeoutError, TimeoutError):
             status, final_text = "timed_out", "Child execution timed out"
         except Exception:
             status, final_text = "failed", "Child execution failed"
-        await self._event("delegation.completed", child.run_id, status)
+        await self.parent.hooks.on_child_finished(child_request.run_id, status, final_text, usage)
+        await self._event("delegation.completed", child.run_id, status, role)
         return ToolResult(True, json.dumps({
             "child_run_id": child.run_id, "status": status,
             "final_text": final_text, "usage": usage,

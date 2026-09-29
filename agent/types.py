@@ -11,6 +11,7 @@ class AgentRequest:
     attachments: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     active_skills: tuple[str, ...] = ()
+    run_id: str | None = None
 
 
 @dataclass(frozen=True)

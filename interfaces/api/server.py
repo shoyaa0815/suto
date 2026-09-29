@@ -17,6 +17,7 @@ from sessions import SessionService, SessionStore
 from skills import builtin_registry
 from workflows.storage.redaction import redact_text
 from workflows.storage.store import JobStore
+from workflows.storage.runs import SessionBusyError, TERMINAL
 
 
 HOST = "127.0.0.1"
@@ -28,10 +29,9 @@ STATE = web.AppKey("api_state", object)
 
 @dataclass
 class Run:
-    id: str  # API handle; the runtime assigns its own trace run_id.
+    id: str
     session_id: str
     status: str = "queued"
-    runtime_run_id: str | None = None
     result: AgentResult | None = None
     task: asyncio.Task | None = None
     changed: asyncio.Event = field(default_factory=asyncio.Event)
@@ -56,7 +56,7 @@ def _result_json(result: AgentResult) -> dict:
 def _run_json(run: Run) -> dict:
     return {
         "run_id": run.id,
-        "runtime_run_id": run.runtime_run_id,
+        "runtime_run_id": run.id,
         "session_id": run.session_id,
         "status": run.status,
         "result": _result_json(run.result) if run.result else None,
@@ -95,7 +95,7 @@ async def local_guard(request: web.Request, handler):
     return response
 
 
-async def _body(request: web.Request) -> tuple[str, str | None, tuple[str, ...]]:
+async def _body(request: web.Request) -> tuple[str, str | None, tuple[str, ...] | None]:
     try:
         body = await request.json()
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
@@ -104,21 +104,36 @@ async def _body(request: web.Request) -> tuple[str, str | None, tuple[str, ...]]
         raise _bad_request()
     message = body.get("message")
     session_id = body.get("session_id")
-    skills = body.get("skills", [])
+    skills = body.get("skills")
     if (
         not isinstance(message, str) or not message.strip() or len(message) > 8000
         or (session_id is not None and (not isinstance(session_id, str) or len(session_id) > 64))
-        or not isinstance(skills, list) or len(skills) > 8
-        or any(not isinstance(name, str) or len(name) > 64 for name in skills)
+        or (skills is not None and (not isinstance(skills, list) or len(skills) > 8
+        or any(not isinstance(name, str) or len(name) > 64 for name in skills)))
     ):
         raise _bad_request()
-    return message.strip(), session_id, tuple(skills)
+    return message.strip(), session_id, tuple(skills) if skills is not None else None
 
 
 def _trace_rows(state: dict, run: Run) -> list[dict]:
-    if run.runtime_run_id is None:
-        return []
-    return state["store"].list_run_tree_events(run.runtime_run_id)
+    return state["store"].list_run_tree_events(run.id)
+
+
+def _stored_run_json(record: dict) -> dict:
+    terminal = record["status"] not in {"queued", "running"}
+    result = None
+    if terminal:
+        result = {
+            "session_id": record["session_id"], "final_text": record["final_text"] or "",
+            "status": record["status"], "usage": record["usage"], "error": record["error"],
+        }
+    return {
+        "run_id": record["id"], "runtime_run_id": record["id"],
+        "session_id": record["session_id"], "parent_run_id": record["parent_run_id"],
+        "status": record["status"], "created_at": record["created_at"],
+        "started_at": record["started_at"], "completed_at": record["completed_at"],
+        "result": result,
+    }
 
 
 def _public_event(row: dict) -> dict:
@@ -138,6 +153,7 @@ def _public_event(row: dict) -> dict:
 def create_app(*, database_path=None, store=None, executor=execute_local_ai):
     """Create one in-process local API; tests may inject a store or fake executor."""
     store = store or JobStore(database_path or os.environ.get("SUTO_DB_PATH", "data/suto.db"))
+    store.recover_interrupted_runs()
     profile = load_settings().profile
     user = store.resolve_channel_identity(
         INTERFACE, "local", display_name=profile.display_name,
@@ -159,37 +175,46 @@ def create_app(*, database_path=None, store=None, executor=execute_local_ai):
 
     async def create_run(request):
         message, session_id, selected = await _body(request)
-        try:
-            builtin_registry().active(selected)
-        except ValueError:
-            return web.json_response({"error": "Unknown or invalid Skill"}, status=400)
         if session_id is None:
             session = state["sessions"].resume(user.id, INTERFACE, uuid4().hex)
         else:
             session = store.get_conversation(session_id)
             if session is None or session.user_id != user.id or session.channel != INTERFACE:
                 raise web.HTTPNotFound()
+        if selected is None:
+            selected = store.get_session_skills(session.id)
+        try:
+            builtin_registry().active(selected)
+        except ValueError:
+            return web.json_response({"error": "Selected Skill is unavailable; update the session selection"}, status=400)
         active = state["active_sessions"]
         if session.id in active:
             return web.json_response({"error": "Session already has an active run"}, status=409)
         if len(active) >= MAX_ACTIVE_RUNS:
             return web.json_response({"error": "Too many active runs"}, status=429)
-        run = Run(uuid4().hex, session.id)
+        try:
+            run = Run(store.begin_agent_run(session.id), session.id)
+        except SessionBusyError:
+            return web.json_response({"error": "Session already has an active run"}, status=409)
+        try:
+            store.set_session_skills(session.id, selected)
+        except Exception:
+            store.finish_agent_run(run.id, "failed", final_text="Request failed.", error="failed")
+            raise
         state["runs"][run.id] = run
         active[session.id] = run.id
 
         async def execute():
             run.status = "running"
             try:
+                store.start_agent_run(run.id)
                 history = state["sessions"].before_prompt(session.id, user.id)
                 state["sessions"].append(session.id, user.id, "user", message)
                 agent_request = AgentRequest(
-                    message, session_id=session.id, active_skills=selected
+                    message, session_id=session.id, active_skills=selected, run_id=run.id
                 )
 
                 def on_event(event):
-                    if event.parent_run_id is None and run.runtime_run_id is None:
-                        run.runtime_run_id = event.run_id
                     _notify(run)
 
                 outcome = await state["executor"](
@@ -199,20 +224,21 @@ def create_app(*, database_path=None, store=None, executor=execute_local_ai):
                     skill_registry=builtin_registry(),
                     agent_event_callback=on_event,
                 )
+                status = outcome.status if outcome.status in TERMINAL else "failed"
                 public_text = (
                     redact_text(outcome.text)
-                    if outcome.status in {"completed", "waiting_input"}
+                    if status in {"completed", "waiting_input"}
                     else "Request did not complete."
                 )
-                public_error = None if outcome.status == "completed" else outcome.status
+                public_error = None if status == "completed" else status
                 run.result = AgentResult(
-                    session.id, public_text, outcome.status,
+                    session.id, public_text, status,
                     {"prompt_tokens": outcome.prompt_tokens, "output_tokens": outcome.output_tokens},
                     error=public_error,
                 )
-                if outcome.status == "completed":
+                if status == "completed":
                     state["sessions"].append(session.id, user.id, "assistant", outcome.text)
-                run.status = outcome.status
+                run.status = status
             except asyncio.CancelledError:
                 run.status = "cancelled"
                 run.result = AgentResult(session.id, "Request cancelled.", "cancelled", error="cancelled")
@@ -221,6 +247,12 @@ def create_app(*, database_path=None, store=None, executor=execute_local_ai):
                 run.status = "failed"
                 run.result = AgentResult(session.id, "Request failed.", "failed", error="failed")
             finally:
+                store.finish_agent_run(
+                    run.id, run.status,
+                    final_text=run.result.final_text if run.result else "Request failed.",
+                    error=run.result.error if run.result else "failed",
+                    usage=run.result.usage if run.result else {},
+                )
                 if active.get(session.id) == run.id:
                     active.pop(session.id)
                 _notify(run)
@@ -234,28 +266,36 @@ def create_app(*, database_path=None, store=None, executor=execute_local_ai):
             if task.cancelled() and run.result is None:
                 run.status = "cancelled"
                 run.result = AgentResult(session.id, "Request cancelled.", "cancelled", error="cancelled")
+                store.finish_agent_run(run.id, "cancelled", final_text="Request cancelled.", error="cancelled")
             _notify(run)
 
         run.task.add_done_callback(task_finished)
         return web.json_response(_run_json(run), status=202)
 
     def find_run(request):
-        run = state["runs"].get(request.match_info["run_id"])
-        if run is None:
+        record = store.get_agent_run(request.match_info["run_id"])
+        if record is None:
             raise web.HTTPNotFound()
-        return run
+        session = store.get_conversation(record["session_id"])
+        if session is None or session.user_id != user.id or session.channel != INTERFACE:
+            raise web.HTTPNotFound()
+        return record
 
     async def get_run(request):
-        return web.json_response(_run_json(find_run(request)))
+        return web.json_response(_stored_run_json(find_run(request)))
 
     async def cancel_run(request):
-        run = find_run(request)
+        record = find_run(request)
+        run = state["runs"].get(record["id"])
+        if run is None:
+            return web.json_response(_stored_run_json(record), status=202)
         if run.result is None and run.task is not None and not run.task.done():
             run.task.cancel()
-        return web.json_response(_run_json(run), status=202)
+        return web.json_response(_stored_run_json(store.get_agent_run(run.id)), status=202)
 
     async def events(request):
-        run = find_run(request)
+        record = find_run(request)
+        run = state["runs"].get(record["id"]) or Run(record["id"], record["session_id"])
         cursor = request.headers.get("Last-Event-ID")
         rows = _trace_rows(state, run)
         ids = [row["event_id"] for row in rows]
@@ -277,7 +317,7 @@ def create_app(*, database_path=None, store=None, executor=execute_local_ai):
                     payload = json.dumps(_public_event(row), ensure_ascii=False, separators=(",", ":"))
                     await response.write(f"id: {row['event_id']}\nevent: {row['event_type']}\ndata: {payload}\n\n".encode())
                 index = len(rows)
-                if run.result is not None:
+                if store.get_agent_run(run.id)["status"] not in {"queued", "running"}:
                     break
                 try:
                     await asyncio.wait_for(change.wait(), timeout=15)

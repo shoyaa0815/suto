@@ -35,6 +35,7 @@ from ..models import (
     TriggerStatus,
 )
 from .redaction import redact_text, redact_value
+from .runs import RunStore
 from .migrations import initialize_database
 from .operations import OperationsStore
 from ..runtime.options import validate_options
@@ -54,6 +55,7 @@ def _now() -> str:
 
 
 class JobStore(
+    RunStore,
     OperationsStore,
     SubtaskStore,
     KnowledgeStore,
@@ -710,7 +712,7 @@ class JobStore(
 
     def add_run_event(self, event) -> None:
         """Persist the runtime's safe metadata without copying prompts or observations."""
-        safe_keys = {"iteration", "prompt_tokens", "output_tokens", "tool_calls", "status", "tool_name", "error_type", "child_run_id"}
+        safe_keys = {"iteration", "prompt_tokens", "output_tokens", "tool_calls", "status", "tool_name", "error_type", "child_run_id", "child_role", "duration_ms"}
         data = {key: value for key, value in event.data.items() if key in safe_keys}
         with self._connect() as connection:
             connection.execute(

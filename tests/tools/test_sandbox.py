@@ -4,12 +4,14 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from workflows.runtime.context import COMMAND_TOOLS, WRITE_WORKSPACE_TOOLS, ExecutionContext
 from capabilities.developer.sandbox import sandbox_command
 from capabilities.developer.command import build_command_tools
+from sandbox import Sandbox, SandboxPolicy
 
 
 def test_missing_namespace_backend_fails_closed(tmp_path, monkeypatch):
@@ -17,6 +19,20 @@ def test_missing_namespace_backend_fails_closed(tmp_path, monkeypatch):
     monkeypatch.setattr(shutil, 'which', lambda *args, **kwargs: None)
     with pytest.raises(PermissionError, match='no fallback'):
         sandbox_command(context, ['true'], str(tmp_path), 10)
+
+
+def test_capability_reports_policy_missing_and_host_denial(tmp_path, monkeypatch):
+    assert Sandbox(SandboxPolicy('process', tmp_path)).capability().status == 'policy-disabled'
+    monkeypatch.setattr(shutil, 'which', lambda *args, **kwargs: None)
+    assert Sandbox(SandboxPolicy('bwrap', tmp_path)).capability().status == 'unavailable'
+    monkeypatch.setattr(shutil, 'which', lambda name, **kwargs: f'/usr/bin/{name}')
+    monkeypatch.setattr('sandbox.runtime.subprocess.run', lambda *args, **kwargs:
+                        type('Result', (), {'returncode': 1})())
+    isolated = Sandbox(SandboxPolicy('bwrap', tmp_path))
+    assert isolated.capability().status == 'unavailable'
+    with pytest.raises(PermissionError, match='no fallback'):
+        isolated.command(['true'], str(tmp_path), 10)
+    assert Sandbox(SandboxPolicy('bwrap', Path('/'))).capability().status == 'misconfigured'
 
 
 def test_sandbox_mode_is_persisted_and_invalid_mode_fails_before_execution(tmp_path):
@@ -41,6 +57,9 @@ def test_sandbox_runtime_boundary(tmp_path):
     outside = tmp_path / 'host-secret.txt'
     outside.write_text('outside secret')
     context = ExecutionContext('sandbox', workspace, allowed_tools=COMMAND_TOOLS, sandbox='bwrap')
+    capability = Sandbox(SandboxPolicy('bwrap', workspace)).capability()
+    if capability.status != 'available':
+        pytest.skip(f'Bubblewrap {capability.status}: {capability.reason}; run on a supported Linux host')
     script = """
 import json, os, pathlib, resource, socket, subprocess, sys
 assert pathlib.Path('input.txt').read_text() == 'workspace data'
@@ -80,6 +99,9 @@ async def test_approved_bwrap_command_and_timeout_kill_descendants(tmp_path):
         pytest.skip('bubblewrap is not installed')
     context = ExecutionContext('sandbox', tmp_path, allowed_tools=COMMAND_TOOLS | WRITE_WORKSPACE_TOOLS,
                                sandbox='bwrap', approval_callback=lambda *args: True)
+    capability = Sandbox(SandboxPolicy('bwrap', tmp_path)).capability()
+    if capability.status != 'available':
+        pytest.skip(f'Bubblewrap {capability.status}: {capability.reason}; run on a supported Linux host')
     events = []
     command = build_command_tools(context, events.append)['run_workspace_command']
     (tmp_path / 'test_simple.py').write_text('def test_simple():\n    assert 2 + 2 == 4\n')

@@ -72,3 +72,15 @@ def test_main_dispatches_tui(monkeypatch):
     main_module.main()
 
     assert calls == ["agent"]
+
+
+def test_mcp_startup_diagnostic_names_trust_boundary_without_secrets(monkeypatch, capsys):
+    import interfaces.cli as cli
+
+    monkeypatch.setattr(main_module.sys, "argv", ["main.py"])
+    monkeypatch.setattr(cli, "run", lambda mode: None)
+    monkeypatch.setenv("SUTO_MCP_CONFIG", "/private/mcp.yaml")
+    main_module.main()
+    warning = capsys.readouterr().err
+    assert "trusted local executables" in warning
+    assert "/private/mcp.yaml" not in warning

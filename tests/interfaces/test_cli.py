@@ -320,6 +320,32 @@ def test_overdue_reminder_prints_original_time_and_is_not_repeated(
     assert "No pending reminders." in capsys.readouterr().out
 
 
+async def test_cli_restores_skill_and_uses_generic_approval_broker(tmp_path, monkeypatch, capsys):
+    observed = []
+
+    async def fake_ask(prompt, **options):
+        observed.append(options["active_skills"])
+        broker = options["approval_broker"]
+        request, decision = await broker.request(options["run_id"],
+                                                  f"{options['run_id']}:1:1", "test.action")
+        assert request.run_id == options["run_id"]
+        assert decision.choice == "allow_once"
+        return "done"
+
+    monkeypatch.setenv("SUTO_DB_PATH", str(tmp_path / "suto.db"))
+    monkeypatch.setattr(backend, "ask_local_ai", fake_ask)
+    first = iter(["/skill activate research", "/exit"])
+    await backend.run_session("agent", lambda: _next_prompt(first))
+    second = iter(["hello", "allow", "/exit"])
+    await backend.run_session("agent", lambda: _next_prompt(second))
+    assert observed == [("research",)]
+    assert "Approve test.action" in capsys.readouterr().out
+
+
+async def _next_prompt(prompts):
+    return next(prompts)
+
+
 async def test_cli_runs_the_real_assistant_session_backend(
     tmp_path,
     monkeypatch,

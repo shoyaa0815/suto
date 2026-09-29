@@ -45,6 +45,7 @@ async def test_tui_starts_and_direct_response_creates_agent_request(tmp_path, mo
     assert isinstance(request, AgentRequest)
     assert request.user_message == "Hi"
     assert request.session_id == ui.state.session_id
+    assert store.get_agent_run(request.run_id)["status"] == "completed"
     assert kwargs["assistant_context"].conversation_id == request.session_id
     assert "You: Hi" in view.history.text
     assert "Suto: Hello" in view.history.text
@@ -98,6 +99,50 @@ async def test_skills_use_registry_and_flow_into_request(tmp_path, monkeypatch):
     assert requests[0].active_skills == ("research",)
     ui.submit("/skill deactivate research")
     assert ui.state.active_skills == ()
+
+
+async def test_skill_selection_restores_in_new_tui_controller(tmp_path, monkeypatch):
+    async def execute(request, **kwargs):
+        return SimpleNamespace(text="done", status="completed")
+
+    first, store = controller(tmp_path, monkeypatch, execute)
+    first.submit("/skill activate research")
+    second = TUIController(store=JobStore(store.path), executor=execute)
+    assert second.state.active_skills == ("research",)
+
+
+async def test_missing_persisted_skill_blocks_tui_run(tmp_path, monkeypatch):
+    called = []
+
+    async def execute(request, **kwargs):
+        called.append(request)
+        return SimpleNamespace(text="done", status="completed")
+
+    first, store = controller(tmp_path, monkeypatch, execute)
+    store.set_session_skills(first.state.session_id, ("removed_skill",))
+    second = TUIController(store=JobStore(store.path), executor=execute)
+    second.submit("hello")
+    await second.wait_current()
+    assert not called
+    assert "Selected Skill unavailable" in render_entries(second.state)
+
+
+async def test_tui_submits_pending_approval_without_deciding_policy(tmp_path, monkeypatch):
+    entered = asyncio.Event()
+    requests = []
+
+    async def execute(request, **kwargs):
+        broker = kwargs["approval_broker"]
+        broker.on_request = lambda pending: (requests.append(pending), entered.set())
+        pending, answer = await broker.request(request.run_id, f"{request.run_id}:1:1", "test.action")
+        return SimpleNamespace(text="done", status="completed" if answer.choice == "allow_once" else "blocked")
+
+    ui, _ = controller(tmp_path, monkeypatch, execute)
+    ui.submit("run")
+    await entered.wait()
+    assert ui.submit(f"/approve {requests[0].id}")
+    await ui.wait_current()
+    assert ui.state.run_status == "completed"
 
 
 async def test_cancellation_uses_task_cancellation_and_keeps_draft(tmp_path, monkeypatch):

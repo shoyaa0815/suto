@@ -45,6 +45,18 @@ class RuntimeHooks:
     async def authorize(self, name: str, args: dict[str, Any]) -> bool:
         return True
 
+    async def request_approval(self, run_id: str, tool_call_id: str,
+                               tool_name: str):
+        return None
+
+    async def on_child_started(self, run_id: str, session_id: str | None,
+                               parent_run_id: str) -> None:
+        pass
+
+    async def on_child_finished(self, run_id: str, status: str, text: str,
+                                usage: dict[str, int]) -> None:
+        pass
+
     async def on_tool_finished(
         self, call: ToolCall, status: str, content: Any, error: str | None, elapsed_seconds: float
     ) -> None:
@@ -86,8 +98,11 @@ class AgentRuntime:
     async def _emit(self, kind: str, run_id: str, session_id: str | None,
                     data: dict[str, Any] | None = None) -> None:
         metadata = self.request.metadata if self.request is not None else {}
+        safe_data = dict(data or {})
+        if metadata.get("child_role") in {"research", "coding", "review"}:
+            safe_data["child_role"] = metadata["child_role"]
         event = AgentEvent(
-            run_id, session_id, kind, data or {},
+            run_id, session_id, kind, safe_data,
             job_id=metadata.get("job_id"),
             parent_run_id=metadata.get("parent_run_id"),
             tool_call_id=self.current_tool_call_id,
@@ -113,7 +128,7 @@ class AgentRuntime:
     ) -> AgentResult:
         self.state = AgentState()
         self.events = []
-        run_id = uuid4().hex
+        run_id = request.run_id or uuid4().hex
         self.run_id = run_id
         self.request = request
         self.current_tool_call_id = None
@@ -226,6 +241,20 @@ class AgentRuntime:
                         or (decision.allowed and decision.requires_confirmation)
                     ):
                         decision = PermissionDecision(False, reason="invalid permission decision")
+                    if decision.requires_confirmation:
+                        await self._emit("permission.approval_requested", run_id, session_id,
+                                         {"tool_name": call.name})
+                        try:
+                            approval = await self.hooks.request_approval(
+                                run_id, self.current_tool_call_id, call.name
+                            )
+                            decision = self.permissions.apply_approval(
+                                call.name, *approval
+                            ) if approval is not None else PermissionDecision(False, reason="approval unavailable")
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            decision = PermissionDecision(False, reason="approval unavailable")
                     authorized = False
                     if decision.allowed is True and decision.requires_confirmation is False:
                         try:
@@ -272,7 +301,7 @@ class AgentRuntime:
                         raise
                     result = execution.result
                     if not result.ok:
-                        await self._emit("tool.failed", run_id, session_id, {"status": execution.status})
+                        await self._emit("tool.failed", run_id, session_id, {"status": execution.status, "tool_name": call.name, "duration_ms": round(execution.elapsed_seconds * 1000)})
                         reason = result.error or f"tool failed: {call.name}"
                         await self.hooks.on_tool_finished(
                             call, execution.status, result.content, reason, execution.elapsed_seconds
@@ -284,7 +313,7 @@ class AgentRuntime:
                             execution.reported_error or reason, run_id, session_id, usage,
                         )
                     completed_tools.add(call.name)
-                    await self._emit("tool.completed", run_id, session_id, {"tool_name": call.name})
+                    await self._emit("tool.completed", run_id, session_id, {"tool_name": call.name, "duration_ms": round(execution.elapsed_seconds * 1000)})
                     await self.hooks.on_tool_finished(
                         call, "finished", result.content, None, execution.elapsed_seconds
                     )
