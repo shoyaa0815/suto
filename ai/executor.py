@@ -28,6 +28,7 @@ from .models import (
 )
 from .progress import RequestProgress
 from retrieval.base import RetrievalError
+from skills import SkillRegistry
 from .tooling.assembly import build_runtime_tools
 
 
@@ -53,6 +54,8 @@ async def execute_local_ai(
     skill_instructions: str = "",
     conversation_history: list[dict[str, str]] | None = None,
     assistant_context: AssistantContext | None = None,
+    active_skills: tuple[str, ...] = (),
+    skill_registry: SkillRegistry | None = None,
 ) -> AIExecutionResult:
     if isinstance(prompt, AgentRequest):
         request = replace(prompt, attachments=attachments) if attachments is not None else prompt
@@ -61,6 +64,7 @@ async def execute_local_ai(
             prompt,
             session_id=getattr(assistant_context, "conversation_id", None),
             attachments=attachments or {},
+            active_skills=active_skills,
         )
     prompt = request.user_message
     attachments = request.attachments
@@ -108,6 +112,8 @@ async def execute_local_ai(
             conversation_history,
             assistant_context,
             execution_context,
+            active_skills=request.active_skills,
+            skill_registry=skill_registry,
         )
     except RetrievalError:
         outcome = "memory retrieval unavailable"
@@ -221,6 +227,8 @@ async def ask_local_ai(
     progress_callback: ProgressCallback | None = None,
     conversation_history: list[dict[str, str]] | None = None,
     assistant_context: AssistantContext | None = None,
+    active_skills: tuple[str, ...] = (),
+    skill_registry: SkillRegistry | None = None,
 ) -> str:
     """Compatibility wrapper for chat interfaces that only need answer text."""
     result = await execute_local_ai(
@@ -232,5 +240,7 @@ async def ask_local_ai(
         progress_callback=progress_callback,
         conversation_history=conversation_history,
         assistant_context=assistant_context,
+        active_skills=active_skills,
+        skill_registry=skill_registry,
     )
     return result.text

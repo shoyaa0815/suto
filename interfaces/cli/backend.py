@@ -47,6 +47,7 @@ from interfaces.cli.operations import (
 from interfaces.cli.output import set_activity, write as print
 from interfaces.cli.progress import activity_text, print_progress
 from sessions import SessionService, SessionStore
+from skills import SkillSelection, builtin_registry
 from workflows.runtime.runner import JobRunner
 from workflows.runtime.worker import AutomationWorker
 from workflows.storage.store import JobStore
@@ -101,6 +102,7 @@ async def run_session(
     database_path = os.environ.get("SUTO_DB_PATH", "data/suto.db")
     store = JobStore(database_path)
     sessions = SessionService(SessionStore(store))
+    skills = SkillSelection(builtin_registry())
     profile = load_settings().profile
     user = store.resolve_channel_identity(
         CLI_STORAGE_INTERFACE,
@@ -150,7 +152,7 @@ async def run_session(
                 continue
 
             outcome = handle_command(
-                CommandContext(store, user, conversation.id, mode),
+                CommandContext(store, user, conversation.id, mode, skills),
                 prompt,
             )
             if outcome.handled:
@@ -228,6 +230,7 @@ async def run_session(
                             progress_callback=report_progress,
                             conversation_history=history,
                             assistant_context=context,
+                            active_skills=skills.names,
                         )
                     )
                 else:
@@ -239,6 +242,7 @@ async def run_session(
                             progress_callback=report_progress,
                             conversation_history=history,
                             assistant_context=context,
+                            active_skills=skills.names,
                         )
                     )
                     while result.status == "waiting_input" and result.clarification:
@@ -269,6 +273,7 @@ async def run_session(
                                 progress_callback=report_progress,
                                 conversation_history=resumed_history,
                                 assistant_context=context,
+                                active_skills=skills.names,
                             )
                         )
                     else:

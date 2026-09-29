@@ -7,6 +7,7 @@ from typing import Any
 from interfaces.cli import CLI_STORAGE_INTERFACE
 from interfaces.cli.operations import print_pending_reminders
 from interfaces.cli.output import write as print
+from skills import SkillSelection
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,7 @@ class CommandContext:
     user: Any
     conversation_id: str
     mode: str
+    skills: SkillSelection | None = None
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,9 @@ def print_help(mode: str | None = None) -> None:
     print("  /reset all  delete all saved conversations")
     print("  /notification  show reminders that have not been delivered")
     print("  /notification remove <name>  remove a pending reminder by name")
+    print("  /skills  list available and active skills")
+    print("  /skill activate <name>  activate a skill for this CLI session")
+    print("  /skill deactivate <name>  deactivate a skill")
     print("  /exit  exit suto")
 
 
@@ -98,12 +103,45 @@ def _reset(context: CommandContext, argument: str) -> CommandOutcome:
     )
 
 
+def _skills(context: CommandContext, argument: str) -> CommandOutcome:
+    if argument or context.skills is None:
+        print("usage: /skills")
+        return CommandOutcome(handled=True)
+    for skill in context.skills.registry.list_skills():
+        marker = "active" if skill.name in context.skills.names else "available"
+        print(f"{skill.name} ({marker})  {skill.description}")
+    return CommandOutcome(handled=True)
+
+
+def _skill(context: CommandContext, argument: str) -> CommandOutcome:
+    action, _, name = argument.partition(" ")
+    if (
+        context.skills is None or action not in {"activate", "deactivate"}
+        or not name.strip() or " " in name.strip()
+    ):
+        print("usage: /skill activate|deactivate <name>")
+        return CommandOutcome(handled=True)
+    name = name.strip()
+    try:
+        if action == "activate":
+            context.skills.activate(name)
+        else:
+            context.skills.deactivate(name)
+    except ValueError as error:
+        print(str(error))
+    else:
+        print(f"Skill {name} {action}d.")
+    return CommandOutcome(handled=True)
+
+
 COMMAND_HANDLERS: dict[str, CommandHandler] = {
     "/help": _help,
     "/exit": _exit,
     "/notification": _notification,
     "/clear": _clear,
     "/reset": _reset,
+    "/skills": _skills,
+    "/skill": _skill,
 }
 
 

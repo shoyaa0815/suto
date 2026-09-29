@@ -67,8 +67,11 @@ Reminders are persisted and appear in the terminal when they become due. If
 Suto was closed at that time, it reports the missed reminder on the next start.
 
 The terminal interface exposes `/help`, `/notification` for pending reminders,
-`/notification remove <name>` to remove one by name, and `/exit`. If a name is
-ambiguous, no reminder is removed and the matches are listed. Personal-service
+`/notification remove <name>` to remove one by name, `/skills` to list skills,
+`/skill activate <name>` and `/skill deactivate <name>` to select skills for the
+current CLI run, and `/exit`. See [skills](docs/skills.md) for the file format
+and tool restriction rules. If a reminder name is ambiguous, no reminder is
+removed and the matches are listed. Personal-service
 integrations are under active development.
 
 ## Workspace automation capability

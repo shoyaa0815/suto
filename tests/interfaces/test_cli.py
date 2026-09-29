@@ -181,6 +181,35 @@ async def test_cli_cancels_an_active_request_from_the_persistent_reader(
     assert "request cancelled" in capsys.readouterr().out
 
 
+async def test_cli_skill_activation_persists_between_requests_in_one_run(
+    tmp_path, monkeypatch, capsys
+):
+    seen = []
+
+    async def fake_ask(prompt, **options):
+        seen.append((prompt, options["active_skills"]))
+        return "done"
+
+    monkeypatch.setenv("SUTO_DB_PATH", str(tmp_path / "suto.db"))
+    monkeypatch.setattr(backend, "ask_local_ai", fake_ask)
+    prompts = iter([
+        "/skills", "/skill activate coding", "first", "second",
+        "/skill deactivate coding", "third", "/skill activate missing", "/exit",
+    ])
+
+    async def read_prompt():
+        return next(prompts)
+
+    await backend.run_session("agent", read_prompt)
+
+    assert seen == [("first", ("coding",)), ("second", ("coding",)), ("third", ())]
+    output = capsys.readouterr().out
+    assert "coding (available)" in output
+    assert "Skill coding activated." in output
+    assert "Skill coding deactivated." in output
+    assert "unknown skill: missing" in output
+
+
 async def test_session_exposes_notification_command_and_removes_by_name(
     tmp_path, monkeypatch, capsys
 ):

@@ -10,6 +10,7 @@ from assistant.memory.service import PersistentMemory
 from assistant.memory.tools import MEMORY_TOOL_NAMES
 from context import ContextManager
 from retrieval.memory import MemoryRetriever
+from skills import SkillRegistry, builtin_registry
 from tools import (
     ADVANCED_TOOL_NAMES,
     COMMAND_TOOL_NAMES,
@@ -121,7 +122,11 @@ def prepare_request(
     conversation_history: list[dict[str, str]] | None,
     assistant_context: AssistantContext | None,
     execution_context: ExecutionContext | None,
+    *,
+    active_skills: tuple[str, ...] = (),
+    skill_registry: SkillRegistry | None = None,
 ) -> PreparedRequest:
+    skills = (skill_registry or builtin_registry()).active(active_skills)
     policy = get_mode_policy(mode)
     selected_language = reply_language or choose_reply_language(prompt)
     request_attachments = attachments or {}
@@ -131,6 +136,9 @@ def prepare_request(
         assistant_context,
         execution_context,
     )
+    for skill in skills:
+        if skill.allowed_tools is not None:
+            allowed_tools &= frozenset(skill.allowed_tools)
     _, tool_schemas, tool_guidance = get_tools(allowed_tools)
     retrieved = []
     if assistant_context is not None and prompt.strip():
@@ -142,12 +150,14 @@ def prepare_request(
             policy.prompt,
             tool_guidance,
             selected_language,
-            skill_instructions,
-            _personal_context(assistant_context),
+            personal_context=_personal_context(assistant_context),
         ),
         prompt,
         conversation_history,
         retrieved,
+        active_skills=skills,
+        available_tools=allowed_tools,
+        legacy_skill_instructions=skill_instructions,
     )
     return PreparedRequest(
         attachments=request_attachments,

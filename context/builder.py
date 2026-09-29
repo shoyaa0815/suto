@@ -4,6 +4,7 @@ import json
 from collections.abc import Sequence
 
 from retrieval.base import RetrievalResult
+from skills.types import Skill
 
 from .budget import ContextBudget
 
@@ -81,13 +82,38 @@ class ContextManager:
             selected.append(record)
         return json.dumps(selected, ensure_ascii=False) if selected else ""
 
+    def skills(self, active: Sequence[Skill], available_tools: frozenset[str],
+               legacy_instructions: str = "") -> str:
+        sections = []
+        for skill in active:
+            recommendations = [name for name in skill.recommended_tools if name in available_tools]
+            section = f"Skill {skill.name}:\n{skill.instructions}"
+            if recommendations:
+                section += "\nRecommended available tools: " + ", ".join(recommendations)
+            if skill.configuration:
+                section += "\nConfiguration: " + json.dumps(skill.configuration, ensure_ascii=False, sort_keys=True)
+            sections.append(section)
+        if legacy_instructions.strip():
+            sections.append(legacy_instructions.strip())
+        if not sections:
+            return ""
+        return (
+            "\nActive skills (guidance only; tool, permission, approval, and sandbox rules still apply):\n"
+            + "\n\n".join(sections) + "\n"
+        )
+
     def build(
         self,
         system_prompt: str,
         prompt: str,
         history: list[dict[str, str]] | None,
         retrieved: Sequence[RetrievalResult] = (),
+        *,
+        active_skills: Sequence[Skill] = (),
+        available_tools: frozenset[str] = frozenset(),
+        legacy_skill_instructions: str = "",
     ) -> list[dict[str, str]]:
+        system_prompt += self.skills(active_skills, available_tools, legacy_skill_instructions)
         retrieved_data = self.retrieval(retrieved)
         if retrieved_data:
             system_prompt += (

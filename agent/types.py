@@ -10,6 +10,7 @@ class AgentRequest:
     session_id: str | None = None
     attachments: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
+    active_skills: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
