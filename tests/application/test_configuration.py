@@ -2,7 +2,7 @@ import pytest
 
 import application.configuration as configuration
 from application.configuration import (
-    load_settings,
+    load_settings, parse_settings,
     save_settings,
     update_profile_setting,
 )
@@ -88,3 +88,28 @@ def test_failed_atomic_replace_preserves_previous_config(tmp_path, monkeypatch):
 
     assert path.read_text(encoding="utf-8") == previous
     assert list(tmp_path.glob(".config.yaml.*")) == []
+
+
+def test_voice_settings_are_optional_validated_and_survive_profile_edit(tmp_path):
+    path = tmp_path / "config.yaml"
+    settings = parse_settings({
+        "version": 1,
+        "voice": {"input_provider": "file", "input_path": str(tmp_path / "in.wav"),
+                  "output_provider": "file", "output_path": str(tmp_path / "out.wav"),
+                  "stt_provider": "openai", "tts_provider": "openai"},
+    })
+    save_settings(settings, path)
+    updated = update_profile_setting(load_settings(path), "display_name", "Voice User")
+    assert updated.voice == settings.voice
+    assert load_settings(path).voice == settings.voice
+
+
+@pytest.mark.parametrize("voice", [
+    {"stt_provider": "arbitrary"}, {"tts_provider": []},
+    {"input_provider": "file", "input_path": "relative.wav"},
+    {"output_provider": "file"}, {"capture_seconds": True},
+    {"input_device": ""}, {"secret": "value"},
+])
+def test_invalid_voice_configuration_fails_closed(voice):
+    with pytest.raises(ValueError):
+        parse_settings({"version": 1, "voice": voice})

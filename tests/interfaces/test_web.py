@@ -140,6 +140,21 @@ def test_external_edit_and_failed_replace_preserve_file(tmp_path, monkeypatch):
     assert editor.path.read_bytes() == before
 
 
+def test_profile_editor_preserves_voice_configuration(tmp_path):
+    editor = SettingsEditor(tmp_path / "config.yaml")
+    initial = editor.snapshot()
+    configured = initial["yaml"].replace(
+        "  stt_provider: none", "  stt_provider: openai",
+    )
+    editor.update(configured, initial["revision"], save=True)
+    snapshot = editor.profile_snapshot()
+    profile = {**snapshot["profile"], "display_name": "Voice User"}
+    editor.update_profile(profile, snapshot["revision"], save=True)
+    saved = load_settings(editor.path)
+    assert saved.profile.display_name == "Voice User"
+    assert saved.voice.stt_provider == "openai"
+
+
 def test_browser_failure_does_not_expose_error_details(app, capsys):
     def fail(url):
         raise RuntimeError("private-launcher-details")

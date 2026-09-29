@@ -3,3 +3,11 @@ profile:
   timezone: Asia/Bangkok
   locale: th
   display_name: User
+# Voice is disabled until both speech providers are selected. The optional
+# OpenAI provider reads OPENAI_API_KEY from the environment, never this file.
+voice:
+  input_provider: alsa
+  stt_provider: none
+  tts_provider: none
+  output_provider: alsa
+  capture_seconds: 10

@@ -1,5 +1,39 @@
 # Operations and advanced features
 
+## Voice interface
+
+Run `venv/bin/python main.py voice` for discrete, push-to-record turns. Voice
+uses its own local identity in the existing SQLite conversations and run tables;
+`/session`, `/new`, and `/resume <id>` select sessions, and `/skills` plus
+`/skill activate <name>` and `/skill deactivate <name>` persist selected Skill
+names. Missing Skills block the next run until deactivated. The same executor,
+tools, MCP restrictions, delegation, permission engine, and one-active-run
+session reservation apply. Voice does not start automation workers.
+
+Voice is disabled by default. Set `voice.stt_provider` and
+`voice.tts_provider` to `openai` in `config.yaml`, and put `OPENAI_API_KEY` in
+`.env` or the host environment. Recorded audio and the bounded spoken response
+are sent to OpenAI when this provider is selected. The configured audio source
+and sink can be `alsa` (using installed `arecord` and `aplay`) or `file` with
+absolute WAV `input_path` and `output_path`. ALSA capture lasts at most 30
+seconds; file input and generated audio are limited to 4 MiB. Startup prints
+provider names and audio availability without keys or device IDs. File mode can
+be used to inspect a generated WAV without speaker hardware. The executable
+check cannot confirm that an ALSA device will open; capture or playback reports
+a generic failure if the device is unavailable.
+
+Use `/listen` to record one turn. During a turn, `/cancel` cancels the executor
+task and any awaited child work and stops supported playback. An approval
+request prints its ID; `/approve <id>` permits that single call and `/deny <id>`
+denies it. Transcribed speech never submits approval. Requests expire through
+the existing broker, and pending approvals vanish on cancellation or restart.
+The text response remains available in the terminal. A short, simple, sanitized
+response may be spoken; long, code-heavy, or potentially sensitive content gets
+a fixed spoken notice instead. Failed runs speak a fixed error. A completed run
+stays completed in SQLite if only TTS or playback fails afterward. There is no
+wake word, always-listening process, voice authentication, or automatic crash
+continuation.
+
 ## Terminal UI
 
 Run `venv/bin/python main.py tui` in an interactive terminal. The TUI uses
