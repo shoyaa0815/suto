@@ -39,6 +39,7 @@ from interfaces.cli.commands import (
     handle_command,
     print_help as _print_help,
 )
+from interfaces.cli.skill_catalog import load_cli_skills
 from interfaces.cli.language import (
     choose_reply_language_async as _choose_reply_language_async,
 )
@@ -49,7 +50,7 @@ from interfaces.cli.operations import (
 from interfaces.cli.output import set_activity, write as print
 from interfaces.cli.progress import activity_text, print_progress
 from sessions import SessionService, SessionStore
-from skills import SkillSelection, builtin_registry
+from skills import SkillSelection
 from workflows.runtime.runner import JobRunner
 from workflows.runtime.worker import AutomationWorker
 from workflows.storage.store import JobStore
@@ -105,7 +106,10 @@ async def run_session(
     database_path = os.environ.get("SUTO_DB_PATH", "data/suto.db")
     store = JobStore(database_path)
     sessions = SessionService(SessionStore(store))
-    skills = SkillSelection(builtin_registry())
+    skill_registry, skill_warnings = load_cli_skills()
+    skills = SkillSelection(skill_registry)
+    for warning in skill_warnings:
+        print(warning)
     async def on_approval(request):
         set_activity(None)
         activity_writer = getattr(read_prompt, "set_activity", None)
@@ -189,8 +193,13 @@ async def run_session(
                     return
                 continue
 
+            if outcome.request_prompt is not None:
+                prompt = outcome.request_prompt
+
             try:
                 active_skills = skills.require_available()
+                if outcome.request_skill is not None and outcome.request_skill not in active_skills:
+                    active_skills += (outcome.request_skill,)
                 run_id = store.begin_agent_run(conversation.id)
             except ValueError as error:
                 print(f"Selected Skill unavailable: {error}")
@@ -279,6 +288,7 @@ async def run_session(
                             conversation_history=history,
                             assistant_context=context,
                             active_skills=active_skills,
+                            skill_registry=skill_registry,
                             run_id=run_id,
                             result_callback=record_result,
                             approval_broker=approvals,
@@ -298,6 +308,7 @@ async def run_session(
                             conversation_history=history,
                             assistant_context=context,
                             active_skills=active_skills,
+                            skill_registry=skill_registry,
                             approval_broker=approvals,
                         )
                     )
@@ -338,6 +349,7 @@ async def run_session(
                                 conversation_history=resumed_history,
                                 assistant_context=context,
                                 active_skills=active_skills,
+                                skill_registry=skill_registry,
                                 approval_broker=approvals,
                             )
                         )

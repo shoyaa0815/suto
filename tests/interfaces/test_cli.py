@@ -13,7 +13,9 @@ from prompt_toolkit.widgets import TextArea
 
 from interfaces.cli import backend
 from interfaces.cli import app as cli_app
+from interfaces.cli import commands as cli_commands
 from interfaces.cli.commands import CommandContext, handle_command
+from interfaces.cli.skill_catalog import load_cli_skills
 from interfaces.cli.app import (
     ACTIVITY_ROW_HEIGHT,
     DOT_FRAMES,
@@ -214,6 +216,94 @@ async def test_cli_skill_activation_persists_between_requests_in_one_run(
     assert "unknown skill: missing" in output
 
 
+async def test_cli_user_skill_slash_command_applies_to_one_request(
+    tmp_path, monkeypatch, capsys
+):
+    skill_dir = tmp_path / ".suto" / "skills" / "outline"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: outline\ndescription: Outline a topic.\n"
+        "allowed_tools: [search_web]\n---\nUse short headings.\n",
+        encoding="utf-8",
+    )
+    seen = []
+
+    async def fake_ask(prompt, **options):
+        prepared = prepare_request(
+            prompt, "agent", None, None, "", [], None, None,
+            active_skills=options["active_skills"],
+            skill_registry=options["skill_registry"],
+        )
+        seen.append((prompt, options["active_skills"], prepared))
+        return "done"
+
+    database_path = tmp_path / "suto.db"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("SUTO_DB_PATH", str(database_path))
+    monkeypatch.setattr(backend, "ask_local_ai", fake_ask)
+    prompts = iter([
+        "/skills", "/outline explain trees", "ordinary", "/outline", "/exit",
+    ])
+    await backend.run_session("agent", lambda: _next_prompt(prompts))
+
+    assert [(prompt, names) for prompt, names, _ in seen] == [
+        ("explain trees", ("outline",)), ("ordinary", ()),
+    ]
+    assert "Use short headings." in seen[0][2].messages[0]["content"]
+    assert "fetch_url" not in seen[0][2].allowed_tools
+    assert "Use short headings." not in seen[1][2].messages[0]["content"]
+    output = capsys.readouterr().out
+    assert "outline (available)" in output
+    assert "usage: /outline <message>" in output
+    with sqlite3.connect(database_path) as db:
+        assert db.execute("SELECT count(*) FROM session_skills").fetchone()[0] == 0
+
+
+def test_cli_user_skill_catalog_skips_invalid_conflicting_and_symlinked_files(
+    tmp_path
+):
+    root = tmp_path / ".suto" / "skills"
+    for name, body in (
+        ("valid", "name: valid\ndescription: Valid."),
+        ("invalid", "name: invalid"),
+        ("help", "name: help\ndescription: Reserved."),
+        ("coding", "name: coding\ndescription: Duplicate."),
+        ("mismatch", "name: elsewhere\ndescription: Mismatched."),
+    ):
+        directory = root / name
+        directory.mkdir(parents=True)
+        (directory / "SKILL.md").write_text(
+            f"---\n{body}\n---\nInstructions.\n", encoding="utf-8"
+        )
+    linked = root / "linked"
+    linked.symlink_to(root / "valid", target_is_directory=True)
+
+    registry, warnings = load_cli_skills(tmp_path)
+
+    assert {skill.name for skill in registry.list_skills()} == {
+        "coding", "research", "valid"
+    }
+    assert len(warnings) == 5
+    assert any("invalid SKILL.md" in warning for warning in warnings)
+    assert any("/help is a CLI command" in warning for warning in warnings)
+    assert any("name coding already exists" in warning for warning in warnings)
+    assert any("symlinks are not supported" in warning for warning in warnings)
+    assert any("directory and skill name differ" in warning for warning in warnings)
+
+
+def test_cli_user_skill_catalog_ignores_missing_and_symlinked_roots(tmp_path):
+    registry, warnings = load_cli_skills(tmp_path)
+    assert {skill.name for skill in registry.list_skills()} == {"coding", "research"}
+    assert warnings == ()
+
+    home_skills = tmp_path / ".suto" / "skills"
+    home_skills.parent.mkdir()
+    home_skills.symlink_to(tmp_path, target_is_directory=True)
+    registry, warnings = load_cli_skills(tmp_path)
+    assert {skill.name for skill in registry.list_skills()} == {"coding", "research"}
+    assert "symlink" in warnings[0]
+
+
 async def test_session_manages_reminders_separately_from_automation_jobs(
     tmp_path, monkeypatch, capsys
 ):
@@ -258,7 +348,12 @@ async def test_session_manages_reminders_separately_from_automation_jobs(
             "/reminder remove rem_sleep",
             f"/reminder remove {decoy.id}",
             "/reminder",
+            "/suto",
+            "/suto help",
+            "/help extra",
+            "/version extra",
             "/help",
+            "/version",
             "/exit",
         ]
     )
@@ -277,6 +372,10 @@ async def test_session_manages_reminders_separately_from_automation_jobs(
     assert "Unknown command: /daily" in output
     assert "Unknown command: /noti" in output
     assert "Unknown command: /notification" in output
+    assert "Unknown command: /suto. Type /help for commands." in output
+    assert "usage: /help" in output
+    assert "usage: /version" in output
+    assert "Suto 0.1.0" in output
     assert "Open tasks:" in output
     assert personal_task.id in output
     assert "Pending reminders:" in output
@@ -297,7 +396,9 @@ async def test_session_manages_reminders_separately_from_automation_jobs(
     assert store.get_reminder(user.id, prefixed_title.id) is None
     assert store.get_reminder(user.id, decoy.id) is None
     assert store.get_reminder(other.id, other_reminder.id).status == "scheduled"
-    assert "  /help" in output
+    assert "  /help  " in output
+    assert "  /version  " in output
+    assert "  /suto help" not in output
     assert "  /reminder" in output
     assert "  /reminder remove <name-or-id>" in output
     assert "  /task" in output
@@ -434,6 +535,22 @@ def test_cli_ai_request_cannot_use_personal_task_or_reminder_tools(tmp_path):
     assert "list_reminders" not in prepared.allowed_tools
     assert "save_memory" in prepared.allowed_tools
     assert "/task and /reminder commands" in prepared.messages[0]["content"]
+
+
+def test_version_reads_project_metadata_and_handles_missing_file(
+    tmp_path, monkeypatch, capsys
+):
+    project_file = tmp_path / "pyproject.toml"
+    project_file.write_text('[project]\nversion = "9.8.7"\n')
+    monkeypatch.setattr(cli_commands, "PROJECT_FILE", project_file)
+    context = CommandContext(None, None, "conversation", "agent")
+
+    handle_command(context, "/version")
+    assert capsys.readouterr().out == "Suto 9.8.7\n"
+
+    monkeypatch.setattr(cli_commands, "PROJECT_FILE", tmp_path / "missing.toml")
+    handle_command(context, "/version")
+    assert capsys.readouterr().out == "Suto version unavailable.\n"
 
 
 def test_remove_command_reports_database_failure_without_claiming_deletion(

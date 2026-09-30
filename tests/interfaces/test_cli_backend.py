@@ -24,7 +24,9 @@ def test_print_help_lists_exit_commands(capsys):
     _print_help()
 
     output = capsys.readouterr().out
-    assert "/help" in output
+    assert "  /help  " in output
+    assert "  /version  " in output
+    assert "  /suto help  " not in output
     assert "/clear" in output
     assert "/new" not in output
     assert "/setting" not in output
@@ -51,6 +53,7 @@ def test_developer_help_only_lists_public_commands(capsys):
 
     output = capsys.readouterr().out
     assert "/help" in output
+    assert "/version" in output
     assert "/exit" in output
     assert "file-write" not in output
 

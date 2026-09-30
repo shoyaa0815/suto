@@ -2,7 +2,9 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 import sqlite3
+import tomllib
 from typing import Any
 
 from interfaces.cli import CLI_STORAGE_INTERFACE
@@ -27,14 +29,18 @@ class CommandOutcome:
     exit_requested: bool = False
     conversation_id: str | None = None
     reset_language: bool = False
+    request_prompt: str | None = None
+    request_skill: str | None = None
 
 
 CommandHandler = Callable[[CommandContext, str], CommandOutcome]
+PROJECT_FILE = Path(__file__).resolve().parents[2] / "pyproject.toml"
 
 
 def print_help(mode: str | None = None) -> None:
     print("Commands:")
     print("  /help  show available commands")
+    print("  /version  show Suto's version")
     print("  /clear  clear this chat context")
     print("  /reset all  delete all saved conversations")
     print("  /reminder [time and title]  list or create reminders")
@@ -45,11 +51,31 @@ def print_help(mode: str | None = None) -> None:
     print("  /skills  list available and active skills")
     print("  /skill activate <name>  activate a skill for this CLI session")
     print("  /skill deactivate <name>  deactivate a skill")
+    print("  /<skill-name> <message>  use a skill for one message")
     print("  /exit  exit suto")
 
 
 def _help(context: CommandContext, argument: str) -> CommandOutcome:
+    if argument:
+        print("usage: /help")
+        return CommandOutcome(handled=True)
     print_help(context.mode)
+    return CommandOutcome(handled=True)
+
+
+def _version(context: CommandContext, argument: str) -> CommandOutcome:
+    if argument:
+        print("usage: /version")
+        return CommandOutcome(handled=True)
+    try:
+        with PROJECT_FILE.open("rb") as project_file:
+            version = tomllib.load(project_file)["project"]["version"]
+        if not isinstance(version, str) or not version:
+            raise ValueError("invalid project version")
+    except (OSError, ValueError, KeyError, TypeError):
+        print("Suto version unavailable.")
+    else:
+        print(f"Suto {version}")
     return CommandOutcome(handled=True)
 
 
@@ -219,6 +245,7 @@ def _skill(context: CommandContext, argument: str) -> CommandOutcome:
 
 COMMAND_HANDLERS: dict[str, CommandHandler] = {
     "/help": _help,
+    "/version": _version,
     "/exit": _exit,
     "/reminder": _reminder,
     "/task": _task,
@@ -238,6 +265,21 @@ def handle_command(context: CommandContext, prompt: str) -> CommandOutcome:
     command = command.casefold()
     handler = COMMAND_HANDLERS.get(command)
     if handler is None:
+        name = command.removeprefix("/")
+        if context.skills is not None:
+            try:
+                context.skills.registry.resolve(name)
+            except ValueError:
+                pass
+            else:
+                if not argument.strip():
+                    print(f"usage: /{name} <message>")
+                    return CommandOutcome(handled=True)
+                return CommandOutcome(
+                    handled=False,
+                    request_prompt=argument.strip(),
+                    request_skill=name,
+                )
         print(f"Unknown command: {command}. Type /help for commands.")
         return CommandOutcome(handled=True)
     return handler(context, argument.strip())

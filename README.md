@@ -76,9 +76,11 @@ personal tasks, and `/task ทำอะไรต่างๆบลาๆ` create
 `/reminder remove <name-or-id>` and `/task remove <name-or-id>` delete a
 pending reminder or open task from the database. If a name matches more than
 one item, nothing is deleted and the matching IDs are shown. `/jobs` lists
-recent automation jobs without starting one. `/help`, `/skills`,
+recent automation jobs without starting one. `/help`, `/version`, `/skills`,
 `/skill activate <name>`, `/skill deactivate <name>`, and `/exit` remain
-available. See [skills](docs/skills.md) for the file format and tool rules.
+available. Put personal skills in `~/.suto/skills/<name>/SKILL.md`, restart Suto,
+then use `/<name> <message>` for one request. See [skills](docs/skills.md) for
+the file format and tool rules.
 
 ## MCP tools
 

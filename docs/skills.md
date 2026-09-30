@@ -40,9 +40,23 @@ request. `allowed_tools` intersects the existing tool policy; an omitted list
 places no extra restriction, while `[]` allows no tools. With multiple active
 skills, all allow lists intersect. Neither field grants a tool or a permission.
 
-Use `/skills` to discover builtins, `/skill activate <name>` and
-`/skill deactivate <name>` in the CLI. Selection lasts for that CLI run, including
-subsequent requests; it is not stored across restarts. Each request resolves
-selected names, filters available tools, and gives the active instructions to
+Use `/skills` to discover available skills, `/skill activate <name>` and
+`/skill deactivate <name>` in the CLI. The CLI also loads user skills from
+`~/.suto/skills/<name>/SKILL.md` when it starts. Create the directory and files
+yourself; the directory name must match the skill's `name`. Restart Suto after
+adding or editing a skill. If the directory is missing, only builtins are
+available. Invalid files, symlinks, duplicate names, and names that conflict
+with CLI commands are skipped with a warning.
+
+Run `/<name> <message>` to use a skill for one request, for example
+`/research compare these sources`. The skill name is removed from the message
+sent to the model, and this invocation does not change the saved selection.
+Skills already activated for the session also apply to that request.
+Public CLI commands take precedence over skill names. A skill invocation without
+a message prints usage and sends no AI request.
+
+Selections made with `/skill activate` are stored with the conversation and
+restored when that session resumes. Each request resolves selected names,
+filters available tools, and gives the active instructions to
 `ContextManager`. Existing versioned automation skill instructions enter the
 same context path, while their storage and pinning behavior remains unchanged.
