@@ -44,7 +44,9 @@ python3 main.py setting
 python3 main.py api
 ```
 
-Suto keeps conversation history and uses the local user profile. In the CLI,
+Suto keeps conversation history and uses the local user profile. Each CLI launch
+starts a fresh chat; prior chats remain stored but are not used as context.
+Saved memories remain available across launches. In the CLI,
 personal tasks and reminders are managed with explicit slash commands; chat
 does not create or change them.
 
@@ -55,8 +57,9 @@ user message in its frame. Assistant replies are printed without a name prefix.
 [API operations](docs/operations.md#local-agent-api) for routes, examples,
 security boundaries, and run lifecycle.
 
-`setting` opens the local-only Settings page in the default browser and prints
-a private sign-in link. The page edits `display_name`, `locale`, and `timezone`
+`setting` opens the local-only web page in the default browser and prints
+a private sign-in link. Dashboard shows saved CLI conversations and their chat
+messages for reading. Settings edits `display_name`, `locale`, and `timezone`
 in `config.yaml`. AI chat remains in the CLI.
 Save validates changes in one step; restart Suto after saving. The CLI
 reads these values but cannot change them.

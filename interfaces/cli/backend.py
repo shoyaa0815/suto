@@ -3,6 +3,7 @@
 import asyncio
 import os
 from collections.abc import Awaitable, Callable
+from uuid import uuid4
 
 from agent import AgentRequest
 from ai import ask_local_ai, execute_local_ai
@@ -140,8 +141,9 @@ async def run_session(
         timezone=profile.timezone,
         locale=profile.locale,
     )
+    thread_id = f"local:{uuid4().hex}"
     conversation = sessions.resume(
-        user.id, CLI_STORAGE_INTERFACE, "local"
+        user.id, CLI_STORAGE_INTERFACE, thread_id
     )
     skills.bind(store, conversation.id)
     worker = AutomationWorker(store, JobRunner(store))
@@ -176,7 +178,11 @@ async def run_session(
                 continue
 
             outcome = handle_command(
-                CommandContext(store, user, conversation.id, mode, skills),
+                CommandContext(
+                    store, user, conversation.id, mode, skills,
+                    thread_id=thread_id,
+                    reset_display=getattr(read_prompt, "reset_display", None),
+                ),
                 prompt,
             )
             if outcome.handled:
@@ -184,7 +190,7 @@ async def run_session(
                     conversation = sessions.resume(
                         user.id,
                         CLI_STORAGE_INTERFACE,
-                        "local",
+                        thread_id,
                     )
                     skills.bind(store, conversation.id)
                 if outcome.reset_language:

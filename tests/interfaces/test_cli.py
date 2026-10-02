@@ -24,6 +24,7 @@ from interfaces.cli.app import (
     _build_prompt_application,
 )
 from interfaces.cli.operations import print_due_reminders, print_pending_reminders
+from interfaces.cli.output import route_output
 from workflows.storage.store import JobStore
 from tests.support.ai_helpers import FakeClientSession, patch_model_chat
 
@@ -159,6 +160,73 @@ def test_cli_history_follows_new_output_until_user_scrolls_away():
     reader._follow_history()
     reader.write("third\n")
     assert history.cursor_position == len(history.text)
+
+
+def test_clear_resets_visible_history_after_deleting_only_current_chat(tmp_path):
+    class FakeApplication:
+        suto_history_field = TextArea(read_only=True)
+
+        def invalidate(self):
+            pass
+
+    reader = PromptReader()
+    reader._application = FakeApplication()
+    store = JobStore(tmp_path / "suto.db")
+    user = store.resolve_channel_identity("tui", "local")
+    current = store.get_or_create_conversation(user.id, "tui", "current")
+    other = store.get_or_create_conversation(user.id, "tui", "other")
+    store.add_message(current.id, "user", "private old chat")
+    store.save_session_summary(current.id, user.id, "old summary")
+    store.add_message(other.id, "user", "other chat")
+    store.save_memory(user.id, "remember this")
+    reader.write("private old chat\n")
+    reader.write("previous command output\n")
+    reader.write("> /clear\n")
+    reader._scroll_history()
+
+    with route_output(reader.write):
+        outcome = handle_command(
+            CommandContext(store, user, current.id, "agent", reset_display=reader.reset_display),
+            "/clear",
+        )
+
+    visible = reader._application.suto_history_field.buffer.text
+    assert outcome.handled and outcome.reset_language
+    assert visible.startswith("Suto · ")
+    assert "Type /help for commands." in visible
+    assert visible.endswith("Chat context cleared.\n")
+    assert "private old chat" not in visible
+    assert "previous command output" not in visible
+    assert "> /clear" not in visible
+    assert reader._following_history is True
+    assert store.list_messages(current.id) == []
+    assert store.get_session_summary(current.id) is None
+    assert [message.content for message in store.list_messages(other.id)] == ["other chat"]
+    assert store.list_memories(user.id)[0].content == "remember this"
+
+
+def test_clear_does_not_reset_display_or_claim_success_if_deletion_fails(
+    tmp_path, monkeypatch, capsys
+):
+    store = JobStore(tmp_path / "suto.db")
+    user = store.resolve_channel_identity("tui", "local")
+    current = store.get_or_create_conversation(user.id, "tui", "current")
+    store.add_message(current.id, "user", "keep this")
+    resets = []
+
+    def fail_clear(_conversation_id):
+        raise sqlite3.OperationalError("simulated write failure")
+
+    monkeypatch.setattr(store, "clear_conversation", fail_clear)
+    with pytest.raises(sqlite3.OperationalError):
+        handle_command(
+            CommandContext(store, user, current.id, "agent", reset_display=lambda: resets.append(True)),
+            "/clear",
+        )
+
+    assert resets == []
+    assert "Chat context cleared." not in capsys.readouterr().out
+    assert [message.content for message in store.list_messages(current.id)] == ["keep this"]
 
 
 async def test_cli_cancels_an_active_request_from_the_persistent_reader(
@@ -626,7 +694,9 @@ def test_overdue_reminder_prints_original_time_and_is_not_repeated(
     assert "No pending reminders." in capsys.readouterr().out
 
 
-async def test_cli_restores_skill_and_uses_generic_approval_broker(tmp_path, monkeypatch, capsys):
+async def test_cli_skill_selection_resets_on_new_launch_and_approval_still_works(
+    tmp_path, monkeypatch, capsys
+):
     observed = []
 
     async def fake_ask(prompt, **options):
@@ -644,12 +714,90 @@ async def test_cli_restores_skill_and_uses_generic_approval_broker(tmp_path, mon
     await backend.run_session("agent", lambda: _next_prompt(first))
     second = iter(["hello", "allow", "/exit"])
     await backend.run_session("agent", lambda: _next_prompt(second))
-    assert observed == [("research",)]
+    assert observed == [()]
     assert "Approve test.action" in capsys.readouterr().out
 
 
 async def _next_prompt(prompts):
     return next(prompts)
+
+
+async def test_cli_clear_calls_reader_display_reset(tmp_path, monkeypatch, capsys):
+    class Reader:
+        def __init__(self):
+            self.prompts = iter(["/clear", "/exit"])
+            self.resets = 0
+
+        async def __call__(self):
+            return next(self.prompts)
+
+        def reset_display(self):
+            self.resets += 1
+
+    reader = Reader()
+    monkeypatch.setenv("SUTO_DB_PATH", str(tmp_path / "suto.db"))
+
+    await backend.run_session("agent", reader)
+
+    assert reader.resets == 1
+    assert "Chat context cleared." in capsys.readouterr().out
+
+
+async def test_cli_new_launch_uses_fresh_chat_but_keeps_memory_and_old_records(
+    tmp_path, monkeypatch
+):
+    database_path = tmp_path / "suto.db"
+    store = JobStore(database_path)
+    user = store.resolve_channel_identity("tui", "local")
+    old = store.get_or_create_conversation(user.id, "tui", "local")
+    store.add_message(old.id, "user", "old private chat")
+    store.save_session_summary(old.id, user.id, "old private summary")
+    store.save_memory(user.id, "tea preference: green")
+    old_run = store.begin_agent_run(old.id)
+    store.start_agent_run(old_run)
+    store.finish_agent_run(old_run, "completed", final_text="old answer")
+    seen = []
+
+    async def fake_ask(prompt, **options):
+        prepared = prepare_request(
+            prompt, "agent", None, ai.ReplyLanguage("en", "English", "test"),
+            "", options["conversation_history"], options["assistant_context"], None,
+        )
+        seen.append((
+            options["assistant_context"].conversation_id,
+            options["conversation_history"],
+            prepared.messages[0]["content"],
+        ))
+        return f"answer: {prompt}"
+
+    monkeypatch.setenv("SUTO_DB_PATH", str(database_path))
+    monkeypatch.setattr(backend, "ask_local_ai", fake_ask)
+    iter_first = iter(["tea first", "tea second", "/exit"])
+    await backend.run_session("agent", lambda: _next_prompt(iter_first))
+
+    iter_second = iter(["tea third", "/exit"])
+    await backend.run_session("agent", lambda: _next_prompt(iter_second))
+
+    assert seen[0][1] == []
+    assert seen[1][1] == [
+        {"role": "user", "content": "tea first"},
+        {"role": "assistant", "content": "answer: tea first"},
+    ]
+    assert seen[2][1] == []
+    assert seen[0][0] == seen[1][0]
+    assert seen[2][0] not in {old.id, seen[0][0]}
+    assert all("tea preference: green" in item[2] for item in seen)
+    assert all("old private summary" not in item[2] for item in seen)
+    reopened = JobStore(database_path)
+    assert reopened.get_agent_run(old_run)["status"] == "completed"
+    assert reopened.list_messages(old.id)[0].content == "old private chat"
+    assert reopened.get_session_summary(old.id).summary == "old private summary"
+    assert [message.content for message in reopened.list_messages(seen[0][0])] == [
+        "tea first", "answer: tea first", "tea second", "answer: tea second",
+    ]
+    assert [message.content for message in reopened.list_messages(seen[2][0])] == [
+        "tea third", "answer: tea third",
+    ]
 
 
 async def test_cli_runs_the_real_assistant_session_backend(
@@ -662,7 +810,10 @@ async def test_cli_runs_the_real_assistant_session_backend(
     async def fake_ask(prompt, **options):
         assert options["mode"] == "agent"
         assert options["assistant_context"] is not None
-        calls.append((prompt, options["conversation_history"]))
+        calls.append((
+            prompt, options["conversation_history"],
+            options["assistant_context"].conversation_id,
+        ))
         return f"answer: {prompt}"
 
     monkeypatch.setenv("SUTO_DB_PATH", str(tmp_path / "suto.db"))
@@ -681,11 +832,12 @@ async def test_cli_runs_the_real_assistant_session_backend(
     assert "answer: again" in output
     assert "All saved conversations deleted" in output
     assert "answer: third" in output
-    assert calls == [
-        ("hello", []),
-        ("again", []),
-        ("third", []),
+    assert [(prompt, history) for prompt, history, _ in calls] == [
+        ("hello", []), ("again", []), ("third", []),
     ]
+    assert calls[0][2] == calls[1][2]
+    assert calls[2][2] != calls[0][2]
+    assert JobStore(tmp_path / "suto.db").get_conversation(calls[2][2]).external_thread_id != "local"
 
 
 async def test_cli_continues_after_memory_index_failure(tmp_path, monkeypatch, capsys):

@@ -150,12 +150,17 @@ refresh.
 
 ## Database and worker lifecycle
 
-CLI conversations remain in the existing `conversations` and `messages` tables
-and resume by local user, interface, and thread. Before each prompt, the session
-service keeps up to 20 recent messages for model context and condenses older
-messages into a bounded session summary. The summary and its message cursor are
-stored together; the original messages remain available in SQLite. `/clear`
-deletes both messages and their summary for the current conversation, while
+CLI conversations remain in the existing `conversations` and `messages` tables.
+Each CLI launch starts a new conversation for the same local user and interface;
+earlier conversations and run history remain stored but are not used as chat
+context after reopening. Saved memories still carry across launches. Before
+each prompt, the session service keeps up to 20 recent messages for model
+context and condenses older messages into a bounded session summary. The summary
+and its message cursor are stored together; the original messages remain
+available in SQLite. Active Skill selection starts fresh with each CLI launch.
+`/clear` deletes both messages and their summary for the current conversation,
+then resets the visible CLI history to its startup view. It does not delete
+saved memories, tasks, reminders, or other conversations;
 `/reset all` removes saved conversations. Model context uses a 32,000-character
 history budget and an 8,000-character summary budget. The deterministic summary
 keeps excerpts of older turns, so details outside that budget can be omitted.
@@ -364,7 +369,16 @@ APIs require that cookie; writes also require an exact local Origin and JSON
 request header. Host validation rejects alternate hostnames. No remote binding,
 public deployment or reverse-proxy mode is provided.
 
-The page edits the supported `config.yaml` profile fields. Save becomes available
+The Dashboard tab lists saved CLI conversations for the local CLI identity from
+`SUTO_DB_PATH` (default `data/suto.db`), including conversations with no chat
+messages. Open a conversation to read its saved
+user and assistant messages in order; long lists and threads load in pages.
+Internal tool messages are hidden. The viewer is read-only, requires the same
+sign-in cookie, and does not create a database when none exists. `/clear` removes
+messages but leaves the empty conversation listed; `/reset all` removes the
+conversations from this view.
+
+The Settings tab edits the supported `config.yaml` profile fields. Save becomes available
 when a field changes and validates before writing. Unknown fields, invalid timezones, malformed
 YAML and files over 32 KiB are rejected. Secrets remain in `.env`.
 The editor normalizes formatting and removes comments; a byte-level revision
@@ -373,8 +387,8 @@ conflicts preserve the draft and file; Reload requires confirmation for unsaved
 edits. Persistence reuses the existing atomic settings writer. Restart relevant
 Suto processes to apply saved settings; the editor never restarts them.
 
-Opening Settings does not start AI, automation, or delivery workers and does
-not create a SQLite database. AI chat and reminder delivery remain in the CLI.
+Opening the web page does not start AI, automation, or delivery workers.
+AI chat and reminder delivery remain in the CLI.
 
 ## Local notifications and verification
 

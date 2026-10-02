@@ -35,6 +35,11 @@ PROMPT_BOX_DIMENSION = Dimension.exact(PROMPT_BOX_HEIGHT)
 DOT_FRAMES = (".", "..", "...", "")
 
 
+def _write_welcome(reader: "PromptReader") -> None:
+    reader.write(f"Suto · {config.AI_MODEL} · agent\n")
+    reader.write("Type /help for commands. PageUp: history · End: latest\n\n")
+
+
 def _build_prompt_application(
     prompt: str | Callable[[], str],
     on_accept: Callable[[str], None] | None = None,
@@ -206,6 +211,17 @@ class PromptReader:
         )
         self._invalidate()
 
+    def reset_display(self) -> None:
+        """Start a fresh visible chat after its stored context was cleared."""
+        if self._application is None:
+            return
+        history = getattr(self._application, "suto_history_field", None)
+        if history is None:
+            return
+        history.buffer.set_document(Document("", 0), bypass_readonly=True)
+        self._following_history = True
+        _write_welcome(self)
+
     def _interrupt(self) -> None:
         if self._activity is None:
             self._requests.put_nowait(KeyboardInterrupt())
@@ -314,8 +330,7 @@ def run(mode: str) -> None:
         reader = PromptReader()
         with route_output(reader.write, reader.set_activity), patch_stdout():
             await reader.start()
-            reader.write(f"Suto · {config.AI_MODEL} · {mode}\n")
-            reader.write("Type /help for commands. PageUp: history · End: latest\n\n")
+            _write_welcome(reader)
             try:
                 await run_session(mode, reader)
             finally:

@@ -3,14 +3,17 @@
 import asyncio
 import hmac
 import ipaddress
+import os
 import secrets
 import signal
+import sqlite3
 import threading
 import webbrowser
 from pathlib import Path
 
 from aiohttp import web
 
+from . import history
 from .settings import SettingsConflict, SettingsEditor
 
 
@@ -60,11 +63,12 @@ async def guard(request, handler):
     return response
 
 
-def create_app(*, config_path=None, browser_opener=None):
+def create_app(*, config_path=None, browser_opener=None, database_path=None):
     app = web.Application(middlewares=[guard], client_max_size=65536)
     state = {
         "bootstrap": secrets.token_urlsafe(32), "session": secrets.token_urlsafe(32),
         "settings": SettingsEditor(Path(config_path or "config.yaml")),
+        "history_db": Path(database_path or os.environ.get("SUTO_DB_PATH", "data/suto.db")).expanduser().resolve(),
         "browser_opener": browser_opener or webbrowser.open,
     }
     app[STATE] = state
@@ -103,6 +107,29 @@ def create_app(*, config_path=None, browser_opener=None):
             save=request.path.endswith("/save"),
         ))
 
+    async def conversations(request):
+        raw_offset = request.query.get("offset", "0")
+        if not raw_offset.isdecimal() or len(raw_offset) > 9:
+            raise web.HTTPBadRequest(text="Invalid conversation page.")
+        try:
+            result = history.list_conversations(state["history_db"], int(raw_offset))
+        except sqlite3.Error:
+            return web.json_response({"error": "Could not read chat history."}, status=503)
+        return web.json_response(result)
+
+    async def conversation_messages(request):
+        conversation_id = request.match_info["conversation_id"]
+        raw_after = request.query.get("after", "0")
+        if not raw_after.isdecimal() or len(raw_after) > 18 or len(conversation_id) > 64:
+            raise web.HTTPBadRequest(text="Invalid conversation page.")
+        try:
+            result = history.list_messages(state["history_db"], conversation_id, int(raw_after))
+        except sqlite3.Error:
+            return web.json_response({"error": "Could not read chat history."}, status=503)
+        if result is None:
+            return web.json_response({"error": "Conversation is no longer available."}, status=404)
+        return web.json_response(result)
+
     async def index(request):
         return web.Response(text=(ASSETS / "index.html").read_text(), content_type="text/html")
 
@@ -122,6 +149,8 @@ def create_app(*, config_path=None, browser_opener=None):
     app.router.add_get("/api/profile", profile)
     app.router.add_post("/api/profile/validate", profile)
     app.router.add_post("/api/profile/save", profile)
+    app.router.add_get("/api/conversations", conversations)
+    app.router.add_get("/api/conversations/{conversation_id}/messages", conversation_messages)
     return app
 
 

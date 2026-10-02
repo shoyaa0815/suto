@@ -21,6 +21,8 @@ class CommandContext:
     conversation_id: str
     mode: str
     skills: SkillSelection | None = None
+    thread_id: str = "local"
+    reset_display: Callable[[], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -41,7 +43,7 @@ def print_help(mode: str | None = None) -> None:
     print("Commands:")
     print("  /help  show available commands")
     print("  /version  show Suto's version")
-    print("  /clear  clear this chat context")
+    print("  /clear  clear this chat context and terminal view")
     print("  /reset all  delete all saved conversations")
     print("  /reminder [time and title]  list or create reminders")
     print("  /reminder remove <name-or-id>  delete a pending reminder")
@@ -190,6 +192,8 @@ def _clear(context: CommandContext, argument: str) -> CommandOutcome:
         print("usage: /clear")
         return CommandOutcome(handled=True)
     context.store.clear_conversation(context.conversation_id)
+    if context.reset_display is not None:
+        context.reset_display()
     print("Chat context cleared.")
     return CommandOutcome(handled=True, reset_language=True)
 
@@ -202,7 +206,7 @@ def _reset(context: CommandContext, argument: str) -> CommandOutcome:
     conversation = context.store.get_or_create_conversation(
         context.user.id,
         CLI_STORAGE_INTERFACE,
-        "local",
+        context.thread_id,
     )
     print(f"All saved conversations deleted ({count}).")
     return CommandOutcome(
