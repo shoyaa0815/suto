@@ -18,6 +18,7 @@ from prompt_toolkit.widgets import TextArea
 
 from ai import config
 from interfaces.cli.backend import run_session
+from interfaces.cli.history import HistoryWindow
 from interfaces.cli.output import route_output, write as write_output
 
 
@@ -37,7 +38,7 @@ DOT_FRAMES = (".", "..", "...", "")
 
 def _write_welcome(reader: "PromptReader") -> None:
     reader.write(f"Suto · {config.AI_MODEL} · agent\n")
-    reader.write("Type /help for commands. PageUp: history · End: latest\n\n")
+    reader.write("Type /help for commands. Wheel/PageUp/PageDown: history · End: latest\n\n")
 
 
 def _build_prompt_application(
@@ -53,9 +54,17 @@ def _build_prompt_application(
     history = TextArea(
         read_only=True,
         focusable=True,
-        scrollbar=True,
         wrap_lines=True,
         style="class:history",
+    )
+    history.window = HistoryWindow(
+        buffer=history.buffer,
+        content=history.control,
+        height=history.window.height,
+        wrap_lines=True,
+        style=history.window.style,
+        on_scroll=on_scroll_history,
+        on_follow=on_follow_history,
     )
     field = TextArea(
         multiline=False,
@@ -99,15 +108,15 @@ def _build_prompt_application(
 
     @bindings.add("pageup")
     def scroll_history(event) -> None:
-        if on_scroll_history is not None:
-            on_scroll_history()
-        event.app.layout.focus(history)
-        history.buffer.cursor_up(count=10)
+        history.window.scroll_by(-10)
+
+    @bindings.add("pagedown")
+    def scroll_history_down(event) -> None:
+        history.window.scroll_by(10)
 
     @bindings.add("end")
     def follow_history(event) -> None:
-        if on_follow_history is not None:
-            on_follow_history()
+        history.window.follow_latest()
         history.buffer.cursor_position = len(history.buffer.text)
         event.app.layout.focus(field)
 
@@ -147,6 +156,7 @@ def _build_prompt_application(
         key_bindings=bindings,
         style=PROMPT_STYLE,
         full_screen=True,
+        mouse_support=True,
         erase_when_done=True,
     )
     application.suto_input_field = field
@@ -220,6 +230,8 @@ class PromptReader:
             return
         history.buffer.set_document(Document("", 0), bypass_readonly=True)
         self._following_history = True
+        if isinstance(history.window, HistoryWindow):
+            history.window.follow_latest()
         _write_welcome(self)
 
     def _interrupt(self) -> None:

@@ -7,8 +7,14 @@ import ai
 import pytest
 from ai.execution.request import prepare_request
 from assistant.context import AssistantContext
+from prompt_toolkit.application.current import create_app_session, set_app
+from prompt_toolkit.data_structures import Point
+from prompt_toolkit.input.base import DummyInput
 from prompt_toolkit.layout.containers import HSplit
 from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.keys import Keys
+from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
+from prompt_toolkit.output import DummyOutput
 from prompt_toolkit.widgets import TextArea
 
 from interfaces.cli import backend
@@ -64,7 +70,9 @@ def test_plain_cli_starts_session_and_uses_a_simple_prompt(monkeypatch, capsys):
         for call in calls
         if isinstance(call, tuple) and call[0] == "write"
     )
-    assert ("write", "Type /help for commands. PageUp: history · End: latest\n\n") in calls
+    assert (
+        "write", "Type /help for commands. Wheel/PageUp/PageDown: history · End: latest\n\n"
+    ) in calls
     assert ("agent", "hello") in calls
     assert calls[-1] == "stop"
 
@@ -73,6 +81,7 @@ def test_cli_prompt_keeps_history_above_a_nonwrapping_bottom_status_row():
     application = _build_prompt_application("> ")
 
     assert application.full_screen is True
+    assert application.mouse_support()
     assert application.erase_when_done is True
     assert isinstance(application.layout.container, HSplit)
     history = application.layout.container.children[0]
@@ -84,6 +93,14 @@ def test_cli_prompt_keeps_history_above_a_nonwrapping_bottom_status_row():
     gray_box = application.layout.container.children[2]
     assert isinstance(gray_box, HSplit)
     assert gray_box.height.preferred == PROMPT_BOX_HEIGHT == 3
+    bound_keys = {
+        key
+        for binding in application.key_bindings.bindings
+        for key in binding.keys
+    }
+    assert Keys.PageUp in bound_keys
+    assert Keys.PageDown in bound_keys
+    assert Keys.End in bound_keys
 
 
 def test_cli_activity_text_is_rendered_from_layout_state():
@@ -94,6 +111,59 @@ def test_cli_activity_text_is_rendered_from_layout_state():
     assert reader._activity_text() == "Suto is thinking..."
     reader._activity = None
     assert reader._activity_text() == ""
+
+
+async def test_wrapped_history_scrolls_with_mouse_and_page_keys():
+    with create_app_session(input=DummyInput(), output=DummyOutput()):
+        reader = PromptReader()
+        application = _build_prompt_application(
+            "> ", on_scroll_history=reader._scroll_history,
+            on_follow_history=reader._follow_history,
+        )
+        reader._application = application
+        reader.write("".join(f"{index:04d} " for index in range(1000)))
+        history = application.suto_history_field
+        application.layout.update_parents_relations()
+
+        def top_row():
+            application.renderer.render(application, application.layout)
+            screen = application.renderer.last_rendered_screen
+            return "".join(screen.data_buffer[0][column].char for column in range(20))
+
+        def press(key):
+            binding = next(
+                item for item in application.key_bindings.bindings
+                if item.keys == (key,)
+            )
+            binding.handler(type("Event", (), {"app": application})())
+
+        try:
+            with set_app(application):
+                latest = top_row()
+                mouse = MouseEvent(
+                    position=Point(x=20, y=10),
+                    event_type=MouseEventType.SCROLL_UP,
+                    button=MouseButton.NONE,
+                    modifiers=frozenset(),
+                )
+                application.renderer.mouse_handlers.mouse_handlers[10][20](mouse)
+                after_wheel = top_row()
+                assert after_wheel != latest
+                assert reader._following_history is False
+
+                press(Keys.PageUp)
+                assert top_row() != after_wheel
+                press(Keys.PageDown)
+                assert top_row() == after_wheel
+                assert application.layout.current_window is application.suto_input_field.window
+
+                reader.write("additional output\n")
+                assert top_row() == after_wheel
+                press(Keys.End)
+                assert reader._following_history is True
+                assert top_row() != after_wheel
+        finally:
+            await application.cancel_and_wait_for_background_tasks()
 
 
 async def test_cli_prompt_reader_queues_submitted_input_without_exiting_application(
