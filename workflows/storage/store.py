@@ -1388,6 +1388,23 @@ class JobStore(
         approvals = self.list_approvals(job_id, limit=1)
         return approvals[0] if approvals else None
 
+    def get_approval(self, approval_id: str) -> ApprovalRequest | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM approval_requests WHERE id = ?", (approval_id,)
+            ).fetchone()
+        return self._to_approval(row)
+
+    def list_pending_approvals(self, limit: int = 50) -> list[ApprovalRequest]:
+        safe_limit = min(max(int(limit), 1), 200)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT * FROM approval_requests WHERE status = ?
+                   ORDER BY requested_at DESC LIMIT ?""",
+                (ApprovalStatus.PENDING, safe_limit),
+            ).fetchall()
+        return [item for row in rows if (item := self._to_approval(row)) is not None]
+
     def list_approval_events(self, job_id: str) -> list[ApprovalEvent]:
         with self._connect() as connection:
             rows = connection.execute(
@@ -1403,6 +1420,7 @@ class JobStore(
         job_id: str,
         approve: bool,
         actor: str = "cli",
+        approval_id: str | None = None,
     ) -> tuple[bool, str]:
         timestamp = datetime.now(UTC)
         now = timestamp.isoformat()
@@ -1425,6 +1443,8 @@ class JobStore(
             ).fetchone()
             if row is None:
                 return False, "no pending approval request"
+            if approval_id is not None and row["id"] != approval_id:
+                return False, "approval is no longer pending for this job"
             if datetime.fromisoformat(row["expires_at"]) <= timestamp:
                 connection.execute(
                     "UPDATE approval_requests SET status = ? WHERE id = ?",

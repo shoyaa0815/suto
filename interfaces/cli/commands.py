@@ -8,7 +8,7 @@ import sqlite3
 import tomllib
 from typing import Any
 
-from application.automation import AutomationService, JobService, ScheduleService
+from application.automation import ApprovalService, AutomationService, JobService, ScheduleService
 from workflows.library.definitions import parse_parameter_value
 from workflows.models import MissedRunPolicy, ScheduleKind
 from workflows.storage.redaction import redact_text
@@ -57,6 +57,8 @@ def print_help(mode: str | None = None) -> None:
     print("  /task remove <name-or-id>  delete an open task")
     print("  /run [--workspace <path>] [--allow-write] [--allow-command] <task>  queue a job")
     print("  /jobs  show recent automation jobs")
+    print("  /approvals  list pending job approvals")
+    print("  /approval show|allow|deny <approval_id>  inspect or decide an approval")
     print("  /status <job_id>  show job details")
     print("  /cancel <job_id>  cancel a job")
     print("  /resume <job_id>  resume an interrupted or blocked job")
@@ -118,6 +120,65 @@ def _jobs(context: CommandContext, argument: str) -> CommandOutcome:
             f"{job.id}  {job.status.value}  {prompt}  "
             f"created={job.created_at}  latest_attempt={job.attempt_id or 'none'}"
         )
+    return CommandOutcome(handled=True)
+
+
+def _approval_details(approval, job) -> None:
+    tool = {"write": "apply_workspace_patch", "command": "run_workspace_command"}.get(
+        approval.action_type.value, "unknown"
+    )
+    print(f"Approval: {approval.id}")
+    print(f"Job: {job.id} ({job.status.value})")
+    print(f"Attempt: {job.attempt_count} ({job.attempt_id or 'none'})")
+    print(f"Requested action: {redact_text(approval.action_summary)}")
+    print(f"Tool: {tool}")
+    print(f"Workspace: {redact_text(job.workspace)}")
+    print(f"Permission requested: {approval.action_type.value} approval")
+    print(f"Status: {approval.status.value}")
+    print(f"Created: {approval.requested_at}")
+    print(f"Expires: {approval.expires_at}")
+    print(f"Decided: {approval.decided_at or 'none'}")
+
+
+def _approvals(context: CommandContext, argument: str) -> CommandOutcome:
+    if argument:
+        print("usage: /approvals")
+        return CommandOutcome(handled=True)
+    try:
+        service = ApprovalService(context.store, context.worker)
+        approvals = service.list_pending()
+        if not approvals:
+            print("No pending approvals.")
+        for approval in approvals:
+            _, job = service.get(approval.id)
+            _approval_details(approval, job)
+    except sqlite3.Error:
+        print("Cannot list approvals: storage error.")
+    return CommandOutcome(handled=True)
+
+
+def _approval(context: CommandContext, argument: str) -> CommandOutcome:
+    usage = "usage: /approval show|allow|deny <approval_id>"
+    try:
+        parts = shlex.split(argument)
+    except ValueError:
+        parts = []
+    if len(parts) != 2 or parts[0] not in {"show", "allow", "deny"}:
+        print(usage)
+        return CommandOutcome(handled=True)
+    action, approval_id = parts
+    service = ApprovalService(context.store, context.worker)
+    try:
+        if action == "show":
+            approval, job = service.get(approval_id)
+        else:
+            approval, job, decided, message = service.decide(approval_id, action == "allow")
+            print(f"Decision: {redact_text(message)}")
+        _approval_details(approval, job)
+    except ValueError as error:
+        print(str(error))
+    except sqlite3.Error:
+        print("Cannot access approval: storage error.")
     return CommandOutcome(handled=True)
 
 
@@ -573,6 +634,8 @@ COMMAND_HANDLERS: dict[str, CommandHandler] = {
     "/reminder": _reminder,
     "/task": _task,
     "/jobs": _jobs,
+    "/approvals": _approvals,
+    "/approval": _approval,
     "/run": _run,
     "/status": _status,
     "/cancel": _cancel,

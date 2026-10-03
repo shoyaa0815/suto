@@ -97,14 +97,14 @@ class AutomationWorker:
     def wake(self) -> None:
         self._wake.set()
 
-    def approve(self, job_id: str, actor: str = "tui") -> tuple[bool, str]:
-        decided, message = self.store.decide_approval(job_id, True, actor)
+    def approve(self, job_id: str, actor: str = "tui", approval_id: str | None = None) -> tuple[bool, str]:
+        decided, message = self.store.decide_approval(job_id, True, actor, approval_id)
         if decided or "queued" in message:
             self._wake.set()
         return decided, message
 
-    def reject(self, job_id: str, actor: str = "tui") -> tuple[bool, str]:
-        decided, message = self.store.decide_approval(job_id, False, actor)
+    def reject(self, job_id: str, actor: str = "tui", approval_id: str | None = None) -> tuple[bool, str]:
+        decided, message = self.store.decide_approval(job_id, False, actor, approval_id)
         if decided:
             self._wake.set()
         return decided, message

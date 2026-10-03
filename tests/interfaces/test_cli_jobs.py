@@ -2,9 +2,14 @@
 
 import hashlib
 import asyncio
+import sqlite3
+
+from ai import AIExecutionResult
+from capabilities.developer.workspace import build_workspace_tools
 
 from interfaces.cli.commands import CommandContext, handle_command
 from workflows.models import ApprovalStatus, JobStatus
+from workflows.runtime.context import ApprovalRequired
 from workflows.runtime.runner import JobRunner
 from workflows.runtime.worker import AutomationWorker
 from workflows.storage.store import JobStore
@@ -188,6 +193,117 @@ def test_cancel_waiting_approval_invalidates_request(tmp_path):
     assert reopened.get_job(job.id).status == JobStatus.CANCELLED
     assert reopened.latest_approval(job.id).id == request.id
     assert reopened.latest_approval(job.id).status == ApprovalStatus.INVALIDATED
+
+
+async def test_public_approval_allows_only_the_exact_write_and_shows_context(tmp_path, capsys):
+    store = JobStore(tmp_path / "jobs.db")
+    handle_command(context(store), f'/run --workspace "{tmp_path}" --allow-write "write note"')
+    job = store.list_jobs()[0]
+    capsys.readouterr()
+
+    async def execute(prompt, execution_context, change_event_callback, **kwargs):
+        write = build_workspace_tools(execution_context, change_event_callback)["apply_workspace_patch"]
+        try:
+            result = write("note.txt", "approved content\n")
+        except ApprovalRequired as error:
+            return AIExecutionResult(str(error), "waiting_approval", str(error), 4, 1, 0)
+        return AIExecutionResult(result, "completed", None, 4, 1, 0)
+
+    runner = JobRunner(store, execute=execute)
+    first = store.claim_next_job()
+    await runner.run(first)
+    approval = store.latest_approval(job.id)
+    assert approval.status == ApprovalStatus.PENDING
+    assert not (tmp_path / "note.txt").exists()
+
+    handle_command(context(store), "/approvals")
+    handle_command(context(store), f"/approval show {approval.id}")
+    output = capsys.readouterr().out
+    assert approval.id in output
+    assert job.id in output and first.attempt_id in output
+    assert "replace workspace file note.txt" in output
+    assert "Tool: apply_workspace_patch" in output
+    assert f"Workspace: {tmp_path}" in output
+    assert "Permission requested: write approval" in output
+    assert "Created:" in output and "Expires:" in output
+    assert "Status: pending" in output
+
+    worker = AutomationWorker(store, runner)
+    handle_command(context(store, worker), f"/approval allow {approval.id}")
+    assert store.get_approval(approval.id).status == ApprovalStatus.APPROVED
+    assert store.get_job(job.id).status == JobStatus.QUEUED
+    assert worker._wake.is_set()
+    assert "Decision: approved" in capsys.readouterr().out
+    second = store.claim_next_job()
+    await runner.run(second)
+    assert (tmp_path / "note.txt").read_text() == "approved content\n"
+    assert store.get_approval(approval.id).status == ApprovalStatus.CONSUMED
+
+
+def test_public_approval_deny_cancel_and_duplicate_fail_closed(tmp_path, capsys):
+    store = JobStore(tmp_path / "jobs.db")
+    job = store.create_job("write note", workspace=str(tmp_path), allow_write=True)
+    store.claim_next_job()
+    _, approval = store.request_or_consume_approval(
+        job.id, "write", {"tool": "apply_workspace_patch", "path": "note.txt"},
+        "replace workspace file note.txt api_key=example-secret-value", "api_key=example-secret-value",
+    )
+    handle_command(context(store), f"/approval deny {approval.id}")
+    assert store.get_approval(approval.id).status == ApprovalStatus.REJECTED
+    assert store.get_job(job.id).status == JobStatus.BLOCKED
+    handle_command(context(store), f"/approval allow {approval.id}")
+    handle_command(context(store), f"/approval deny {approval.id}")
+    assert store.get_job(job.id).status == JobStatus.BLOCKED
+    assert not (tmp_path / "note.txt").exists()
+
+    other = store.create_job("write later", workspace=str(tmp_path), allow_write=True)
+    store.claim_next_job()
+    _, pending = store.request_or_consume_approval(
+        other.id, "write", {"path": "note.txt"}, "replace workspace file note.txt", "",
+    )
+    handle_command(context(store), f"/cancel {other.id}")
+    handle_command(context(store), f"/approval allow {pending.id}")
+    handle_command(context(store), "/approval allow missing")
+    handle_command(context(store), "/approval allow")
+    output = capsys.readouterr().out
+    assert "job is not waiting for approval" in output
+    assert "Approval not found." in output
+    assert "usage: /approval show|allow|deny <approval_id>" in output
+    assert "example-secret-value" not in output
+    assert store.get_approval(pending.id).status == ApprovalStatus.INVALIDATED
+    assert store.get_job(other.id).status == JobStatus.CANCELLED
+    assert not (tmp_path / "note.txt").exists()
+
+
+def test_public_approval_expiry_and_stale_id_cannot_approve_new_request(tmp_path, capsys):
+    store = JobStore(tmp_path / "jobs.db")
+    job = store.create_job("write note", workspace=str(tmp_path), allow_write=True)
+    store.claim_next_job()
+    action = {"tool": "apply_workspace_patch", "path": "note.txt"}
+    _, expired = store.request_or_consume_approval(
+        job.id, "write", action, "replace workspace file note.txt", "",
+    )
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "UPDATE approval_requests SET expires_at = ? WHERE id = ?",
+            ("2000-01-01T00:00:00+00:00", expired.id),
+        )
+    handle_command(context(store), f"/approval allow {expired.id}")
+    assert store.get_approval(expired.id).status == ApprovalStatus.EXPIRED
+    assert store.get_job(job.id).status == JobStatus.QUEUED
+    assert "expired" in capsys.readouterr().out
+    assert not (tmp_path / "note.txt").exists()
+
+    store.claim_next_job()
+    authorized, fresh = store.request_or_consume_approval(
+        job.id, "write", action, "replace workspace file note.txt", "",
+    )
+    assert not authorized and fresh.id != expired.id
+    handle_command(context(store), f"/approval allow {expired.id}")
+    assert "no longer pending" in capsys.readouterr().out
+    assert store.get_approval(fresh.id).status == ApprovalStatus.PENDING
+    assert store.get_job(job.id).status == JobStatus.WAITING_APPROVAL
+    assert not (tmp_path / "note.txt").exists()
 
 
 async def test_public_cancel_stops_running_worker_task(tmp_path):

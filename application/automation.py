@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from workflows.library.definitions import automation_options, load_definition_file, validate_name
-from workflows.models import Automation, AutomationVersion, Job, JobStatus, MissedRunPolicy, Schedule, ScheduleKind, TriggerEvent
+from workflows.models import ApprovalRequest, Automation, AutomationVersion, Job, JobStatus, MissedRunPolicy, Schedule, ScheduleKind, TriggerEvent
 from workflows.runtime.checkpoints import checkpoint_error
 from workflows.runtime.scheduler import Scheduler
 from workflows.storage.store import JobStore
@@ -81,6 +81,36 @@ class JobService:
         if job is None:
             raise ValueError(f"Job not found: {job_id}")
         return job
+
+
+class ApprovalService:
+    def __init__(self, store: JobStore, worker: "AutomationWorker | None" = None) -> None:
+        self.store = store
+        self.worker = worker
+
+    def list_pending(self) -> list[ApprovalRequest]:
+        return self.store.list_pending_approvals()
+
+    def get(self, approval_id: str) -> tuple[ApprovalRequest, Job]:
+        approval = self.store.get_approval(approval_id)
+        if approval is None:
+            raise ValueError("Approval not found.")
+        job = self.store.get_job(approval.job_id)
+        if job is None:
+            raise ValueError(f"Job not found: {approval.job_id}")
+        return approval, job
+
+    def decide(self, approval_id: str, approve: bool) -> tuple[ApprovalRequest, Job, bool, str]:
+        approval, _ = self.get(approval_id)
+        if self.worker is not None:
+            method = self.worker.approve if approve else self.worker.reject
+            decided, message = method(approval.job_id, actor="cli", approval_id=approval_id)
+        else:
+            decided, message = self.store.decide_approval(
+                approval.job_id, approve, actor="cli", approval_id=approval_id,
+            )
+        current, job = self.get(approval_id)
+        return current, job, decided, message
 
 
 class ScheduleService:

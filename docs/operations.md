@@ -248,6 +248,14 @@ Cancellation is idempotent, including queued and approval-waiting jobs. Resume
 accepts interrupted or blocked jobs only after checking the existing workspace
 checkpoint policy; the next worker claim creates a new attempt ID for the same
 job. Write and command flags do not bypass tool approval or sandbox checks.
+`/approvals` lists pending job requests. `/approval show <approval_id>` displays
+the job and attempt, requested action, tool, workspace, permission, timestamps,
+and decision state. `/approval allow <approval_id>` or `/approval deny
+<approval_id>` decides only that pending request. Allow queues the job for a new
+attempt; its exact action still passes the existing permission and sandbox
+checks before execution. Deny blocks the job. Expired and cancelled requests
+cannot authorize an action, and an expired decision queues the job to request
+a new approval. Approval output redacts recognized secrets and omits previews.
 
 The public `/automation create <definition.json>` and `/automation update <name>
 <definition.json>` commands save immutable numbered definitions. A definition is a
