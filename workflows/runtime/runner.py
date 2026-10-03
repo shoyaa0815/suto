@@ -212,7 +212,10 @@ class JobRunner:
                 for name, version in skill_versions
             )
             prompt = self._resume_prompt(job) if job.attempt_count > 1 else job.prompt
-            retry_count = job.retry_count
+            retry_count = job.retry_count - (
+                self.store.schedule_retry_count(job.id)
+                if job.source == "schedule" else 0
+            )
             while True:
                 if reason := budget_check():
                     self.store.block_job(job.id, reason, base_prompt_tokens, base_output_tokens)

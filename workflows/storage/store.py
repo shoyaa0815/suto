@@ -678,6 +678,14 @@ class JobStore(
             ).fetchone()
         return row["id"] if row is not None else None
 
+    def schedule_retry_count(self, job_id: str) -> int:
+        with self._connect() as connection:
+            count = connection.execute(
+                "SELECT COUNT(*) FROM trigger_history WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()[0]
+        return max(0, count - 1)
+
     def claim_next_job(self) -> Job | None:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -2039,16 +2047,17 @@ class JobStore(
             if (trigger := self._to_trigger(row)) is not None
         ]
 
-    def retry_trigger(self, trigger_id: int) -> TriggerEvent | None:
+    def retry_trigger(self, trigger_id: int, now: str | None = None) -> TriggerEvent | None:
+        current = datetime.fromisoformat(now or _now())
+        if current.tzinfo is None:
+            raise ValueError("retry time must include a timezone")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             previous = connection.execute(
                 """
                 SELECT trigger.*, jobs.status AS job_status,
-                       schedules.enabled, schedules.retry_limit,
-                       schedules.prompt, schedules.workspace,
-                       schedules.allow_write, schedules.allow_command,
-                       schedules.id AS schedule_row_id
+                       jobs.finished_at, schedules.enabled,
+                       schedules.retry_limit, schedules.retry_delay_seconds
                 FROM trigger_history AS trigger
                 JOIN jobs ON jobs.id = trigger.job_id
                 JOIN schedules ON schedules.id = trigger.schedule_id
@@ -2061,6 +2070,9 @@ class JobStore(
                 or not previous["enabled"]
                 or previous["job_status"] != JobStatus.FAILED
                 or previous["attempt"] > previous["retry_limit"]
+                or previous["finished_at"] is None
+                or datetime.fromisoformat(previous["finished_at"])
+                   + timedelta(seconds=previous["retry_delay_seconds"]) > current
             ):
                 return None
             attempt = int(previous["attempt"]) + 1
@@ -2072,7 +2084,7 @@ class JobStore(
                 "SELECT * FROM trigger_history WHERE idempotency_key = ?", (key,)
             ).fetchone()
             if existing is not None:
-                return self._to_trigger(existing)
+                return None
             active = connection.execute(
                 """
                 SELECT 1 FROM trigger_history AS trigger
@@ -2091,7 +2103,26 @@ class JobStore(
             ).fetchone()
             if active is not None:
                 return None
-            job_id = self._insert_scheduled_job(connection, previous)
+            at_capacity = connection.execute(
+                """
+                SELECT (SELECT COUNT(*) FROM jobs WHERE status = ?) >=
+                       (SELECT value FROM runtime_settings WHERE key = 'max_queued_jobs')
+                """,
+                (JobStatus.QUEUED,),
+            ).fetchone()[0]
+            if at_capacity:
+                return None
+            updated = connection.execute(
+                """
+                UPDATE jobs SET status = ?, retry_count = retry_count + 1,
+                    result = NULL, error = NULL, started_at = NULL,
+                    finished_at = NULL
+                WHERE id = ? AND status = ?
+                """,
+                (JobStatus.QUEUED, previous["job_id"], JobStatus.FAILED),
+            )
+            if updated.rowcount != 1:
+                return None
             connection.execute(
                 """
                 INSERT INTO trigger_history (
@@ -2105,8 +2136,8 @@ class JobStore(
                     key,
                     attempt,
                     TriggerStatus.CREATED,
-                    job_id,
-                    f"created retry attempt {attempt}",
+                    previous["job_id"],
+                    f"queued retry attempt {attempt}",
                     _now(),
                 ),
             )

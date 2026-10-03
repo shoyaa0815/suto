@@ -8,7 +8,8 @@ import sqlite3
 import tomllib
 from typing import Any
 
-from application.automation import JobService
+from application.automation import JobService, ScheduleService
+from workflows.models import MissedRunPolicy, ScheduleKind
 from workflows.storage.redaction import redact_text
 from interfaces.cli import CLI_STORAGE_INTERFACE
 from interfaces.cli.operations import print_pending_reminders
@@ -58,6 +59,8 @@ def print_help(mode: str | None = None) -> None:
     print("  /status <job_id>  show job details")
     print("  /cancel <job_id>  cancel a job")
     print("  /resume <job_id>  resume an interrupted or blocked job")
+    print("  /schedule create (--at <ISO> | --every <seconds> | --cron <expr>) [options] <task>")
+    print("  /schedule list|show|pause|resume|history [<schedule_id>]")
     print("  /skills  list available and active skills")
     print("  /skill activate <name>  activate a skill for this CLI session")
     print("  /skill deactivate <name>  deactivate a skill")
@@ -231,6 +234,126 @@ def _resume(context: CommandContext, argument: str) -> CommandOutcome:
     return _change_job(context, argument, "resume")
 
 
+def _parse_schedule_create(argument: str, default_timezone: str) -> dict:
+    usage = ("usage: /schedule create (--at <ISO> | --every <seconds> | --cron <expr>) "
+             "[--timezone <zone>] [--workspace <path>] [--allow-write] "
+             "[--allow-command] [--missed-run <run_once|skip>] "
+             "[--retry <count>] [--retry-delay <seconds>] <task>")
+    try:
+        parts = shlex.split(argument)
+    except ValueError:
+        raise ValueError(usage) from None
+    options: dict = {
+        "timezone": default_timezone, "workspace": ".",
+        "allow_write": False, "allow_command": False,
+        "missed_run_policy": MissedRunPolicy.RUN_ONCE,
+        "retry_limit": 0, "retry_delay_seconds": 60,
+    }
+    schedule_flags = {"--at": ScheduleKind.ONCE,
+                      "--every": ScheduleKind.INTERVAL, "--cron": ScheduleKind.CRON}
+    value_flags = {
+        "--timezone": "timezone", "--workspace": "workspace",
+        "--missed-run": "missed_run_policy", "--retry": "retry_limit",
+        "--retry-delay": "retry_delay_seconds",
+    }
+    while parts and parts[0].startswith("--"):
+        flag = parts.pop(0)
+        if flag in {"--allow-write", "--allow-command"}:
+            options[flag.removeprefix("--").replace("-", "_")] = True
+            continue
+        if flag == "--":
+            break
+        if flag not in schedule_flags and flag not in value_flags:
+            raise ValueError(f"unknown /schedule option: {flag}")
+        if not parts or parts[0].startswith("--"):
+            raise ValueError(f"{flag} requires a value")
+        value = parts.pop(0)
+        if flag in schedule_flags:
+            if "kind" in options:
+                raise ValueError("choose exactly one of --at, --every, or --cron")
+            options.update(kind=schedule_flags[flag], expression=value)
+        elif flag == "--missed-run":
+            try:
+                options["missed_run_policy"] = MissedRunPolicy(value)
+            except ValueError:
+                raise ValueError("--missed-run must be run_once or skip") from None
+        elif flag in {"--retry", "--retry-delay"}:
+            try:
+                options[value_flags[flag]] = int(value)
+            except ValueError:
+                raise ValueError(f"{flag} must be a whole number") from None
+        else:
+            options[value_flags[flag]] = value
+    if "kind" not in options or not parts:
+        raise ValueError(usage)
+    options["prompt"] = " ".join(parts)
+    return options
+
+
+def _schedule(context: CommandContext, argument: str) -> CommandOutcome:
+    service = ScheduleService(context.store, context.worker)
+    try:
+        action, _, rest = argument.strip().partition(" ")
+        if action == "create":
+            timezone = getattr(context.user, "timezone", "UTC")
+            schedule = service.create(**_parse_schedule_create(rest, timezone))
+            print(f"Schedule created: {schedule.id}")
+            print(f"State: {service.state(schedule)}")
+            print(f"Next run: {schedule.next_run_at or 'none'}")
+            return CommandOutcome(handled=True)
+        if action == "list" and not rest:
+            schedules = service.list_recent()
+            if not schedules:
+                print("No schedules yet.")
+            for schedule in schedules:
+                print(f"{schedule.id}  {service.state(schedule)}  {schedule.kind.value}  "
+                      f"next={schedule.next_run_at or 'none'}")
+            return CommandOutcome(handled=True)
+        if action in {"show", "pause", "resume", "history"}:
+            try:
+                ids = shlex.split(rest)
+            except ValueError:
+                ids = []
+            if len(ids) != 1:
+                raise ValueError(f"usage: /schedule {action} <schedule_id>")
+            schedule_id = ids[0]
+            if action == "history":
+                history = service.history(schedule_id)
+                if not history:
+                    print("No trigger history.")
+                for event in history:
+                    print(f"{event.id}  {event.scheduled_for}  attempt={event.attempt}  "
+                          f"{event.status.value}  job={event.job_id or 'none'}  {event.detail}")
+                return CommandOutcome(handled=True)
+            if action in {"pause", "resume"}:
+                schedule = service.set_paused(schedule_id, action == "pause")
+            else:
+                schedule = service.get(schedule_id)
+            print(f"Schedule: {schedule.id}")
+            print(f"State: {service.state(schedule)}")
+            print(f"Kind: {schedule.kind.value}")
+            print(f"Expression: {schedule.expression}")
+            print(f"Timezone: {schedule.timezone}")
+            print(f"Task: {schedule.prompt}")
+            print(f"Workspace: {schedule.workspace}")
+            print(f"Write: {'allowed' if schedule.allow_write else 'denied'}")
+            print(f"Command: {'allowed' if schedule.allow_command else 'denied'}")
+            print(f"Missed run: {schedule.missed_run_policy.value}")
+            print(f"Retry: {schedule.retry_limit} delay={schedule.retry_delay_seconds}s")
+            print(f"Next run: {schedule.next_run_at or 'none'}")
+            print(f"Last run: {schedule.last_run_at or 'none'}")
+            return CommandOutcome(handled=True)
+        raise ValueError("usage: /schedule create|list|show|pause|resume|history ...")
+    except (ValueError, OSError) as error:
+        print(f"Cannot {action or 'use'} schedule: {error}")
+    except sqlite3.IntegrityError as error:
+        message = str(error)
+        print("Cannot create schedule: quota reached" if "quota" in message or "rate limit" in message else "Cannot update schedule.")
+    except sqlite3.Error:
+        print("Cannot use schedule: storage error.")
+    return CommandOutcome(handled=True)
+
+
 def _task(context: CommandContext, argument: str) -> CommandOutcome:
     if not argument:
         tasks = context.store.list_tasks(context.user.id)
@@ -386,6 +509,7 @@ COMMAND_HANDLERS: dict[str, CommandHandler] = {
     "/status": _status,
     "/cancel": _cancel,
     "/resume": _resume,
+    "/schedule": _schedule,
     "/clear": _clear,
     "/reset": _reset,
     "/skills": _skills,

@@ -1,10 +1,11 @@
-"""Application boundary for public one-time automation jobs."""
+"""Application boundaries for public automation jobs and schedules."""
 
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from workflows.models import Job, JobStatus
+from workflows.models import Job, JobStatus, MissedRunPolicy, Schedule, ScheduleKind, TriggerEvent
 from workflows.runtime.checkpoints import checkpoint_error
+from workflows.runtime.scheduler import Scheduler
 from workflows.storage.store import JobStore
 
 if TYPE_CHECKING:
@@ -79,3 +80,56 @@ class JobService:
         if job is None:
             raise ValueError(f"Job not found: {job_id}")
         return job
+
+
+class ScheduleService:
+    def __init__(self, store: JobStore, worker: "AutomationWorker | None" = None) -> None:
+        self.store = store
+        self.worker = worker
+
+    def create(
+        self, *, kind: ScheduleKind, expression: str, prompt: str,
+        timezone: str, workspace: str | Path = ".",
+        allow_write: bool = False, allow_command: bool = False,
+        missed_run_policy: MissedRunPolicy = MissedRunPolicy.RUN_ONCE,
+        retry_limit: int = 0, retry_delay_seconds: int = 60,
+    ) -> Schedule:
+        schedule = Scheduler(self.store).create(
+            kind=kind, expression=expression, prompt=prompt,
+            timezone=timezone, workspace=Path(workspace).expanduser(),
+            allow_write=allow_write, allow_command=allow_command,
+            missed_run_policy=missed_run_policy, retry_limit=retry_limit,
+            retry_delay_seconds=retry_delay_seconds,
+        )
+        if self.worker is not None:
+            self.worker.wake()
+        return schedule
+
+    def list_recent(self) -> list[Schedule]:
+        return self.store.list_schedules()
+
+    def get(self, schedule_id: str) -> Schedule:
+        schedule = self.store.get_schedule(schedule_id)
+        if schedule is None:
+            raise ValueError(f"Schedule not found: {schedule_id}")
+        return schedule
+
+    def history(self, schedule_id: str) -> list[TriggerEvent]:
+        self.get(schedule_id)
+        return self.store.list_trigger_history(schedule_id)
+
+    def set_paused(self, schedule_id: str, paused: bool) -> Schedule:
+        schedule = self.get(schedule_id)
+        if schedule.enabled != paused:
+            return schedule
+        if not self.store.set_schedule_enabled(schedule_id, not paused):
+            raise ValueError(f"Schedule not found: {schedule_id}")
+        if not paused and self.worker is not None:
+            self.worker.wake()
+        return self.get(schedule_id)
+
+    @staticmethod
+    def state(schedule: Schedule) -> str:
+        if not schedule.enabled:
+            return "paused"
+        return "exhausted" if schedule.next_run_at is None else "active"

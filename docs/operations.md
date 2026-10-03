@@ -215,6 +215,16 @@ that job and passes an `AgentRequest` with its job and schedule references throu
 the same agent runtime used for other requests. The job runner keeps workspace
 permissions, budgets, approvals, retries, and results in the existing workflow
 tables. Cancelling a running scheduled job cancels its active agent request.
+The public `/schedule create` command accepts `--at`, `--every`, or `--cron`,
+plus timezone, workspace permission, missed-run, and retry options. The other
+public commands are `/schedule list`, `show`, `pause`, `resume`, and `history`.
+The profile timezone is used when none is supplied. Pause stops future triggers
+without cancelling jobs already queued or running. A retry requeues the same
+logical job and records another trigger-history row; the next worker claim
+creates a new durable execution attempt. Trigger creation, job creation or
+requeue, and schedule advancement commit atomically so restart cannot create a
+second logical job for the same occurrence. A `skip` occurrence more than one
+second overdue is recorded as skipped; `run_once` creates one recovery job.
 
 Exit, Ctrl-C and SIGTERM stop job admission, cancel active execution, kill command
 process trees and persist interrupted jobs. On a hard crash, the next owning

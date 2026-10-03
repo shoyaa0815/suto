@@ -201,7 +201,7 @@ class Scheduler:
         current = _utc(now or datetime.now(UTC))
         created = 0
         for trigger in self.store.list_retryable_triggers(current.isoformat()):
-            if self.store.retry_trigger(trigger.id) is not None:
+            if self.store.retry_trigger(trigger.id, current.isoformat()) is not None:
                 created += 1
 
         for schedule in self.store.list_due_schedules(current.isoformat()):
@@ -210,11 +210,10 @@ class Scheduler:
             skip_detail = None
             if (
                 schedule.missed_run_policy == MissedRunPolicy.SKIP
-                and following is not None
-                and following <= current
+                and scheduled_for + timedelta(seconds=1) < current
             ):
                 skip_detail = "skipped missed occurrence"
-                while following <= current:
+                while following is not None and following <= current:
                     following = next_occurrence(schedule, following)
             elif schedule.missed_run_policy == MissedRunPolicy.RUN_ONCE:
                 following = next_occurrence(schedule, current)

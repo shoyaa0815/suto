@@ -2,6 +2,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 
 from agent import AgentRequest, AgentRuntime
+from ai import AIExecutionResult
 from llm.types import ModelResponse, ModelUsage
 from tests.support.ai_helpers import FakeClientSession
 from workflows.models import JobStatus, MissedRunPolicy, ScheduleKind, TriggerStatus
@@ -131,6 +132,18 @@ def test_skip_missed_run_collapses_backlog_without_creating_job(tmp_path):
     )
 
 
+def test_skip_policy_skips_a_single_missed_interval(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    schedule = Scheduler(store).create(
+        kind="interval", expression="3600", prompt="hourly",
+        missed_run_policy=MissedRunPolicy.SKIP, now=start,
+    )
+    assert Scheduler(JobStore(store.path)).tick(start + timedelta(hours=1, minutes=5)) == 0
+    assert store.list_jobs() == []
+    assert store.get_schedule(schedule.id).next_run_at == (start + timedelta(hours=2)).isoformat()
+
+
 def test_run_once_missed_policy_creates_one_job_not_full_backlog(tmp_path):
     store = JobStore(tmp_path / "suto.db")
     scheduler = Scheduler(store)
@@ -171,8 +184,206 @@ def test_failed_scheduled_job_is_retried_with_same_occurrence(tmp_path):
     history = store.list_trigger_history(schedule.id)
     assert [item.attempt for item in history] == [2, 1]
     assert history[0].scheduled_for == history[1].scheduled_for
-    assert history[0].job_id != history[1].job_id
+    assert history[0].job_id == history[1].job_id == first_job.id
     assert store.get_job(history[0].job_id).status == JobStatus.QUEUED
+    second_attempt = store.claim_next_job()
+    assert second_attempt.id == first_job.id
+    assert second_attempt.attempt_id != first_job.attempt_id
+    assert [attempt.ordinal for attempt in store.list_job_attempts(first_job.id)] == [1, 2]
+    assert store.get_job(first_job.id).retry_count == 1
+    assert len(store.list_jobs()) == 1
+
+
+async def test_schedule_retry_preserves_budget_and_runner_retry_allowance(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    start = datetime.now(UTC).replace(microsecond=0)
+    scheduler = Scheduler(store)
+    scheduler.create(
+        kind="once", expression=(start + timedelta(seconds=30)).isoformat(),
+        prompt="inspect", workspace=tmp_path, retry_limit=1,
+        retry_delay_seconds=1, now=start,
+    )
+    assert scheduler.tick(start + timedelta(seconds=30)) == 1
+    first = store.claim_next_job()
+    assert store.fail_job(first.id, "temporary failure", 5, 3)
+    assert scheduler.tick(datetime.now(UTC) + timedelta(seconds=2)) == 1
+    retried = store.claim_next_job()
+    assert (retried.prompt_tokens, retried.output_tokens, retried.retry_count) == (5, 3, 1)
+    calls = 0
+
+    async def execute(prompt, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return AIExecutionResult("try again", "timed_out", "timeout", 10, 2, 1)
+        return AIExecutionResult("done", "completed", None, 5, 1, 1)
+
+    await JobRunner(store, execute=execute, retry_delays=(0,)).run(retried)
+    completed = store.get_job(first.id)
+    assert completed.status == JobStatus.COMPLETED
+    assert completed.retry_count == 2
+    assert completed.total_tokens == 26
+    assert calls == 2
+    assert len(store.list_job_attempts(first.id)) == 2
+
+
+def test_retry_restart_and_stale_tick_keep_one_logical_job(tmp_path):
+    database = tmp_path / "suto.db"
+    start = datetime.now(UTC).replace(microsecond=0)
+    scheduler = Scheduler(JobStore(database))
+    schedule = scheduler.create(
+        kind="once", expression=(start + timedelta(seconds=30)).isoformat(),
+        prompt="retry after restart", retry_limit=1, retry_delay_seconds=1,
+        now=start,
+    )
+    assert scheduler.tick(start + timedelta(seconds=30)) == 1
+    job = scheduler.store.claim_next_job()
+    assert scheduler.store.fail_job(job.id, "temporary failure")
+
+    restarted = Scheduler(JobStore(database))
+    due = datetime.now(UTC) + timedelta(seconds=2)
+    assert restarted.tick(due) == 1
+    assert restarted.tick(due) == 0
+    assert restarted.store.retry_trigger(
+        restarted.store.list_trigger_history(schedule.id)[-1].id, due.isoformat()
+    ) is None
+    assert len(restarted.store.list_jobs()) == 1
+    assert {event.job_id for event in restarted.store.list_trigger_history(schedule.id)} == {job.id}
+    assert restarted.store.claim_next_job().id == job.id
+    assert len(JobStore(database).list_job_attempts(job.id)) == 2
+
+
+def test_retry_transaction_rolls_back_if_trigger_insert_fails(tmp_path):
+    import sqlite3
+
+    import pytest
+
+    store = JobStore(tmp_path / "suto.db")
+    start = datetime.now(UTC).replace(microsecond=0)
+    scheduler = Scheduler(store)
+    schedule = scheduler.create(
+        kind="once", expression=(start + timedelta(seconds=30)).isoformat(),
+        prompt="atomic retry", retry_limit=1, retry_delay_seconds=1,
+        now=start,
+    )
+    assert scheduler.tick(start + timedelta(seconds=30)) == 1
+    job = store.claim_next_job()
+    assert store.fail_job(job.id, "temporary failure")
+    first = store.list_trigger_history(schedule.id)[0]
+    due = (datetime.now(UTC) + timedelta(seconds=2)).isoformat()
+    with store._connect() as connection:
+        connection.execute("""
+            CREATE TRIGGER fail_retry_insert BEFORE INSERT ON trigger_history
+            WHEN NEW.attempt = 2 BEGIN SELECT RAISE(ABORT, 'injected failure'); END
+        """)
+    with pytest.raises(sqlite3.IntegrityError, match="injected failure"):
+        store.retry_trigger(first.id, due)
+    assert JobStore(store.path).get_job(job.id).status == JobStatus.FAILED
+    assert len(store.list_trigger_history(schedule.id)) == 1
+    with store._connect() as connection:
+        connection.execute("DROP TRIGGER fail_retry_insert")
+    assert JobStore(store.path).retry_trigger(first.id, due).job_id == job.id
+    assert len(store.list_jobs()) == 1
+
+
+def test_fire_transaction_rolls_back_and_restart_creates_one_job(tmp_path):
+    import sqlite3
+
+    import pytest
+
+    database = tmp_path / "suto.db"
+    store = JobStore(database)
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    schedule = Scheduler(store).create(
+        kind="once", expression=(start + timedelta(minutes=1)).isoformat(),
+        prompt="atomic fire", now=start,
+    )
+    due = start + timedelta(minutes=1)
+    with store._connect() as connection:
+        connection.execute("""
+            CREATE TRIGGER fail_fire_insert BEFORE INSERT ON trigger_history
+            BEGIN SELECT RAISE(ABORT, 'injected failure'); END
+        """)
+    with pytest.raises(sqlite3.IntegrityError, match="injected failure"):
+        Scheduler(store).tick(due)
+    assert JobStore(database).list_jobs() == []
+    assert store.list_trigger_history(schedule.id) == []
+    assert store.get_schedule(schedule.id).next_run_at == due.isoformat()
+    with store._connect() as connection:
+        connection.execute("DROP TRIGGER fail_fire_insert")
+    restarted = Scheduler(JobStore(database))
+    assert restarted.tick(due) == 1
+    assert restarted.tick(due) == 0
+    assert len(restarted.store.list_jobs()) == 1
+    assert len(restarted.store.list_trigger_history(schedule.id)) == 1
+
+
+def test_concurrent_ticks_materialize_one_occurrence(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    database = tmp_path / "suto.db"
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    schedule = Scheduler(JobStore(database)).create(
+        kind="once", expression=(start + timedelta(minutes=1)).isoformat(),
+        prompt="one job", now=start,
+    )
+    barrier = Barrier(2)
+    schedulers = [Scheduler(JobStore(database)) for _ in range(2)]
+
+    def tick(scheduler):
+        barrier.wait()
+        return scheduler.tick(start + timedelta(minutes=1))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(tick, schedulers))
+    store = JobStore(database)
+    assert sorted(results) == [0, 1]
+    assert len(store.list_jobs()) == 1
+    assert len(store.list_trigger_history(schedule.id)) == 1
+
+
+def test_retry_waits_for_delay_and_paused_schedule(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    start = datetime.now(UTC).replace(microsecond=0)
+    scheduler = Scheduler(store)
+    schedule = scheduler.create(
+        kind="once", expression=(start + timedelta(seconds=30)).isoformat(),
+        prompt="wait to retry", retry_limit=1, retry_delay_seconds=60,
+        now=start,
+    )
+    scheduler.tick(start + timedelta(seconds=30))
+    job = store.claim_next_job()
+    assert store.fail_job(job.id, "temporary failure")
+    assert scheduler.tick(datetime.now(UTC) + timedelta(seconds=30)) == 0
+    assert store.set_schedule_enabled(schedule.id, False)
+    assert scheduler.tick(datetime.now(UTC) + timedelta(seconds=90)) == 0
+    assert store.set_schedule_enabled(schedule.id, True)
+    assert scheduler.tick(datetime.now(UTC) + timedelta(seconds=90)) == 1
+    assert {event.job_id for event in store.list_trigger_history(schedule.id)} == {job.id}
+
+
+def test_schedule_retry_respects_queued_job_quota(tmp_path):
+    store = JobStore(tmp_path / "suto.db")
+    start = datetime.now(UTC).replace(microsecond=0)
+    scheduler = Scheduler(store)
+    schedule = scheduler.create(
+        kind="once", expression=(start + timedelta(seconds=30)).isoformat(),
+        prompt="retry later", retry_limit=1, retry_delay_seconds=1,
+        now=start,
+    )
+    scheduler.tick(start + timedelta(seconds=30))
+    job = store.claim_next_job()
+    assert store.fail_job(job.id, "temporary failure")
+    store.configure(max_queued_jobs=1)
+    other = store.create_job("fills queue")
+    due = datetime.now(UTC) + timedelta(seconds=2)
+    assert scheduler.tick(due) == 0
+    assert store.get_job(job.id).status == JobStatus.FAILED
+    assert len(store.list_trigger_history(schedule.id)) == 1
+    assert store.cancel_job(other.id)
+    assert scheduler.tick(due) == 1
+    assert store.get_job(job.id).status == JobStatus.QUEUED
 
 
 def test_pause_prevents_trigger_and_resume_allows_it(tmp_path):
@@ -214,6 +425,21 @@ def test_once_schedule_runs_after_restart_only_once(tmp_path):
     assert restarted.tick(start + timedelta(minutes=3)) == 0
     assert restarted.store.get_schedule(schedule.id).next_run_at is None
     assert len(restarted.store.list_trigger_history(schedule.id)) == 1
+
+
+def test_once_skip_missed_run_after_restart_records_skip(tmp_path):
+    database = tmp_path / "suto.db"
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    schedule = Scheduler(JobStore(database)).create(
+        kind="once", expression=(start + timedelta(minutes=1)).isoformat(),
+        prompt="expired task", missed_run_policy=MissedRunPolicy.SKIP,
+        now=start,
+    )
+    restarted = Scheduler(JobStore(database))
+    assert restarted.tick(start + timedelta(minutes=5)) == 0
+    assert restarted.store.list_jobs() == []
+    assert restarted.store.get_schedule(schedule.id).next_run_at is None
+    assert restarted.store.list_trigger_history(schedule.id)[0].status == TriggerStatus.SKIPPED
 
 
 async def test_scheduled_job_reaches_agent_runtime_and_commits_result(tmp_path, monkeypatch):
