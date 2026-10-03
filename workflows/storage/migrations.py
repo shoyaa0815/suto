@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .locking import ProcessLock
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 HARDENING = """
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -293,6 +293,29 @@ CREATE TABLE session_skills(
 );
 """
 
+JOB_ATTEMPTS = """
+ALTER TABLE jobs ADD COLUMN attempt_id TEXT;
+CREATE TABLE job_attempts(
+ id TEXT PRIMARY KEY,
+ job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+ ordinal INTEGER NOT NULL CHECK(ordinal > 0),
+ status TEXT NOT NULL,
+ started_at TEXT NOT NULL,
+ finished_at TEXT,
+ UNIQUE(job_id, ordinal)
+);
+CREATE INDEX job_attempts_job_idx ON job_attempts(job_id, ordinal);
+CREATE TRIGGER job_attempt_status AFTER UPDATE OF status ON jobs
+ WHEN OLD.status IN ('running', 'waiting_approval', 'waiting_children')
+ AND OLD.status != NEW.status AND NEW.attempt_id IS NOT NULL
+ AND NEW.status NOT IN ('queued', 'running') BEGIN
+ UPDATE job_attempts
+ SET status=NEW.status,
+     finished_at=COALESCE(NEW.finished_at, strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
+ WHERE id=NEW.attempt_id;
+END;
+"""
+
 
 def backup_database(source: Path, destination: Path) -> Path:
     source, destination = source.resolve(), destination.expanduser().absolute()
@@ -349,6 +372,7 @@ def initialize_database(store) -> None:
                 (12, SESSION_COMPACTION),
                 (13, CORE_TRACE_AND_MESSAGES),
                 (14, RUN_LIFECYCLE),
+                (15, JOB_ATTEMPTS),
             ):
                 if number > SCHEMA_VERSION:
                     break
@@ -390,6 +414,22 @@ def initialize_database(store) -> None:
                             migration_script = ''
                         elif any(markers):
                             raise RuntimeError('database has a partial run lifecycle migration; restore a verified backup')
+                    if number == 15:
+                        markers = (
+                            'attempt_id' in {
+                                row[1] for row in connection.execute('PRAGMA table_info(jobs)')
+                            },
+                            connection.execute(
+                                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='job_attempts'"
+                            ).fetchone() is not None,
+                            connection.execute(
+                                "SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='job_attempt_status'"
+                            ).fetchone() is not None,
+                        )
+                        if all(markers):
+                            migration_script = ''
+                        elif any(markers):
+                            raise RuntimeError('database has a partial job attempt migration; restore a verified backup')
                     connection.executescript('BEGIN IMMEDIATE;\n' + migration_script)
                     connection.execute('INSERT OR REPLACE INTO schema_migrations VALUES (?,?)',
                                        (number, datetime.now(UTC).isoformat()))

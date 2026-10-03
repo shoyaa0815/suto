@@ -21,6 +21,7 @@ from ..models import (
     ChangeEvent,
     CommandEvent,
     Job,
+    JobAttempt,
     JobEvent,
     JobStatus,
     JobStep,
@@ -379,6 +380,20 @@ class JobStore(
             finished_at=row["finished_at"],
             parent_id=row["parent_id"],
             options=json.loads(row["options"]),
+            attempt_id=row["attempt_id"],
+        )
+
+    @staticmethod
+    def _to_attempt(row: sqlite3.Row | None) -> JobAttempt | None:
+        if row is None:
+            return None
+        return JobAttempt(
+            id=row["id"],
+            job_id=row["job_id"],
+            ordinal=int(row["ordinal"]),
+            status=JobStatus(row["status"]),
+            started_at=row["started_at"],
+            finished_at=row["finished_at"],
         )
 
     @staticmethod
@@ -638,6 +653,14 @@ class JobStore(
             ).fetchone()
         return self._to_job(row)
 
+    def list_job_attempts(self, job_id: str) -> list[JobAttempt]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM job_attempts WHERE job_id = ? ORDER BY ordinal",
+                (job_id,),
+            ).fetchall()
+        return [attempt for row in rows if (attempt := self._to_attempt(row)) is not None]
+
     def list_jobs(self, limit: int = 20) -> list[Job]:
         safe_limit = min(max(int(limit), 1), 100)
         with self._connect() as connection:
@@ -669,16 +692,18 @@ class JobStore(
                 connection.commit()
                 return None
             started_at = _now()
+            attempt_id = f"attempt_{uuid4().hex}"
             connection.execute(
                 """
                 UPDATE jobs
                 SET status = ?, started_at = ?, finished_at = NULL, error = NULL,
-                    attempt_count = attempt_count + 1
+                    attempt_count = attempt_count + 1, attempt_id = ?
                 WHERE id = ? AND status = ?
                 """,
                 (
                     JobStatus.RUNNING,
                     started_at,
+                    attempt_id,
                     row["id"],
                     JobStatus.QUEUED,
                 ),
@@ -687,6 +712,13 @@ class JobStore(
                 "SELECT * FROM jobs WHERE id = ?",
                 (row["id"],),
             ).fetchone()
+            connection.execute(
+                """INSERT INTO job_attempts
+                   (id, job_id, ordinal, status, started_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (attempt_id, row["id"], claimed["attempt_count"],
+                 JobStatus.RUNNING, started_at),
+            )
             connection.commit()
         return self._to_job(claimed)
 

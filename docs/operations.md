@@ -218,8 +218,14 @@ tables. Cancelling a running scheduled job cancels its active agent request.
 
 Exit, Ctrl-C and SIGTERM stop job admission, cancel active execution, kill command
 process trees and persist interrupted jobs. On a hard crash, the next owning
-worker marks abandoned running jobs `interrupted`; `/resume <job_id>` checks
+worker marks abandoned running jobs `interrupted`; the resume path checks
 workspace hashes before continuing. Interrupted/blocked jobs retain checkpoints.
+Each worker claim atomically assigns a durable `attempt_id` and increments the
+job's attempt count. Attempt status and start/end times survive restart; a new
+claim after resumption receives a new ID while retaining the job ID. Internal
+transient retries during one claim remain in that attempt. Databases upgraded
+from earlier schemas retain existing jobs and counts without inventing missing
+historical attempt records. Public `/resume` is planned for Phase 1B.
 
 ## Logs, metrics, quotas and retention
 

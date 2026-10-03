@@ -7,6 +7,7 @@ import pytest
 from agent.events import AgentEvent
 from skills import SkillSelection, builtin_registry
 from workflows.storage.runs import SessionBusyError
+from workflows.storage.migrations import SCHEMA_VERSION
 from workflows.storage.store import JobStore
 
 
@@ -91,4 +92,7 @@ def test_version_13_migrates_without_losing_history_or_trace(tmp_path):
     assert second.list_run_events("old-run")[0]["event_type"] == "agent.completed"
     assert second.begin_agent_run(conversation.id)
     with sqlite3.connect(path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        assert db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='job_attempts'"
+        ).fetchone()

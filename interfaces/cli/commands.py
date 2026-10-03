@@ -7,6 +7,7 @@ import sqlite3
 import tomllib
 from typing import Any
 
+from application.automation import JobService
 from interfaces.cli import CLI_STORAGE_INTERFACE
 from interfaces.cli.operations import print_pending_reminders
 from interfaces.cli.output import write as print
@@ -90,7 +91,7 @@ def _jobs(context: CommandContext, argument: str) -> CommandOutcome:
     if argument:
         print("usage: /jobs")
         return CommandOutcome(handled=True)
-    jobs = context.store.list_jobs()
+    jobs = JobService(context.store).list_recent()
     if not jobs:
         print("No automation jobs.")
         return CommandOutcome(handled=True)

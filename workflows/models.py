@@ -116,10 +116,21 @@ class Job:
     finished_at: str | None
     parent_id: str | None = None
     options: dict = field(default_factory=dict)
+    attempt_id: str | None = None
 
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.output_tokens
+
+
+@dataclass(frozen=True)
+class JobAttempt:
+    id: str
+    job_id: str
+    ordinal: int
+    status: JobStatus
+    started_at: str
+    finished_at: str | None
 
 
 @dataclass(frozen=True)
