@@ -3,7 +3,8 @@
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from workflows.models import Job, JobStatus, MissedRunPolicy, Schedule, ScheduleKind, TriggerEvent
+from workflows.library.definitions import automation_options, load_definition_file, validate_name
+from workflows.models import Automation, AutomationVersion, Job, JobStatus, MissedRunPolicy, Schedule, ScheduleKind, TriggerEvent
 from workflows.runtime.checkpoints import checkpoint_error
 from workflows.runtime.scheduler import Scheduler
 from workflows.storage.store import JobStore
@@ -133,3 +134,42 @@ class ScheduleService:
         if not schedule.enabled:
             return "paused"
         return "exhausted" if schedule.next_run_at is None else "active"
+
+
+class AutomationService:
+    def __init__(self, store: JobStore, worker: "AutomationWorker | None" = None) -> None:
+        self.store = store
+        self.worker = worker
+
+    def create(self, definition_file: str | Path) -> Automation:
+        return self.store.create_automation(**automation_options(load_definition_file(definition_file)))
+
+    def update(self, name: str, definition_file: str | Path) -> AutomationVersion:
+        name = validate_name(name, "automation name")
+        options = automation_options(load_definition_file(definition_file), default_name=name)
+        if validate_name(options.pop("name"), "automation name") != name:
+            raise ValueError("definition name does not match automation name")
+        return self.store.revise_automation(name, **options)
+
+    def list_recent(self) -> list[Automation]:
+        return self.store.list_automations()
+
+    def show(self, name: str) -> tuple[Automation, AutomationVersion, list[str]]:
+        automation = self.store.get_automation(name)
+        if automation is None:
+            raise ValueError(f"automation not found: {name}")
+        version = self.store.get_current_automation_version(automation.id)
+        if version is None:
+            raise ValueError(f"automation version not found: {name}")
+        skills = [skill for skill, _ in self.store.list_automation_skill_versions(version.id)]
+        return automation, version, skills
+
+    def run(self, name: str, parameters: dict | None = None) -> tuple[Job, AutomationVersion]:
+        job, version = self.store.create_automation_job(name, parameters)
+        if self.worker is not None:
+            self.worker.wake()
+        return job, version
+
+    def history(self, name: str) -> list[Job]:
+        automation, _, _ = self.show(name)
+        return self.store.list_automation_jobs(automation.id)

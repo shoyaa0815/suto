@@ -43,6 +43,9 @@ from ..runtime.options import validate_options
 from .subtasks import SubtaskStore
 from .knowledge import KnowledgeStore
 from ..library.definitions import (
+    reject_detectable_secrets,
+    render_prompt,
+    validate_parameters,
     validate_name,
     validate_parameter_schema,
     validate_prompt_template,
@@ -2244,6 +2247,12 @@ class JobStore(
         allow_command: bool = False,
         skill_names: list[str] | None = None,
     ) -> Automation:
+        reject_detectable_secrets({"description": description, "prompt_template": prompt_template}, field="definition")
+        if isinstance(parameter_schema, dict):
+            for rule in parameter_schema.values():
+                reject_detectable_secrets(rule, field="parameter schema")
+        if type(allow_write) is not bool or type(allow_command) is not bool:
+            raise ValueError("permission ceiling must be boolean")
         name = validate_name(name, "automation name")
         schema = validate_parameter_schema(parameter_schema)
         template = validate_prompt_template(prompt_template, schema)
@@ -2292,6 +2301,12 @@ class JobStore(
         allow_command: bool = False,
         skill_names: list[str] | None = None,
     ) -> AutomationVersion:
+        reject_detectable_secrets({"description": description, "prompt_template": prompt_template}, field="definition")
+        if isinstance(parameter_schema, dict):
+            for rule in parameter_schema.values():
+                reject_detectable_secrets(rule, field="parameter schema")
+        if type(allow_write) is not bool or type(allow_command) is not bool:
+            raise ValueError("permission ceiling must be boolean")
         name = validate_name(name, "automation name")
         schema = validate_parameter_schema(parameter_schema)
         template = validate_prompt_template(prompt_template, schema)
@@ -2471,3 +2486,65 @@ class JobStore(
                 (automation_id, safe_limit),
             ).fetchall()
         return [job for row in rows if (job := self._to_job(row)) is not None]
+
+    def create_automation_job(
+        self, name: str, parameters: dict | None = None,
+    ) -> tuple[Job, AutomationVersion]:
+        """Resolve, validate, and pin a run within one SQLite transaction."""
+        job_id = f"job_{uuid4().hex[:8]}"
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """SELECT versions.* FROM automation_versions AS versions
+                   JOIN automations ON automations.id = versions.automation_id
+                   WHERE automations.name = ? COLLATE NOCASE
+                     AND versions.version = automations.current_version""",
+                (name,),
+            ).fetchone()
+            version = self._to_automation_version(row)
+            if version is None:
+                raise ValueError(f"automation not found: {name}")
+            values = validate_parameters(version.parameter_schema, parameters)
+            reject_detectable_secrets(values, field="automation parameters")
+            workspace = validate_workspace(version.workspace)
+            if workspace != version.workspace:
+                raise ValueError("automation workspace has changed")
+            skills = connection.execute(
+                """SELECT COUNT(*) FROM automation_version_skills AS links
+                   JOIN skill_versions AS versions ON versions.id = links.skill_version_id
+                   WHERE links.automation_version_id = ?""",
+                (version.id,),
+            ).fetchone()[0]
+            expected = connection.execute(
+                "SELECT COUNT(*) FROM automation_version_skills WHERE automation_version_id = ?",
+                (version.id,),
+            ).fetchone()[0]
+            if skills != expected:
+                raise ValueError("automation skill reference is invalid")
+            if type(version.allow_write) is not bool or type(version.allow_command) is not bool:
+                raise ValueError("invalid permission ceiling")
+            prompt = render_prompt(version.prompt_template, version.parameter_schema, values)
+            timestamp = _now()
+            connection.execute(
+                """INSERT INTO jobs (id, prompt, mode, status, source, source_ref,
+                   workspace, allow_write, allow_command, created_at, options)
+                   VALUES (?, ?, 'agent', ?, 'automation', ?, ?, ?, ?, ?, ?)""",
+                (job_id, redact_text(prompt), JobStatus.QUEUED, version.id,
+                 workspace, int(version.allow_write), int(version.allow_command),
+                 timestamp, json.dumps({"sandbox": "process"})),
+            )
+            connection.execute(
+                "INSERT INTO automation_run_parameters VALUES (?, ?, ?)",
+                (job_id, version.id, json.dumps(values, ensure_ascii=False, sort_keys=True)),
+            )
+        job = self.get_job(job_id)
+        if job is None:
+            raise RuntimeError("failed to create automation job")
+        return job, version
+
+    def get_automation_run_parameters(self, job_id: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT parameters FROM automation_run_parameters WHERE job_id = ?", (job_id,)
+            ).fetchone()
+        return json.loads(row["parameters"]) if row is not None else None

@@ -4,7 +4,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..library.definitions import render_automation_prompt
 from ..models import Job, JobStatus
 from .runner import JobRunner
 from .scheduler import Scheduler
@@ -60,18 +59,9 @@ class AutomationWorker:
         name: str,
         parameters: dict[str, Any] | None = None,
     ) -> Job:
-        version = self.store.get_current_automation_version(name)
-        if version is None:
-            raise ValueError(f"automation not found: {name}")
-        prompt = render_automation_prompt(version, parameters or {})
-        return self.submit(
-            prompt,
-            source="automation",
-            source_ref=version.id,
-            workspace=version.workspace,
-            allow_write=version.allow_write,
-            allow_command=version.allow_command,
-        )
+        job, _ = self.store.create_automation_job(name, parameters)
+        self.wake()
+        return job
 
     async def cancel(self, job_id: str) -> bool:
         return self.request_cancel(job_id)

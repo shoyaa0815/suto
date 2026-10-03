@@ -249,6 +249,18 @@ accepts interrupted or blocked jobs only after checking the existing workspace
 checkpoint policy; the next worker claim creates a new attempt ID for the same
 job. Write and command flags do not bypass tool approval or sandbox checks.
 
+The public `/automation create <definition.json>` and `/automation update <name>
+<definition.json>` commands save immutable numbered definitions. A definition is a
+JSON object with `name`, `prompt_template`, optional `description`,
+`parameter_schema`, `workspace`, `skills`, `allow_write`, and `allow_command`.
+Use `/automation list`, `/automation show <name>`, `/automation run <name>
+[key=value ...]`, and `/automation history <name>` to inspect and run them.
+Each run validates parameters, skills, workspace, and the saved permission ceiling
+before queuing a job. The job pins the exact version and a validated parameter
+snapshot, including defaults. Updating an automation does not change earlier jobs.
+Detected structured secrets and known token patterns are rejected; values must
+not be put in definition files or run parameters.
+
 ## Logs, metrics, quotas and retention
 
 ```text

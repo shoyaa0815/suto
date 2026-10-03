@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .locking import ProcessLock
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 HARDENING = """
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -316,6 +316,14 @@ CREATE TRIGGER job_attempt_status AFTER UPDATE OF status ON jobs
 END;
 """
 
+AUTOMATION_RUNS = """
+CREATE TABLE automation_run_parameters(
+ job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+ automation_version_id TEXT NOT NULL REFERENCES automation_versions(id),
+ parameters TEXT NOT NULL
+);
+"""
+
 
 def backup_database(source: Path, destination: Path) -> Path:
     source, destination = source.resolve(), destination.expanduser().absolute()
@@ -373,6 +381,7 @@ def initialize_database(store) -> None:
                 (13, CORE_TRACE_AND_MESSAGES),
                 (14, RUN_LIFECYCLE),
                 (15, JOB_ATTEMPTS),
+                (16, AUTOMATION_RUNS),
             ):
                 if number > SCHEMA_VERSION:
                     break
@@ -430,6 +439,10 @@ def initialize_database(store) -> None:
                             migration_script = ''
                         elif any(markers):
                             raise RuntimeError('database has a partial job attempt migration; restore a verified backup')
+                    if number == 16 and connection.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='automation_run_parameters'"
+                    ).fetchone() is not None:
+                        migration_script = ''
                     connection.executescript('BEGIN IMMEDIATE;\n' + migration_script)
                     connection.execute('INSERT OR REPLACE INTO schema_migrations VALUES (?,?)',
                                        (number, datetime.now(UTC).isoformat()))

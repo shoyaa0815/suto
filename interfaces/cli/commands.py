@@ -8,7 +8,8 @@ import sqlite3
 import tomllib
 from typing import Any
 
-from application.automation import JobService, ScheduleService
+from application.automation import AutomationService, JobService, ScheduleService
+from workflows.library.definitions import parse_parameter_value
 from workflows.models import MissedRunPolicy, ScheduleKind
 from workflows.storage.redaction import redact_text
 from interfaces.cli import CLI_STORAGE_INTERFACE
@@ -61,6 +62,9 @@ def print_help(mode: str | None = None) -> None:
     print("  /resume <job_id>  resume an interrupted or blocked job")
     print("  /schedule create (--at <ISO> | --every <seconds> | --cron <expr>) [options] <task>")
     print("  /schedule list|show|pause|resume|history [<schedule_id>]")
+    print("  /automation create <definition.json>")
+    print("  /automation update <name> <definition.json>")
+    print("  /automation list|show|run|history <name> [key=value ...]")
     print("  /skills  list available and active skills")
     print("  /skill activate <name>  activate a skill for this CLI session")
     print("  /skill deactivate <name>  deactivate a skill")
@@ -354,6 +358,70 @@ def _schedule(context: CommandContext, argument: str) -> CommandOutcome:
     return CommandOutcome(handled=True)
 
 
+def _automation(context: CommandContext, argument: str) -> CommandOutcome:
+    service = AutomationService(context.store, context.worker)
+    action = "use"
+    try:
+        parts = shlex.split(argument)
+        if not parts:
+            raise ValueError("usage: /automation create|update|list|show|run|history ...")
+        action, *args = parts
+        if action == "create" and len(args) == 1:
+            automation = service.create(args[0])
+            print(f"Automation created: {automation.name} version {automation.current_version}")
+        elif action == "update" and len(args) == 2:
+            version = service.update(args[0], args[1])
+            print(f"Automation updated: {args[0]} version {version.version}")
+        elif action == "list" and not args:
+            automations = service.list_recent()
+            if not automations:
+                print("No automations yet.")
+            for automation in automations:
+                print(f"{automation.name}  version={automation.current_version}")
+        elif action == "show" and len(args) == 1:
+            automation, version, skills = service.show(args[0])
+            print(f"Automation: {automation.name}")
+            print(f"Version: {version.version}")
+            print(f"Description: {redact_text(version.description)}")
+            print(f"Workspace: {version.workspace}")
+            print(f"Write: {'allowed' if version.allow_write else 'denied'}")
+            print(f"Command: {'allowed' if version.allow_command else 'denied'}")
+            print(f"Parameters: {', '.join(version.parameter_schema) or 'none'}")
+            print(f"Skills: {', '.join(skills) or 'none'}")
+        elif action == "run" and args:
+            name, *assignments = args
+            parameters = {}
+            for assignment in assignments:
+                key, separator, value = assignment.partition("=")
+                if not separator or not key or key in parameters:
+                    raise ValueError("run parameters must be unique key=value pairs")
+                parameters[key] = parse_parameter_value(value)
+            job, version = service.run(name, parameters)
+            print(f"Automation: {name}")
+            print(f"Version: {version.version}")
+            print(f"Job: {job.id}")
+            print(f"Status: {job.status.value}")
+            print("Job queued." if context.worker is not None and context.worker.ready else "Job saved and waiting for worker.")
+        elif action == "history" and len(args) == 1:
+            history = service.history(args[0])
+            if not history:
+                print("No automation runs yet.")
+            for job in history:
+                pinned = context.store.get_automation_version(job.source_ref)
+                print(f"{job.id}  version={pinned.version if pinned else job.source_ref}  "
+                      f"status={job.status.value}  created={job.created_at}")
+        else:
+            raise ValueError(f"usage: /automation {action} ...")
+    except (ValueError, OSError) as error:
+        print(f"Cannot {action} automation: {redact_text(error)}")
+    except sqlite3.IntegrityError as error:
+        message = str(error)
+        print("Cannot run automation: quota reached" if "quota" in message or "rate limit" in message else "Cannot use automation: storage error.")
+    except sqlite3.Error:
+        print("Cannot use automation: storage error.")
+    return CommandOutcome(handled=True)
+
+
 def _task(context: CommandContext, argument: str) -> CommandOutcome:
     if not argument:
         tasks = context.store.list_tasks(context.user.id)
@@ -510,6 +578,7 @@ COMMAND_HANDLERS: dict[str, CommandHandler] = {
     "/cancel": _cancel,
     "/resume": _resume,
     "/schedule": _schedule,
+    "/automation": _automation,
     "/clear": _clear,
     "/reset": _reset,
     "/skills": _skills,

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from ..models import AutomationVersion
+from ..storage.redaction import redact_text
 
 
 NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
@@ -15,7 +16,7 @@ MAX_TEMPLATE_CHARS = 50_000
 MAX_SKILL_CHARS = 30_000
 MAX_PARAMETERS = 50
 SENSITIVE_NAMES = frozenset(
-    {"secret", "password", "passwd", "token", "api_key", "apikey", "credential"}
+    {"secret", "password", "passwd", "token", "api_key", "apikey", "credential", "authorization", "auth"}
 )
 
 
@@ -25,6 +26,20 @@ def _is_sensitive_name(name: str) -> bool:
         normalized == marker or normalized.endswith(f"_{marker}")
         for marker in SENSITIVE_NAMES
     )
+
+
+def reject_detectable_secrets(value: Any, *, field: str = "definition") -> None:
+    """Reject structured secret fields and token patterns supported by redaction."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if _is_sensitive_name(str(key)) and item is not None:
+                raise ValueError(f"sensitive value is not allowed in {field}")
+            reject_detectable_secrets(item, field=field)
+    elif isinstance(value, list):
+        for item in value:
+            reject_detectable_secrets(item, field=field)
+    elif isinstance(value, str) and redact_text(value) != value:
+        raise ValueError(f"detectable secret is not allowed in {field}")
 
 
 def validate_name(name: str, label: str = "name") -> str:
