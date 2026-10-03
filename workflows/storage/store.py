@@ -670,6 +670,14 @@ class JobStore(
             ).fetchall()
         return [job for row in rows if (job := self._to_job(row)) is not None]
 
+    def get_job_trigger_id(self, job_id: str) -> int | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT id FROM trigger_history WHERE job_id = ? ORDER BY id DESC LIMIT 1",
+                (job_id,),
+            ).fetchone()
+        return row["id"] if row is not None else None
+
     def claim_next_job(self) -> Job | None:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")

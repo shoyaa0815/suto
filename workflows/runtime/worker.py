@@ -74,6 +74,13 @@ class AutomationWorker:
         )
 
     async def cancel(self, job_id: str) -> bool:
+        return self.request_cancel(job_id)
+
+    @property
+    def ready(self) -> bool:
+        return self._lock.fd is not None and not self._stopping
+
+    def request_cancel(self, job_id: str) -> bool:
         job = self.store.get_job(job_id)
         if job is None or job.status not in {
             JobStatus.QUEUED,

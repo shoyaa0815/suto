@@ -225,7 +225,19 @@ job's attempt count. Attempt status and start/end times survive restart; a new
 claim after resumption receives a new ID while retaining the job ID. Internal
 transient retries during one claim remain in that attempt. Databases upgraded
 from earlier schemas retain existing jobs and counts without inventing missing
-historical attempt records. Public `/resume` is planned for Phase 1B.
+historical attempt records.
+
+The public CLI accepts `/run [--workspace <path>] [--allow-write]
+[--allow-command] <task>`, `/jobs`, `/status <job_id>`, `/cancel <job_id>`, and
+`/resume <job_id>`. `/run` persists a queued one-time job and reports its ID,
+canonical workspace, permission ceilings, and whether the session worker is
+ready. A saved job waits for an available worker; submission does not mean the
+job has started. `/jobs` lists recent jobs with their latest attempt IDs, and
+`/status` reports persisted timestamps, result summary, and safe error.
+Cancellation is idempotent, including queued and approval-waiting jobs. Resume
+accepts interrupted or blocked jobs only after checking the existing workspace
+checkpoint policy; the next worker claim creates a new attempt ID for the same
+job. Write and command flags do not bypass tool approval or sandbox checks.
 
 ## Logs, metrics, quotas and retention
 

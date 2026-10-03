@@ -3,11 +3,13 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+import shlex
 import sqlite3
 import tomllib
 from typing import Any
 
 from application.automation import JobService
+from workflows.storage.redaction import redact_text
 from interfaces.cli import CLI_STORAGE_INTERFACE
 from interfaces.cli.operations import print_pending_reminders
 from interfaces.cli.output import write as print
@@ -24,6 +26,7 @@ class CommandContext:
     skills: SkillSelection | None = None
     thread_id: str = "local"
     reset_display: Callable[[], None] | None = None
+    worker: Any = None
 
 
 @dataclass(frozen=True)
@@ -50,7 +53,11 @@ def print_help(mode: str | None = None) -> None:
     print("  /reminder remove <name-or-id>  delete a pending reminder")
     print("  /task [title]  list or create personal tasks")
     print("  /task remove <name-or-id>  delete an open task")
-    print("  /jobs  show recent automation jobs (read-only)")
+    print("  /run [--workspace <path>] [--allow-write] [--allow-command] <task>  queue a job")
+    print("  /jobs  show recent automation jobs")
+    print("  /status <job_id>  show job details")
+    print("  /cancel <job_id>  cancel a job")
+    print("  /resume <job_id>  resume an interrupted or blocked job")
     print("  /skills  list available and active skills")
     print("  /skill activate <name>  activate a skill for this CLI session")
     print("  /skill deactivate <name>  deactivate a skill")
@@ -91,7 +98,7 @@ def _jobs(context: CommandContext, argument: str) -> CommandOutcome:
     if argument:
         print("usage: /jobs")
         return CommandOutcome(handled=True)
-    jobs = JobService(context.store).list_recent()
+    jobs = JobService(context.store, context.worker).list_recent()
     if not jobs:
         print("No automation jobs.")
         return CommandOutcome(handled=True)
@@ -100,8 +107,128 @@ def _jobs(context: CommandContext, argument: str) -> CommandOutcome:
         prompt = " ".join(job.prompt.split())
         if len(prompt) > 60:
             prompt = prompt[:57] + "..."
-        print(f"{job.id}  {job.status.value}  {prompt}")
+        print(
+            f"{job.id}  {job.status.value}  {prompt}  "
+            f"created={job.created_at}  latest_attempt={job.attempt_id or 'none'}"
+        )
     return CommandOutcome(handled=True)
+
+
+def _parse_public_run(argument: str) -> tuple[str, str, bool, bool]:
+    usage = "usage: /run [--workspace <path>] [--allow-write] [--allow-command] <task>"
+    try:
+        parts = shlex.split(argument)
+    except ValueError:
+        raise ValueError(usage) from None
+    workspace = "."
+    allow_write = False
+    allow_command = False
+    while parts and parts[0].startswith("--"):
+        option = parts.pop(0)
+        if option == "--workspace":
+            if not parts or parts[0].startswith("--"):
+                raise ValueError("--workspace requires a path")
+            workspace = parts.pop(0)
+        elif option == "--allow-write":
+            allow_write = True
+        elif option == "--allow-command":
+            allow_command = True
+        else:
+            raise ValueError(f"unknown /run option: {option}")
+    if not parts:
+        raise ValueError(usage)
+    return " ".join(parts), workspace, allow_write, allow_command
+
+
+def _run(context: CommandContext, argument: str) -> CommandOutcome:
+    try:
+        prompt, workspace, allow_write, allow_command = _parse_public_run(argument)
+        service = JobService(context.store, context.worker)
+        job = service.submit(
+            prompt, workspace=workspace,
+            allow_write=allow_write, allow_command=allow_command,
+        )
+    except (ValueError, OSError) as error:
+        print(f"Cannot create job: {error}")
+    except sqlite3.IntegrityError as error:
+        message = str(error)
+        print("Cannot create job: quota reached" if "quota" in message or "rate limit" in message else "Cannot create job.")
+    except sqlite3.Error:
+        print("Cannot create job: storage error.")
+    else:
+        print("Job created")
+        print(f"ID: {job.id}")
+        print(f"Status: {job.status.value}")
+        print(f"Workspace: {job.workspace}")
+        print(f"Write: {'allowed' if job.allow_write else 'denied'}")
+        print(f"Command: {'allowed' if job.allow_command else 'denied'}")
+        print("Job queued." if service.worker_ready else "Job saved and waiting for worker.")
+    return CommandOutcome(handled=True)
+
+
+def _job_id(argument: str, command: str) -> str:
+    try:
+        parts = shlex.split(argument)
+    except ValueError:
+        parts = []
+    if len(parts) != 1:
+        raise ValueError(f"usage: /{command} <job_id>")
+    return parts[0]
+
+
+def _status(context: CommandContext, argument: str) -> CommandOutcome:
+    try:
+        job_id = _job_id(argument, "status")
+        service = JobService(context.store, context.worker)
+        job = service.get(job_id)
+        if job is None:
+            raise ValueError(f"Job not found: {job_id}")
+        trigger_id = service.schedule_trigger_id(job)
+    except ValueError as error:
+        print(str(error))
+        return CommandOutcome(handled=True)
+    except sqlite3.Error:
+        print("Cannot read job: storage error.")
+        return CommandOutcome(handled=True)
+    print(f"Job: {job.id}")
+    print(f"Status: {job.status.value}")
+    print(f"Attempt: {job.attempt_count} ({job.attempt_id or 'none'})")
+    print(f"Workspace: {job.workspace}")
+    print(f"Created: {job.created_at}")
+    print(f"Started: {job.started_at or 'none'}")
+    print(f"Finished: {job.finished_at or 'none'}")
+    print(f"Automation version: {job.source_ref if job.source == 'automation' else 'none'}")
+    print(f"Schedule trigger: {trigger_id if trigger_id is not None else 'none'}")
+    result = " ".join(redact_text(job.result).split()) if job.result else "none"
+    if len(result) > 200:
+        result = result[:197] + "..."
+    print(f"Result summary: {result}")
+    print(f"Safe error: {redact_text(job.error) if job.error else 'none'}")
+    return CommandOutcome(handled=True)
+
+
+def _change_job(context: CommandContext, argument: str, action: str) -> CommandOutcome:
+    try:
+        job_id = _job_id(argument, action)
+        service = JobService(context.store, context.worker)
+        job = service.cancel(job_id) if action == "cancel" else service.resume(job_id)
+    except ValueError as error:
+        print(str(error))
+    except sqlite3.Error:
+        print(f"Cannot {action} job: storage error.")
+    else:
+        print(f"Job {job.id}: {job.status.value}")
+        if action == "resume":
+            print("Job queued." if service.worker_ready else "Job saved and waiting for worker.")
+    return CommandOutcome(handled=True)
+
+
+def _cancel(context: CommandContext, argument: str) -> CommandOutcome:
+    return _change_job(context, argument, "cancel")
+
+
+def _resume(context: CommandContext, argument: str) -> CommandOutcome:
+    return _change_job(context, argument, "resume")
 
 
 def _task(context: CommandContext, argument: str) -> CommandOutcome:
@@ -255,6 +382,10 @@ COMMAND_HANDLERS: dict[str, CommandHandler] = {
     "/reminder": _reminder,
     "/task": _task,
     "/jobs": _jobs,
+    "/run": _run,
+    "/status": _status,
+    "/cancel": _cancel,
+    "/resume": _resume,
     "/clear": _clear,
     "/reset": _reset,
     "/skills": _skills,

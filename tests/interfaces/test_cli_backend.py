@@ -43,7 +43,10 @@ def test_print_help_lists_exit_commands(capsys):
     assert "/exit" in output
     assert "/quit" not in output
     assert "/plan" not in output
-    assert "/resume" not in output
+    assert "  /run " in output
+    assert "  /status <job_id>" in output
+    assert "  /cancel <job_id>" in output
+    assert "  /resume <job_id>" in output
     assert "/approve" not in output
     assert "/reject" not in output
 

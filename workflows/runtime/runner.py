@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
@@ -21,6 +20,7 @@ from .context import (
 from ..models import Job, JobStatus, StepStatus
 from ..storage.store import JobStore
 from .options import job_limits
+from .checkpoints import checkpoint_error
 from tools.advanced import RETRIEVAL_TOOLS, SUBTASK_TOOLS
 
 AIExecutor = Callable[..., Awaitable[AIExecutionResult]]
@@ -61,27 +61,7 @@ class JobRunner:
         )
 
     def _checkpoint_error(self, job: Job) -> str | None:
-        if job.attempt_count <= 1:
-            return None
-        workspace = Path(job.workspace).resolve()
-        for change in self.store.latest_changes_by_path(job.id):
-            target = (workspace / change.path).resolve()
-            try:
-                target.relative_to(workspace)
-            except ValueError:
-                return f"cannot resume: changed path escapes workspace: {change.path}"
-            if not target.is_file():
-                return (
-                    "cannot resume: previously changed file is missing: "
-                    f"{change.path}"
-                )
-            current_hash = hashlib.sha256(target.read_bytes()).hexdigest()
-            if current_hash != change.after_sha256:
-                return (
-                    f"cannot resume: workspace file changed after checkpoint: "
-                    f"{change.path}"
-                )
-        return None
+        return checkpoint_error(self.store, job)
 
     def _resume_prompt(self, job: Job) -> str:
         steps = self.store.list_steps(job.id)

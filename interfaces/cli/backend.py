@@ -182,6 +182,7 @@ async def run_session(
                     store, user, conversation.id, mode, skills,
                     thread_id=thread_id,
                     reset_display=getattr(read_prompt, "reset_display", None),
+                    worker=worker,
                 ),
                 prompt,
             )
