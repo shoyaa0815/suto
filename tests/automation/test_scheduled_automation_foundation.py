@@ -142,7 +142,7 @@ def test_v17_migration_preserves_prompt_schedule_and_its_trigger(tmp_path):
     assert migrated.automation is None
     assert upgraded.list_schedules() == [legacy]
     with upgraded._connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 18
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == migrations.SCHEMA_VERSION
         assert connection.execute("SELECT COUNT(*) FROM schedule_automation_snapshots").fetchone()[0] == 0
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []

@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .locking import ProcessLock
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 HARDENING = """
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -367,6 +367,32 @@ BEFORE UPDATE ON schedule_automation_snapshots BEGIN
 END;
 """
 
+JOB_RESULT_NOTIFICATIONS = """
+ALTER TABLE notifications ADD COLUMN kind TEXT NOT NULL DEFAULT '';
+UPDATE notifications SET kind = CASE status
+ WHEN 'waiting_approval' THEN 'approval_required'
+ ELSE status END;
+CREATE INDEX notifications_unread_idx ON notifications(read_at, id);
+DROP TRIGGER job_notification;
+CREATE TRIGGER job_notification AFTER UPDATE OF status ON jobs
+WHEN OLD.status != NEW.status AND NEW.status IN
+ ('completed','failed','blocked','waiting_approval','interrupted','cancelled') BEGIN
+ INSERT INTO notifications(job_id,status,created_at,kind)
+ VALUES(NEW.id,NEW.status,strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
+  CASE
+   WHEN NEW.status='waiting_approval' THEN 'approval_required'
+   WHEN NEW.status='failed' AND NEW.source='schedule' AND EXISTS (
+    SELECT 1 FROM trigger_history AS history
+    JOIN schedules ON schedules.id=history.schedule_id
+    WHERE history.job_id=NEW.id AND history.status='created'
+      AND history.attempt > schedules.retry_limit
+      AND (schedules.retry_limit > 0 OR NEW.retry_count > 0)
+   ) THEN 'retry_exhausted'
+   ELSE NEW.status
+  END);
+END;
+"""
+
 
 def backup_database(source: Path, destination: Path) -> Path:
     source, destination = source.resolve(), destination.expanduser().absolute()
@@ -427,6 +453,7 @@ def initialize_database(store) -> None:
                 (16, AUTOMATION_RUNS),
                 (17, SCHEDULE_OCCURRENCE_IDENTITY),
                 (18, SCHEDULED_AUTOMATION_SNAPSHOTS),
+                (19, JOB_RESULT_NOTIFICATIONS),
             ):
                 if number > SCHEMA_VERSION:
                     break
@@ -509,6 +536,22 @@ def initialize_database(store) -> None:
                             migration_script = ''
                         elif any(markers):
                             raise RuntimeError('database has a partial scheduled automation migration; restore a verified backup')
+                    if number == 19:
+                        trigger = connection.execute(
+                            "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='job_notification'"
+                        ).fetchone()
+                        markers = (
+                            'kind' in {row[1] for row in connection.execute('PRAGMA table_info(notifications)')},
+                            connection.execute(
+                                "SELECT 1 FROM sqlite_master WHERE type='index' "
+                                "AND name='notifications_unread_idx'"
+                            ).fetchone() is not None,
+                            trigger is not None and 'retry_exhausted' in trigger[0],
+                        )
+                        if all(markers):
+                            migration_script = ''
+                        elif any(markers):
+                            raise RuntimeError('database has a partial job notification migration; restore a verified backup')
                     connection.executescript('BEGIN IMMEDIATE;\n' + migration_script)
                     connection.execute('INSERT OR REPLACE INTO schema_migrations VALUES (?,?)',
                                        (number, datetime.now(UTC).isoformat()))

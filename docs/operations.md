@@ -555,6 +555,15 @@ Intermediate child messages do not enter the user session.
 
 Lifecycle transitions to completed, failed, blocked, interrupted, cancelled or
 waiting_approval create a durable local inbox item in the same transaction.
+Each item has a `kind` for result delivery: `completed`, `failed`, `cancelled`,
+`approval_required`, or `retry_exhausted` when the corresponding retry allowance
+is used up. Existing `blocked` and `interrupted` items remain available. The
+`status` field continues to show the job state, and `read_at` records an
+acknowledgement. `/notifications` shows unread items; the store's
+`notifications(unread_only=False)` query includes acknowledged items until
+normal retention cleanup. Acknowledging an item twice has no effect. These
+rows are derived from committed SQLite job transitions, independent of whether
+the CLI is open.
 
 ```text
 /notifications

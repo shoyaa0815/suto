@@ -1608,6 +1608,8 @@ class JobStore(
         error: str,
         prompt_tokens: int = 0,
         output_tokens: int = 0,
+        *,
+        retry_exhausted: bool = False,
     ) -> bool:
         with self._connect() as connection:
             cursor = connection.execute(
@@ -1627,6 +1629,13 @@ class JobStore(
                     JobStatus.RUNNING,
                 ),
             )
+            if cursor.rowcount == 1 and retry_exhausted:
+                connection.execute(
+                    """UPDATE notifications SET kind = 'retry_exhausted'
+                       WHERE id = (SELECT MAX(id) FROM notifications WHERE job_id = ?)
+                         AND status = 'failed'""",
+                    (job_id,),
+                )
         return cursor.rowcount == 1
 
     def block_job(

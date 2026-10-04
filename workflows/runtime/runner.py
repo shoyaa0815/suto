@@ -414,4 +414,10 @@ class JobRunner:
                 result.error or result.text or result.status,
                 total_prompt_tokens,
                 total_output_tokens,
+                retry_exhausted=(
+                    self._is_transient(result)
+                    and retry_count >= len(self.retry_delays)
+                    and bool(self.retry_delays)
+                    and job.source != "schedule"
+                ),
             )
