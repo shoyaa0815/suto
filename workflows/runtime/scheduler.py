@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from ..library.definitions import reject_detectable_secrets
 from ..models import MissedRunPolicy, Schedule, ScheduleKind
 from ..storage.store import JobStore
 
@@ -164,6 +165,7 @@ class Scheduler:
         current = _utc(now or datetime.now(UTC))
         if not prompt.strip():
             raise ValueError("schedule requires a task")
+        reject_detectable_secrets(prompt, field="schedule prompt")
         workspace_path = Path(workspace).resolve()
         if not workspace_path.is_dir():
             raise ValueError(f"workspace is not a directory: {workspace_path}")

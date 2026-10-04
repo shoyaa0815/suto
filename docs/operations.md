@@ -319,8 +319,8 @@ required and unknown parameters, skills, workspace, and the saved permission
 ceiling before queuing a job. Values are parsed as JSON when valid JSON, or as
 strings otherwise. Each job pins the exact version and validated parameter
 snapshot, including defaults; updates do not change earlier jobs. Detected
-structured secrets and known token patterns are rejected from definitions and
-run parameters.
+structured secrets and known token patterns are rejected from definitions,
+run parameters, `/run` prompts, and `/schedule create` prompts.
 
 ```text
 /approvals

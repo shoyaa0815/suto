@@ -259,6 +259,7 @@ def _status(context: CommandContext, argument: str) -> CommandOutcome:
         if job is None:
             raise ValueError(f"Job not found: {job_id}")
         trigger_id = service.schedule_trigger_id(job)
+        automation_version = service.automation_version(job)
     except ValueError as error:
         print(str(error))
         return CommandOutcome(handled=True)
@@ -272,7 +273,7 @@ def _status(context: CommandContext, argument: str) -> CommandOutcome:
     print(f"Created: {job.created_at}")
     print(f"Started: {job.started_at or 'none'}")
     print(f"Finished: {job.finished_at or 'none'}")
-    print(f"Automation version: {job.source_ref if job.source == 'automation' else 'none'}")
+    print(f"Automation version: {automation_version if automation_version is not None else 'none'}")
     print(f"Schedule trigger: {trigger_id if trigger_id is not None else 'none'}")
     result = " ".join(redact_text(job.result).split()) if job.result else "none"
     if len(result) > 200:
@@ -474,9 +475,8 @@ def _automation(context: CommandContext, argument: str) -> CommandOutcome:
             history = service.history(args[0])
             if not history:
                 print("No automation runs yet.")
-            for job in history:
-                pinned = context.store.get_automation_version(job.source_ref)
-                print(f"{job.id}  version={pinned.version if pinned else job.source_ref}  "
+            for job, version in history:
+                print(f"{job.id}  version={version if version is not None else 'unknown'}  "
                       f"status={job.status.value}  created={job.created_at}")
         else:
             raise ValueError(f"usage: /automation {action} ...")

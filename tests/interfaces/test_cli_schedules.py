@@ -108,6 +108,15 @@ def test_invalid_schedule_commands_do_not_mutate_state(tmp_path, capsys):
     assert "Cannot" in capsys.readouterr().out
 
 
+def test_schedule_rejects_detectable_secret_before_persisting(tmp_path, capsys):
+    store = JobStore(tmp_path / "suto.db")
+    handle_command(context(store), "/schedule create --every 60 inspect api_key=example-secret-value")
+    assert JobStore(store.path).list_schedules() == []
+    output = capsys.readouterr().out
+    assert "detectable secret is not allowed in schedule prompt" in output
+    assert "example-secret-value" not in output
+
+
 def test_once_schedule_can_resume_pending_retry_after_pause(tmp_path, capsys):
     store = JobStore(tmp_path / "suto.db")
     ctx = context(store)

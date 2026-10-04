@@ -91,13 +91,13 @@ def test_run_rejects_invalid_input_and_quota_without_persisting(tmp_path, capsys
     assert "quota reached" in capsys.readouterr().out
 
 
-def test_public_run_uses_existing_prompt_redaction(tmp_path, capsys):
+def test_public_run_rejects_detectable_secret_before_persisting(tmp_path, capsys):
     store = JobStore(tmp_path / "jobs.db")
     handle_command(context(store), "/run inspect api_key=example-secret-value")
-    job = JobStore(store.path).list_jobs()[0]
-    assert "example-secret-value" not in job.prompt
-    handle_command(context(store), f"/status {job.id}")
-    assert "example-secret-value" not in capsys.readouterr().out
+    assert JobStore(store.path).list_jobs() == []
+    output = capsys.readouterr().out
+    assert "detectable secret is not allowed in job prompt" in output
+    assert "example-secret-value" not in output
 
 
 def test_jobs_and_status_show_attempt_and_persisted_result(tmp_path, capsys):

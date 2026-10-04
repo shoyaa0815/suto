@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from workflows.library.definitions import automation_options, load_definition_file, validate_name
+from workflows.library.definitions import automation_options, load_definition_file, reject_detectable_secrets, validate_name
 from workflows.models import ApprovalRequest, Automation, AutomationVersion, Job, JobStatus, MissedRunPolicy, Schedule, ScheduleKind, TriggerEvent
 from workflows.runtime.checkpoints import checkpoint_error
 from workflows.runtime.scheduler import Scheduler
@@ -31,12 +31,19 @@ class JobService:
     def schedule_trigger_id(self, job: Job) -> int | None:
         return self.store.get_job_trigger_id(job.id) if job.source == "schedule" else None
 
+    def automation_version(self, job: Job) -> int | None:
+        if job.source != "automation" or not job.source_ref:
+            return None
+        version = self.store.get_automation_version(job.source_ref)
+        return version.version if version is not None else None
+
     def submit(
         self, prompt: str, *, workspace: str | Path = ".",
         allow_write: bool = False, allow_command: bool = False,
     ) -> Job:
         if not prompt.strip():
             raise ValueError("/run requires a task")
+        reject_detectable_secrets(prompt, field="job prompt")
         path = Path(workspace).expanduser().resolve()
         if not path.is_dir():
             raise ValueError(f"workspace is not a directory: {path}")
@@ -200,6 +207,10 @@ class AutomationService:
             self.worker.wake()
         return job, version
 
-    def history(self, name: str) -> list[Job]:
+    def history(self, name: str) -> list[tuple[Job, int | None]]:
         automation, _, _ = self.show(name)
-        return self.store.list_automation_jobs(automation.id)
+        history = []
+        for job in self.store.list_automation_jobs(automation.id):
+            version = self.store.get_automation_version(job.source_ref)
+            history.append((job, version.version if version is not None else None))
+        return history

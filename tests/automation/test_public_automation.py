@@ -55,10 +55,13 @@ def test_public_commands_pin_version_parameters_and_history(tmp_path, capsys):
     assert store.get_automation_run_parameters(first.id) == {"repo": "suto", "depth": "quick"}
     assert first.allow_write is False and second.allow_write is True
     assert handle_command(context, "/automation history review").handled
+    assert handle_command(context, f"/status {first.id}").handled
     output = capsys.readouterr().out
     assert first.id in output and second.id in output
     assert "Version: 1" in output
     assert "version=1" in output and "version=2" in output
+    assert "Automation version: 1" in output
+    assert f"Automation version: {first.source_ref}" not in output
 
 
 @pytest.mark.parametrize("parameters,match", [
