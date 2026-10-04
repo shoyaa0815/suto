@@ -586,6 +586,8 @@ class JobStore(
         if row is None:
             return None
         snapshot = None
+        if row["prompt"] == "" and row["snapshot_version_id"] is None:
+            raise ValueError("scheduled automation snapshot is missing")
         if "snapshot_version_id" in row.keys() and row["snapshot_version_id"] is not None:
             snapshot = ScheduledAutomationSnapshot(
                 automation_name=row["snapshot_name"],
@@ -2129,6 +2131,8 @@ class JobStore(
                 "SELECT * FROM schedule_automation_snapshots WHERE schedule_id = ?",
                 (schedule_id,),
             ).fetchone()
+            if snapshot is None and schedule["prompt"] == "":
+                raise ValueError("scheduled automation snapshot is missing")
 
             existing = connection.execute(
                 "SELECT * FROM trigger_history WHERE idempotency_key = ?",
@@ -2165,11 +2169,17 @@ class JobStore(
                     if snapshot is None:
                         job_id = self._insert_scheduled_job(connection, schedule)
                     else:
-                        version = self._to_automation_version(connection.execute(
-                            "SELECT * FROM automation_versions WHERE id = ?",
+                        version_row = connection.execute(
+                            """SELECT versions.*, automations.name AS automation_name
+                               FROM automation_versions AS versions
+                               JOIN automations ON automations.id = versions.automation_id
+                               WHERE versions.id = ?""",
                             (snapshot["automation_version_id"],),
-                        ).fetchone())
-                        if version is None or version.version != snapshot["automation_version"]:
+                        ).fetchone()
+                        version = self._to_automation_version(version_row)
+                        if (version is None
+                                or version.version != snapshot["automation_version"]
+                                or version_row["automation_name"] != snapshot["automation_name"]):
                             raise ValueError("scheduled automation version is invalid")
                         skill_ids = [row["skill_version_id"] for row in connection.execute(
                             """SELECT skill_version_id FROM automation_version_skills
@@ -2185,6 +2195,8 @@ class JobStore(
                                 or snapshot["allow_write"] != int(version.allow_write)
                                 or snapshot["allow_command"] != int(version.allow_command)):
                             raise ValueError("scheduled automation execution ceiling changed")
+                        if json.loads(snapshot["options"]) != {"sandbox": "process"}:
+                            raise ValueError("scheduled automation sandbox is invalid")
                         job_id = f"job_{uuid4().hex[:8]}"
                         prompt = render_prompt(version.prompt_template, version.parameter_schema, values)
                         connection.execute(
