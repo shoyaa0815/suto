@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .locking import ProcessLock
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 HARDENING = """
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -324,6 +324,30 @@ CREATE TABLE automation_run_parameters(
 );
 """
 
+SCHEDULE_OCCURRENCE_IDENTITY = """
+CREATE TRIGGER IF NOT EXISTS schedule_occurrence_job_identity
+BEFORE INSERT ON trigger_history
+WHEN NEW.job_id IS NOT NULL AND EXISTS (
+ SELECT 1 FROM trigger_history
+ WHERE schedule_id = NEW.schedule_id AND scheduled_for = NEW.scheduled_for
+   AND job_id IS NOT NULL AND job_id != NEW.job_id
+)
+BEGIN
+ SELECT RAISE(ABORT, 'schedule occurrence already has a job');
+END;
+CREATE TRIGGER IF NOT EXISTS schedule_occurrence_job_identity_update
+BEFORE UPDATE OF schedule_id, scheduled_for, job_id ON trigger_history
+WHEN NEW.job_id IS NOT NULL AND EXISTS (
+ SELECT 1 FROM trigger_history
+ WHERE id != OLD.id AND schedule_id = NEW.schedule_id
+   AND scheduled_for = NEW.scheduled_for
+   AND job_id IS NOT NULL AND job_id != NEW.job_id
+)
+BEGIN
+ SELECT RAISE(ABORT, 'schedule occurrence already has a job');
+END;
+"""
+
 
 def backup_database(source: Path, destination: Path) -> Path:
     source, destination = source.resolve(), destination.expanduser().absolute()
@@ -382,6 +406,7 @@ def initialize_database(store) -> None:
                 (14, RUN_LIFECYCLE),
                 (15, JOB_ATTEMPTS),
                 (16, AUTOMATION_RUNS),
+                (17, SCHEDULE_OCCURRENCE_IDENTITY),
             ):
                 if number > SCHEMA_VERSION:
                     break
@@ -443,6 +468,12 @@ def initialize_database(store) -> None:
                         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='automation_run_parameters'"
                     ).fetchone() is not None:
                         migration_script = ''
+                    if number == 17 and connection.execute(
+                        "SELECT 1 FROM trigger_history WHERE job_id IS NOT NULL "
+                        "GROUP BY schedule_id, scheduled_for "
+                        "HAVING COUNT(DISTINCT job_id) > 1 LIMIT 1"
+                    ).fetchone() is not None:
+                        raise RuntimeError('schedule occurrence has conflicting jobs; restore a verified backup')
                     connection.executescript('BEGIN IMMEDIATE;\n' + migration_script)
                     connection.execute('INSERT OR REPLACE INTO schema_migrations VALUES (?,?)',
                                        (number, datetime.now(UTC).isoformat()))

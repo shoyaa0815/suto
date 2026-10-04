@@ -1726,30 +1726,32 @@ class JobStore(
     def cancel_job(self, job_id: str) -> bool:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            cursor = connection.execute(
-                """
-                UPDATE jobs
-                SET status = ?, finished_at = ?
-                WHERE id = ? AND status IN (?, ?, ?, ?, ?)
-                """,
-                (
-                    JobStatus.CANCELLED,
-                    _now(),
-                    job_id,
-                    JobStatus.QUEUED,
-                    JobStatus.RUNNING,
-                    JobStatus.WAITING_APPROVAL,
-                    JobStatus.WAITING_CHILDREN,
-                    JobStatus.INTERRUPTED,
-                ),
-            )
-            if cursor.rowcount == 1:
+            def cancel_one(target_id: str) -> bool:
+                cursor = connection.execute(
+                    """
+                    UPDATE jobs
+                    SET status = ?, finished_at = ?
+                    WHERE id = ? AND status IN (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        JobStatus.CANCELLED,
+                        _now(),
+                        target_id,
+                        JobStatus.QUEUED,
+                        JobStatus.RUNNING,
+                        JobStatus.WAITING_APPROVAL,
+                        JobStatus.WAITING_CHILDREN,
+                        JobStatus.INTERRUPTED,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    return False
                 approvals = connection.execute(
                     """
                     SELECT id FROM approval_requests
                     WHERE job_id = ? AND status IN (?, ?)
                     """,
-                    (job_id, ApprovalStatus.PENDING, ApprovalStatus.APPROVED),
+                    (target_id, ApprovalStatus.PENDING, ApprovalStatus.APPROVED),
                 ).fetchall()
                 for approval in approvals:
                     connection.execute(
@@ -1759,16 +1761,30 @@ class JobStore(
                     self._add_approval_event(
                         connection,
                         approval["id"],
-                        job_id,
+                        target_id,
                         "invalidated",
                         "system",
                         "job was cancelled",
                     )
-        cancelled = cursor.rowcount == 1
-        if cancelled:
-            for child in self.children(job_id):
-                self.cancel_job(child.id)
-        return cancelled
+                return True
+
+            if not cancel_one(job_id):
+                return False
+            descendants = connection.execute(
+                """
+                WITH RECURSIVE descendants(id) AS (
+                    SELECT id FROM jobs WHERE parent_id = ?
+                    UNION
+                    SELECT jobs.id FROM jobs
+                    JOIN descendants ON jobs.parent_id = descendants.id
+                )
+                SELECT id FROM descendants WHERE id != ?
+                """,
+                (job_id, job_id),
+            ).fetchall()
+            for descendant in descendants:
+                cancel_one(descendant["id"])
+        return True
 
     def recover_interrupted_jobs(self) -> int:
         with self._connect() as connection:
