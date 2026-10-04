@@ -28,6 +28,7 @@ from ..models import (
     MissedRunPolicy,
     Schedule,
     ScheduleKind,
+    ScheduledAutomationSnapshot,
     Skill,
     SkillVersion,
     StepStatus,
@@ -56,6 +57,21 @@ from ..library.definitions import (
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+SCHEDULE_WITH_SNAPSHOT = """
+SELECT schedules.*, snapshots.automation_name AS snapshot_name,
+ snapshots.automation_version_id AS snapshot_version_id,
+ snapshots.automation_version AS snapshot_version,
+ snapshots.parameters AS snapshot_parameters,
+ snapshots.skill_version_ids AS snapshot_skill_version_ids,
+ snapshots.workspace AS snapshot_workspace,
+ snapshots.allow_write AS snapshot_allow_write,
+ snapshots.allow_command AS snapshot_allow_command,
+ snapshots.options AS snapshot_options
+FROM schedules
+LEFT JOIN schedule_automation_snapshots AS snapshots ON snapshots.schedule_id = schedules.id
+"""
 
 
 class JobStore(
@@ -569,6 +585,19 @@ class JobStore(
     def _to_schedule(row: sqlite3.Row | None) -> Schedule | None:
         if row is None:
             return None
+        snapshot = None
+        if "snapshot_version_id" in row.keys() and row["snapshot_version_id"] is not None:
+            snapshot = ScheduledAutomationSnapshot(
+                automation_name=row["snapshot_name"],
+                automation_version_id=row["snapshot_version_id"],
+                automation_version=row["snapshot_version"],
+                parameters=json.loads(row["snapshot_parameters"]),
+                skill_version_ids=tuple(json.loads(row["snapshot_skill_version_ids"])),
+                workspace=row["snapshot_workspace"],
+                allow_write=bool(row["snapshot_allow_write"]),
+                allow_command=bool(row["snapshot_allow_command"]),
+                options=json.loads(row["snapshot_options"]),
+            )
         return Schedule(
             id=row["id"],
             kind=ScheduleKind(row["kind"]),
@@ -586,6 +615,7 @@ class JobStore(
             last_run_at=row["last_run_at"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            automation=snapshot,
         )
 
     @staticmethod
@@ -1873,10 +1903,92 @@ class JobStore(
             raise RuntimeError(f"failed to create schedule: {schedule_id}")
         return schedule
 
+    def create_automation_schedule(
+        self,
+        *,
+        automation_name: str,
+        parameters: dict | None,
+        kind: str | ScheduleKind,
+        expression: str,
+        timezone: str,
+        next_run_at: str,
+        missed_run_policy: str | MissedRunPolicy = MissedRunPolicy.RUN_ONCE,
+        retry_limit: int = 0,
+        retry_delay_seconds: int = 60,
+    ) -> Schedule:
+        """Pin a saved version and its execution inputs in one transaction.
+
+        This is storage only. Scheduled automation triggering is opened later.
+        """
+        schedule_kind = ScheduleKind(kind)
+        missed_policy = MissedRunPolicy(missed_run_policy)
+        if retry_limit < 0 or retry_limit > 10:
+            raise ValueError("retry limit must be between 0 and 10")
+        if retry_delay_seconds < 1 or retry_delay_seconds > 86_400:
+            raise ValueError("retry delay must be between 1 and 86400 seconds")
+        schedule_id = f"sch_{uuid4().hex[:8]}"
+        timestamp = _now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """SELECT versions.*, automations.name AS automation_name
+                   FROM automation_versions AS versions
+                   JOIN automations ON automations.id = versions.automation_id
+                   WHERE automations.name = ? COLLATE NOCASE
+                     AND versions.version = automations.current_version""",
+                (automation_name,),
+            ).fetchone()
+            version = self._to_automation_version(row)
+            if version is None:
+                raise ValueError(f"automation not found: {automation_name}")
+            values = validate_parameters(version.parameter_schema, parameters)
+            reject_detectable_secrets(values, field="automation parameters")
+            workspace = validate_workspace(version.workspace)
+            if workspace != version.workspace:
+                raise ValueError("automation workspace has changed")
+            skill_rows = connection.execute(
+                """SELECT links.skill_version_id, skills.id AS existing_skill
+                   FROM automation_version_skills AS links
+                   LEFT JOIN skill_versions AS skills ON skills.id = links.skill_version_id
+                   WHERE links.automation_version_id = ? ORDER BY links.position""",
+                (version.id,),
+            ).fetchall()
+            if any(item["existing_skill"] is None for item in skill_rows):
+                raise ValueError("automation skill reference is invalid")
+            skill_ids = [item["skill_version_id"] for item in skill_rows]
+            # Enforce JSON encoding before the first write, including rejecting NaN.
+            parameters_json = json.dumps(values, ensure_ascii=False, sort_keys=True, allow_nan=False)
+            skill_ids_json = json.dumps(skill_ids)
+            options_json = json.dumps({"sandbox": "process"})
+            connection.execute(
+                """INSERT INTO schedules (
+                   id, kind, expression, timezone, prompt, workspace,
+                   allow_write, allow_command, enabled, missed_run_policy,
+                   retry_limit, retry_delay_seconds, next_run_at, created_at, updated_at
+                   ) VALUES (?, ?, ?, ?, '', ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)""",
+                (schedule_id, schedule_kind, expression, timezone, workspace,
+                 int(version.allow_write), int(version.allow_command), missed_policy,
+                 retry_limit, retry_delay_seconds, next_run_at, timestamp, timestamp),
+            )
+            connection.execute(
+                """INSERT INTO schedule_automation_snapshots (
+                   schedule_id, automation_name, automation_version_id,
+                   automation_version, parameters, skill_version_ids, workspace,
+                   allow_write, allow_command, options
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (schedule_id, row["automation_name"], version.id, version.version,
+                 parameters_json, skill_ids_json, workspace, int(version.allow_write),
+                 int(version.allow_command), options_json),
+            )
+        schedule = self.get_schedule(schedule_id)
+        if schedule is None:
+            raise RuntimeError(f"failed to create schedule: {schedule_id}")
+        return schedule
+
     def get_schedule(self, schedule_id: str) -> Schedule | None:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT * FROM schedules WHERE id = ?", (schedule_id,)
+                SCHEDULE_WITH_SNAPSHOT + " WHERE schedules.id = ?", (schedule_id,)
             ).fetchone()
         return self._to_schedule(row)
 
@@ -1884,7 +1996,7 @@ class JobStore(
         safe_limit = min(max(int(limit), 1), 500)
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM schedules ORDER BY created_at DESC LIMIT ?",
+                SCHEDULE_WITH_SNAPSHOT + " ORDER BY schedules.created_at DESC LIMIT ?",
                 (safe_limit,),
             ).fetchall()
         return [
@@ -1899,6 +2011,10 @@ class JobStore(
                 """
                 SELECT * FROM schedules
                 WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM schedule_automation_snapshots AS snapshots
+                    WHERE snapshots.schedule_id = schedules.id
+                  )
                 ORDER BY next_run_at ASC
                 """,
                 (now,),
@@ -1968,6 +2084,10 @@ class JobStore(
                 schedule is None
                 or not schedule["enabled"]
                 or schedule["next_run_at"] != scheduled_for
+                or connection.execute(
+                    "SELECT 1 FROM schedule_automation_snapshots WHERE schedule_id = ?",
+                    (schedule_id,),
+                ).fetchone() is not None
             ):
                 return None
 

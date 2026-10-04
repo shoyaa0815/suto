@@ -224,6 +224,19 @@ class ApprovalEvent:
 
 
 @dataclass(frozen=True)
+class ScheduledAutomationSnapshot:
+    automation_name: str
+    automation_version_id: str
+    automation_version: int
+    parameters: dict
+    skill_version_ids: tuple[str, ...]
+    workspace: str
+    allow_write: bool
+    allow_command: bool
+    options: dict
+
+
+@dataclass(frozen=True)
 class Schedule:
     id: str
     kind: ScheduleKind
@@ -241,6 +254,7 @@ class Schedule:
     last_run_at: str | None
     created_at: str
     updated_at: str
+    automation: ScheduledAutomationSnapshot | None = None
 
 
 @dataclass(frozen=True)

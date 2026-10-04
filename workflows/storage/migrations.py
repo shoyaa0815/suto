@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .locking import ProcessLock
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 HARDENING = """
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -348,6 +348,25 @@ BEGIN
 END;
 """
 
+SCHEDULED_AUTOMATION_SNAPSHOTS = """
+CREATE TABLE schedule_automation_snapshots (
+ schedule_id TEXT PRIMARY KEY REFERENCES schedules(id) ON DELETE CASCADE,
+ automation_name TEXT NOT NULL,
+ automation_version_id TEXT NOT NULL REFERENCES automation_versions(id) ON DELETE RESTRICT,
+ automation_version INTEGER NOT NULL CHECK(automation_version > 0),
+ parameters TEXT NOT NULL CHECK(json_valid(parameters) AND json_type(parameters) = 'object'),
+ skill_version_ids TEXT NOT NULL CHECK(json_valid(skill_version_ids) AND json_type(skill_version_ids) = 'array'),
+ workspace TEXT NOT NULL,
+ allow_write INTEGER NOT NULL CHECK(allow_write IN (0, 1)),
+ allow_command INTEGER NOT NULL CHECK(allow_command IN (0, 1)),
+ options TEXT NOT NULL CHECK(json_valid(options) AND json_type(options) = 'object')
+);
+CREATE TRIGGER schedule_automation_snapshot_immutable
+BEFORE UPDATE ON schedule_automation_snapshots BEGIN
+ SELECT RAISE(ABORT, 'scheduled automation snapshot is immutable');
+END;
+"""
+
 
 def backup_database(source: Path, destination: Path) -> Path:
     source, destination = source.resolve(), destination.expanduser().absolute()
@@ -407,6 +426,7 @@ def initialize_database(store) -> None:
                 (15, JOB_ATTEMPTS),
                 (16, AUTOMATION_RUNS),
                 (17, SCHEDULE_OCCURRENCE_IDENTITY),
+                (18, SCHEDULED_AUTOMATION_SNAPSHOTS),
             ):
                 if number > SCHEMA_VERSION:
                     break
@@ -474,6 +494,21 @@ def initialize_database(store) -> None:
                         "HAVING COUNT(DISTINCT job_id) > 1 LIMIT 1"
                     ).fetchone() is not None:
                         raise RuntimeError('schedule occurrence has conflicting jobs; restore a verified backup')
+                    if number == 18:
+                        markers = (
+                            connection.execute(
+                                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                                "AND name='schedule_automation_snapshots'"
+                            ).fetchone() is not None,
+                            connection.execute(
+                                "SELECT 1 FROM sqlite_master WHERE type='trigger' "
+                                "AND name='schedule_automation_snapshot_immutable'"
+                            ).fetchone() is not None,
+                        )
+                        if all(markers):
+                            migration_script = ''
+                        elif any(markers):
+                            raise RuntimeError('database has a partial scheduled automation migration; restore a verified backup')
                     connection.executescript('BEGIN IMMEDIATE;\n' + migration_script)
                     connection.execute('INSERT OR REPLACE INTO schema_migrations VALUES (?,?)',
                                        (number, datetime.now(UTC).isoformat()))
