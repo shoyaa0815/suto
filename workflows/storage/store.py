@@ -1916,10 +1916,7 @@ class JobStore(
         retry_limit: int = 0,
         retry_delay_seconds: int = 60,
     ) -> Schedule:
-        """Pin a saved version and its execution inputs in one transaction.
-
-        This is storage only. Scheduled automation triggering is opened later.
-        """
+        """Pin a saved version and its execution inputs in one transaction."""
         schedule_kind = ScheduleKind(kind)
         missed_policy = MissedRunPolicy(missed_run_policy)
         if retry_limit < 0 or retry_limit > 10:
@@ -1930,60 +1927,107 @@ class JobStore(
         timestamp = _now()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                """SELECT versions.*, automations.name AS automation_name
-                   FROM automation_versions AS versions
-                   JOIN automations ON automations.id = versions.automation_id
-                   WHERE automations.name = ? COLLATE NOCASE
-                     AND versions.version = automations.current_version""",
-                (automation_name,),
-            ).fetchone()
-            version = self._to_automation_version(row)
-            if version is None:
-                raise ValueError(f"automation not found: {automation_name}")
-            values = validate_parameters(version.parameter_schema, parameters)
-            reject_detectable_secrets(values, field="automation parameters")
-            workspace = validate_workspace(version.workspace)
-            if workspace != version.workspace:
-                raise ValueError("automation workspace has changed")
-            skill_rows = connection.execute(
-                """SELECT links.skill_version_id, skills.id AS existing_skill
-                   FROM automation_version_skills AS links
-                   LEFT JOIN skill_versions AS skills ON skills.id = links.skill_version_id
-                   WHERE links.automation_version_id = ? ORDER BY links.position""",
-                (version.id,),
-            ).fetchall()
-            if any(item["existing_skill"] is None for item in skill_rows):
-                raise ValueError("automation skill reference is invalid")
-            skill_ids = [item["skill_version_id"] for item in skill_rows]
-            # Enforce JSON encoding before the first write, including rejecting NaN.
-            parameters_json = json.dumps(values, ensure_ascii=False, sort_keys=True, allow_nan=False)
-            skill_ids_json = json.dumps(skill_ids)
-            options_json = json.dumps({"sandbox": "process"})
+            snapshot = self._prepare_automation_snapshot(
+                connection, automation_name, "latest", parameters,
+            )
             connection.execute(
                 """INSERT INTO schedules (
                    id, kind, expression, timezone, prompt, workspace,
                    allow_write, allow_command, enabled, missed_run_policy,
                    retry_limit, retry_delay_seconds, next_run_at, created_at, updated_at
                    ) VALUES (?, ?, ?, ?, '', ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)""",
-                (schedule_id, schedule_kind, expression, timezone, workspace,
-                 int(version.allow_write), int(version.allow_command), missed_policy,
+                (schedule_id, schedule_kind, expression, timezone, snapshot[5],
+                 snapshot[6], snapshot[7], missed_policy,
                  retry_limit, retry_delay_seconds, next_run_at, timestamp, timestamp),
             )
-            connection.execute(
-                """INSERT INTO schedule_automation_snapshots (
-                   schedule_id, automation_name, automation_version_id,
-                   automation_version, parameters, skill_version_ids, workspace,
-                   allow_write, allow_command, options
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (schedule_id, row["automation_name"], version.id, version.version,
-                 parameters_json, skill_ids_json, workspace, int(version.allow_write),
-                 int(version.allow_command), options_json),
-            )
+            self._insert_automation_snapshot(connection, schedule_id, snapshot)
         schedule = self.get_schedule(schedule_id)
         if schedule is None:
             raise RuntimeError(f"failed to create schedule: {schedule_id}")
         return schedule
+
+    @staticmethod
+    def _prepare_automation_snapshot(
+        connection: sqlite3.Connection, name: str, target_version: str | int,
+        parameters: dict | None,
+    ) -> tuple:
+        row = connection.execute(
+            """SELECT versions.*, automations.name AS automation_name
+               FROM automation_versions AS versions
+               JOIN automations ON automations.id = versions.automation_id
+               WHERE automations.name = ? COLLATE NOCASE
+                 AND versions.version = CASE WHEN ? = 'latest'
+                     THEN automations.current_version ELSE ? END""",
+            (name, str(target_version), target_version),
+        ).fetchone()
+        version = JobStore._to_automation_version(row)
+        if version is None:
+            raise ValueError(f"automation version not found: {name} {target_version}")
+        values = validate_parameters(version.parameter_schema, parameters)
+        reject_detectable_secrets(values, field="automation parameters")
+        workspace = validate_workspace(version.workspace)
+        if workspace != version.workspace:
+            raise ValueError("automation workspace has changed")
+        skill_rows = connection.execute(
+            """SELECT links.skill_version_id, skills.id AS existing_skill
+               FROM automation_version_skills AS links
+               LEFT JOIN skill_versions AS skills ON skills.id = links.skill_version_id
+               WHERE links.automation_version_id = ? ORDER BY links.position""",
+            (version.id,),
+        ).fetchall()
+        if any(item["existing_skill"] is None for item in skill_rows):
+            raise ValueError("automation skill reference is invalid")
+        return (
+            row["automation_name"], version.id, version.version,
+            json.dumps(values, ensure_ascii=False, sort_keys=True, allow_nan=False),
+            json.dumps([item["skill_version_id"] for item in skill_rows]),
+            workspace, int(version.allow_write), int(version.allow_command),
+            json.dumps({"sandbox": "process"}),
+        )
+
+    @staticmethod
+    def _insert_automation_snapshot(
+        connection: sqlite3.Connection, schedule_id: str, snapshot: tuple,
+    ) -> None:
+        connection.execute(
+            """INSERT INTO schedule_automation_snapshots (
+               schedule_id, automation_name, automation_version_id,
+               automation_version, parameters, skill_version_ids, workspace,
+               allow_write, allow_command, options
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (schedule_id, *snapshot),
+        )
+
+    def upgrade_automation_schedule(
+        self, schedule_id: str, target_version: str | int,
+        parameters: dict | None = None,
+    ) -> Schedule:
+        """Explicitly replace a schedule's snapshot without changing its timing."""
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            old = connection.execute(
+                "SELECT * FROM schedule_automation_snapshots WHERE schedule_id = ?",
+                (schedule_id,),
+            ).fetchone()
+            if old is None:
+                raise ValueError(f"automation schedule not found: {schedule_id}")
+            snapshot = self._prepare_automation_snapshot(
+                connection, old["automation_name"], target_version,
+                json.loads(old["parameters"]) if parameters is None else parameters,
+            )
+            if snapshot[2] <= old["automation_version"]:
+                raise ValueError("upgrade requires a newer automation version")
+            connection.execute(
+                "DELETE FROM schedule_automation_snapshots WHERE schedule_id = ?",
+                (schedule_id,),
+            )
+            self._insert_automation_snapshot(connection, schedule_id, snapshot)
+            connection.execute(
+                """UPDATE schedules SET workspace = ?, allow_write = ?,
+                   allow_command = ?, updated_at = ? WHERE id = ?""",
+                (snapshot[5], snapshot[6], snapshot[7], _now(), schedule_id),
+            )
+        return self.get_schedule(schedule_id)
 
     def get_schedule(self, schedule_id: str) -> Schedule | None:
         with self._connect() as connection:
@@ -2008,16 +2052,11 @@ class JobStore(
     def list_due_schedules(self, now: str) -> list[Schedule]:
         with self._connect() as connection:
             rows = connection.execute(
-                """
-                SELECT * FROM schedules
-                WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?
-                  AND NOT EXISTS (
-                    SELECT 1 FROM schedule_automation_snapshots AS snapshots
-                    WHERE snapshots.schedule_id = schedules.id
-                  )
-                ORDER BY next_run_at ASC
-                """,
-                (now,),
+                SCHEDULE_WITH_SNAPSHOT + """
+                WHERE schedules.enabled = 1 AND schedules.next_run_at IS NOT NULL
+                  AND schedules.next_run_at <= ?
+                ORDER BY schedules.next_run_at ASC
+                """, (now,),
             ).fetchall()
         return [
             schedule
@@ -2084,12 +2123,12 @@ class JobStore(
                 schedule is None
                 or not schedule["enabled"]
                 or schedule["next_run_at"] != scheduled_for
-                or connection.execute(
-                    "SELECT 1 FROM schedule_automation_snapshots WHERE schedule_id = ?",
-                    (schedule_id,),
-                ).fetchone() is not None
             ):
                 return None
+            snapshot = connection.execute(
+                "SELECT * FROM schedule_automation_snapshots WHERE schedule_id = ?",
+                (schedule_id,),
+            ).fetchone()
 
             existing = connection.execute(
                 "SELECT * FROM trigger_history WHERE idempotency_key = ?",
@@ -2123,7 +2162,44 @@ class JobStore(
                     status = TriggerStatus.SKIPPED
                     detail = "skipped because a previous run is still active"
                 else:
-                    job_id = self._insert_scheduled_job(connection, schedule)
+                    if snapshot is None:
+                        job_id = self._insert_scheduled_job(connection, schedule)
+                    else:
+                        version = self._to_automation_version(connection.execute(
+                            "SELECT * FROM automation_versions WHERE id = ?",
+                            (snapshot["automation_version_id"],),
+                        ).fetchone())
+                        if version is None or version.version != snapshot["automation_version"]:
+                            raise ValueError("scheduled automation version is invalid")
+                        skill_ids = [row["skill_version_id"] for row in connection.execute(
+                            """SELECT skill_version_id FROM automation_version_skills
+                               WHERE automation_version_id = ? ORDER BY position""",
+                            (version.id,),
+                        )]
+                        if skill_ids != json.loads(snapshot["skill_version_ids"]):
+                            raise ValueError("scheduled automation skill references changed")
+                        values = json.loads(snapshot["parameters"])
+                        if validate_parameters(version.parameter_schema, values) != values:
+                            raise ValueError("scheduled automation parameters changed")
+                        if (snapshot["workspace"] != version.workspace
+                                or snapshot["allow_write"] != int(version.allow_write)
+                                or snapshot["allow_command"] != int(version.allow_command)):
+                            raise ValueError("scheduled automation execution ceiling changed")
+                        job_id = f"job_{uuid4().hex[:8]}"
+                        prompt = render_prompt(version.prompt_template, version.parameter_schema, values)
+                        connection.execute(
+                            """INSERT INTO jobs (id, prompt, mode, status, source, source_ref,
+                               workspace, allow_write, allow_command, created_at, options)
+                               VALUES (?, ?, 'agent', ?, 'schedule', ?, ?, ?, ?, ?, ?)""",
+                            (job_id, redact_text(prompt), JobStatus.QUEUED, schedule_id,
+                             snapshot["workspace"], snapshot["allow_write"],
+                             snapshot["allow_command"], _now(), snapshot["options"]),
+                        )
+                        connection.execute(
+                            "INSERT INTO automation_run_parameters VALUES (?, ?, ?)",
+                            (job_id, version.id, snapshot["parameters"]),
+                        )
+                        detail = f"created scheduled automation version {version.version}"
 
             connection.execute(
                 """
@@ -2704,3 +2780,11 @@ class JobStore(
                 "SELECT parameters FROM automation_run_parameters WHERE job_id = ?", (job_id,)
             ).fetchone()
         return json.loads(row["parameters"]) if row is not None else None
+
+    def get_job_automation_version_id(self, job_id: str) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT automation_version_id FROM automation_run_parameters WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        return row["automation_version_id"] if row is not None else None

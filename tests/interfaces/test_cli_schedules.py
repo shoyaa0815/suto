@@ -167,7 +167,7 @@ def test_schedule_automation_cli_pins_inputs_and_inspects_after_update(tmp_path,
     assert schedule.automation.workspace == str(tmp_path.resolve())
     assert (schedule.automation.allow_write, schedule.automation.allow_command) == (True, False)
     assert (schedule.retry_limit, schedule.timezone) == (2, "Asia/Bangkok")
-    assert worker.wakes == 0
+    assert worker.wakes == 1
 
     update = tmp_path / "updated.json"
     update.write_text(json.dumps({
@@ -181,15 +181,46 @@ def test_schedule_automation_cli_pins_inputs_and_inspects_after_update(tmp_path,
     assert handle_command(ctx, "/schedule list").handled
     assert handle_command(ctx, f"/schedule show {schedule.id}").handled
     output = capsys.readouterr().out
-    assert "State: execution unavailable" in output
+    assert "State: active" in output
     assert "automation=review@v1" in output
     assert "Automation: review" in output and "Version: 1" in output
     assert 'Parameters: {"depth": "quick", "repo": "suto"}' in output
     assert f"Skill version IDs: {first_skill}" in output
     assert JobStore(store.path).get_schedule(schedule.id) == schedule
-    assert Scheduler(store).tick(datetime(2030, 1, 2, tzinfo=UTC)) == 0
-    assert store.list_jobs() == []
-    assert store.list_trigger_history(schedule.id) == []
+    assert Scheduler(store).tick(datetime(2030, 1, 2, tzinfo=UTC)) == 1
+    assert len(store.list_jobs()) == 1
+    assert store.list_jobs()[0].prompt == "Review suto at quick depth."
+    assert len(store.list_trigger_history(schedule.id)) == 1
+
+
+def test_schedule_upgrade_cli_requires_explicit_valid_version_and_parameters(tmp_path, capsys):
+    store = JobStore(tmp_path / "suto.db")
+    _saved_review(store, tmp_path)
+    ctx = context(store)
+    handle_command(ctx, "/schedule automation review --at 2030-01-01T08:00 repo=suto")
+    schedule = store.list_schedules()[0]
+    store.revise_automation(
+        "review", "Inspect {{repo}} {{count}} times.", tmp_path,
+        {"repo": {"type": "string", "required": True},
+         "count": {"type": "integer", "required": True}},
+        allow_command=True,
+    )
+    for command in (
+        f"/schedule upgrade {schedule.id} --automation-version latest",
+        f"/schedule upgrade {schedule.id} --automation-version 9 repo=suto count=2",
+        f"/schedule upgrade {schedule.id} --automation-version latest repo=suto count=bad",
+    ):
+        assert handle_command(ctx, command).handled
+        assert store.get_schedule(schedule.id) == schedule
+    assert handle_command(
+        ctx, f"/schedule upgrade {schedule.id} --automation-version 2 repo=suto count=2",
+    ).handled
+    upgraded = store.get_schedule(schedule.id)
+    assert upgraded.automation.automation_version == 2
+    assert upgraded.automation.parameters == {"repo": "suto", "count": 2}
+    assert (upgraded.allow_write, upgraded.allow_command) == (False, True)
+    assert upgraded.next_run_at == schedule.next_run_at
+    assert "Schedule upgraded:" in capsys.readouterr().out
 
 
 def test_schedule_automation_cli_rejects_invalid_inputs_without_rows(tmp_path, capsys):

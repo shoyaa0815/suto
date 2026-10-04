@@ -202,10 +202,10 @@ class JobRunner:
                 budget_check=budget_check,
                 budget_seconds=budget_seconds,
             )
+            automation_version_id = self.store.get_job_automation_version_id(job.id)
             skill_versions = (
-                self.store.list_automation_skill_versions(job.source_ref)
-                if job.source == "automation" and job.source_ref
-                else []
+                self.store.list_automation_skill_versions(automation_version_id)
+                if automation_version_id else []
             )
             skill_instructions = "\n\n".join(
                 f"Skill {name} (version {version.version}):\n{version.instructions}"

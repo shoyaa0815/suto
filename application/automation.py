@@ -32,9 +32,10 @@ class JobService:
         return self.store.get_job_trigger_id(job.id) if job.source == "schedule" else None
 
     def automation_version(self, job: Job) -> int | None:
-        if job.source != "automation" or not job.source_ref:
+        version_id = self.store.get_job_automation_version_id(job.id)
+        if version_id is None:
             return None
-        version = self.store.get_automation_version(job.source_ref)
+        version = self.store.get_automation_version(version_id)
         return version.version if version is not None else None
 
     def submit(
@@ -149,12 +150,26 @@ class ScheduleService:
         missed_run_policy: MissedRunPolicy = MissedRunPolicy.RUN_ONCE,
         retry_limit: int = 0, retry_delay_seconds: int = 60,
     ) -> Schedule:
-        return Scheduler(self.store).create_automation(
+        schedule = Scheduler(self.store).create_automation(
             automation_name=automation_name, parameters=parameters,
             kind=kind, expression=expression, timezone=timezone,
             missed_run_policy=missed_run_policy, retry_limit=retry_limit,
             retry_delay_seconds=retry_delay_seconds,
         )
+        if self.worker is not None:
+            self.worker.wake()
+        return schedule
+
+    def upgrade_automation(
+        self, schedule_id: str, target_version: str | int,
+        parameters: dict | None = None,
+    ) -> Schedule:
+        schedule = self.store.upgrade_automation_schedule(
+            schedule_id, target_version, parameters,
+        )
+        if self.worker is not None:
+            self.worker.wake()
+        return schedule
 
     def list_recent(self) -> list[Schedule]:
         return self.store.list_schedules()
@@ -183,8 +198,6 @@ class ScheduleService:
     def state(schedule: Schedule) -> str:
         if not schedule.enabled:
             return "paused"
-        if schedule.automation is not None:
-            return "execution unavailable"
         return "exhausted" if schedule.next_run_at is None else "active"
 
 

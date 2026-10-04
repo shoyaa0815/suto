@@ -61,7 +61,7 @@ def test_print_help_lists_exit_commands(capsys):
     assert "  /approvals  " in output
     assert "  /approval show|allow|deny <approval_id>" in output
     assert "  /schedule automation <name>" in output
-    assert "/schedule upgrade" not in output
+    assert "/schedule upgrade <schedule_id> --automation-version <latest|number>" in output
     assert "/approve" not in output
     assert "/reject" not in output
 

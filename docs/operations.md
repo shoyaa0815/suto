@@ -322,7 +322,7 @@ snapshot, including defaults; updates do not change earlier jobs. Detected
 structured secrets and known token patterns are rejected from definitions,
 run parameters, `/run` prompts, and `/schedule create` prompts.
 
-`/schedule automation <name>` saves an inspection-only scheduled automation
+`/schedule automation <name>` saves a scheduled automation
 snapshot. Place exactly one timing option (`--at`, `--every`, or `--cron`), then
 optional `--timezone`, `--missed-run`, `--retry`, and `--retry-delay` options,
 followed by unique `key=value` parameters. Values use the same JSON-or-string
@@ -331,15 +331,19 @@ parsing as `/automation run`. For example:
 ```text
 /schedule automation repo-review --cron "0 8 * * *" --timezone Asia/Bangkok repo=suto
 /schedule show <schedule_id>
+/schedule upgrade <schedule_id> --automation-version latest repo=suto
 ```
 
 Creation validates and atomically pins the current automation version,
 parameters (including defaults), skill version IDs, workspace, and saved
 permission ceiling. Workspace and permission flags cannot override that ceiling.
-`/schedule list` and `/schedule show` display these schedules, and later
-`/automation update` calls do not alter their snapshots. The CLI reports
-`execution unavailable` because scheduled automation triggers are not enabled;
-no job or trigger history is created for these schedules yet.
+`/schedule list` and `/schedule show` display these schedules. Due occurrences
+create jobs from the saved snapshot, including its exact version and skill
+references. Later `/automation update` calls do not alter the schedule.
+`/schedule upgrade` explicitly replaces the snapshot with a validated version;
+use `latest` or a positive version number. Existing parameters are reused unless
+new `key=value` parameters are supplied. If the new schema rejects them, the
+schedule remains unchanged. Existing jobs keep their original version.
 
 ```text
 /approvals

@@ -1,4 +1,4 @@
-"""Phase 2A storage boundaries; scheduled automation execution is still closed."""
+"""Scheduled automation snapshot and migration boundaries."""
 
 import sqlite3
 from datetime import UTC, datetime, timedelta
@@ -53,12 +53,11 @@ def test_snapshot_persists_exact_version_inputs_and_permissions(tmp_path):
     assert (reopened.timezone, reopened.retry_limit, reopened.retry_delay_seconds) == ("UTC", 2, 30)
     assert store.list_schedules() == [reopened]
 
-    # Phase 2A must not create a job even if the old scheduler sees a due row.
-    assert Scheduler(store).tick(datetime(2026, 1, 2, tzinfo=UTC)) == 0
+    assert Scheduler(store).tick(datetime(2026, 1, 2, tzinfo=UTC)) == 1
     assert store.fire_schedule(schedule.id, due, None) is None
-    assert store.list_jobs() == []
-    assert store.list_trigger_history(schedule.id) == []
-    assert store.get_schedule(schedule.id).next_run_at == due
+    assert len(store.list_jobs()) == 1
+    assert len(store.list_trigger_history(schedule.id)) == 1
+    assert store.get_schedule(schedule.id).next_run_at is None
 
 
 @pytest.mark.parametrize("parameters", [None, {"day": "4"}, {"day": 4, "extra": 1}])

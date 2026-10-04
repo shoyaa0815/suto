@@ -69,10 +69,11 @@ def print_help(mode: str | None = None) -> None:
     print("             --missed-run <run_once|skip> --retry <count> --retry-delay <seconds>")
     print("  /schedule automation <name> (--at <ISO> | --every <seconds> | --cron <expr>) [options] [key=value ...]")
     print("    options: --timezone <zone> --missed-run <run_once|skip> --retry <count> --retry-delay <seconds>")
-    print("    workspace and permissions come from the automation; execution is unavailable")
+    print("    workspace and permissions come from the pinned automation version")
     print("    defaults: profile timezone, run_once, 0 retries, 60-second retry delay")
     print("  /schedule list  list schedules")
     print("  /schedule show|pause|resume|history <schedule_id>")
+    print("  /schedule upgrade <schedule_id> --automation-version <latest|number> [key=value ...]")
     print("  /automation create <definition.json>")
     print("  /automation update <name> <definition.json>")
     print("  /automation list  list saved automations")
@@ -401,6 +402,7 @@ def _parse_schedule_automation(argument: str, default_timezone: str) -> dict:
 
 def _schedule(context: CommandContext, argument: str) -> CommandOutcome:
     service = ScheduleService(context.store, context.worker)
+    action = ""
     try:
         action, _, rest = argument.strip().partition(" ")
         if action == "create":
@@ -417,6 +419,28 @@ def _schedule(context: CommandContext, argument: str) -> CommandOutcome:
             print(f"Automation: {schedule.automation.automation_name} version {schedule.automation.automation_version}")
             print(f"State: {service.state(schedule)}")
             print(f"Next run: {schedule.next_run_at or 'none'}")
+            return CommandOutcome(handled=True)
+        if action == "upgrade":
+            try:
+                parts = shlex.split(rest)
+            except ValueError:
+                parts = []
+            if len(parts) < 3 or parts[1] != "--automation-version":
+                raise ValueError("usage: /schedule upgrade <schedule_id> --automation-version <latest|number> [key=value ...]")
+            schedule_id, _, target_version, *assignments = parts
+            if target_version != "latest" and (not target_version.isdecimal() or int(target_version) < 1):
+                raise ValueError("automation version must be latest or a positive number")
+            parameters = {}
+            for assignment in assignments:
+                key, separator, value = assignment.partition("=")
+                if not separator or not key or key in parameters:
+                    raise ValueError("automation parameters must be unique key=value pairs")
+                parameters[key] = parse_parameter_value(value)
+            schedule = service.upgrade_automation(
+                schedule_id, target_version, parameters if assignments else None,
+            )
+            print(f"Schedule upgraded: {schedule.id}")
+            print(f"Automation: {schedule.automation.automation_name} version {schedule.automation.automation_version}")
             return CommandOutcome(handled=True)
         if action == "list" and not rest:
             schedules = service.list_recent()
@@ -470,7 +494,7 @@ def _schedule(context: CommandContext, argument: str) -> CommandOutcome:
             print(f"Next run: {schedule.next_run_at or 'none'}")
             print(f"Last run: {schedule.last_run_at or 'none'}")
             return CommandOutcome(handled=True)
-        raise ValueError("usage: /schedule create|automation|list|show|pause|resume|history ...")
+        raise ValueError("usage: /schedule create|automation|upgrade|list|show|pause|resume|history ...")
     except (ValueError, OSError) as error:
         operation = "create automation schedule" if action == "automation" else f"{action or 'use'} schedule"
         print(f"Cannot {operation}: {error}")
