@@ -143,6 +143,19 @@ class ScheduleService:
             self.worker.wake()
         return schedule
 
+    def create_automation(
+        self, *, automation_name: str, parameters: dict | None,
+        kind: ScheduleKind, expression: str, timezone: str,
+        missed_run_policy: MissedRunPolicy = MissedRunPolicy.RUN_ONCE,
+        retry_limit: int = 0, retry_delay_seconds: int = 60,
+    ) -> Schedule:
+        return Scheduler(self.store).create_automation(
+            automation_name=automation_name, parameters=parameters,
+            kind=kind, expression=expression, timezone=timezone,
+            missed_run_policy=missed_run_policy, retry_limit=retry_limit,
+            retry_delay_seconds=retry_delay_seconds,
+        )
+
     def list_recent(self) -> list[Schedule]:
         return self.store.list_schedules()
 
@@ -170,6 +183,8 @@ class ScheduleService:
     def state(schedule: Schedule) -> str:
         if not schedule.enabled:
             return "paused"
+        if schedule.automation is not None:
+            return "execution unavailable"
         return "exhausted" if schedule.next_run_at is None else "active"
 
 

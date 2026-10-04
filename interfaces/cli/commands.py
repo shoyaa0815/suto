@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import shlex
 import sqlite3
@@ -66,6 +67,9 @@ def print_help(mode: str | None = None) -> None:
     print("  /schedule create (--at <ISO> | --every <seconds> | --cron <expr>) [options] <task>")
     print("    options: --timezone <zone> --workspace <path> --allow-write --allow-command")
     print("             --missed-run <run_once|skip> --retry <count> --retry-delay <seconds>")
+    print("  /schedule automation <name> (--at <ISO> | --every <seconds> | --cron <expr>) [options] [key=value ...]")
+    print("    options: --timezone <zone> --missed-run <run_once|skip> --retry <count> --retry-delay <seconds>")
+    print("    workspace and permissions come from the automation; execution is unavailable")
     print("    defaults: profile timezone, run_once, 0 retries, 60-second retry delay")
     print("  /schedule list  list schedules")
     print("  /schedule show|pause|resume|history <schedule_id>")
@@ -307,21 +311,21 @@ def _resume(context: CommandContext, argument: str) -> CommandOutcome:
     return _change_job(context, argument, "resume")
 
 
-def _parse_schedule_create(argument: str, default_timezone: str) -> dict:
-    usage = ("usage: /schedule create (--at <ISO> | --every <seconds> | --cron <expr>) "
+def _parse_schedule_options(parts: list[str], default_timezone: str, *, automation: bool) -> tuple[dict, list[str]]:
+    usage = ("usage: /schedule automation <name> (--at <ISO> | --every <seconds> | --cron <expr>) "
+             "[--timezone <zone>] [--missed-run <run_once|skip>] "
+             "[--retry <count>] [--retry-delay <seconds>] [key=value ...]" if automation else
+             "usage: /schedule create (--at <ISO> | --every <seconds> | --cron <expr>) "
              "[--timezone <zone>] [--workspace <path>] [--allow-write] "
              "[--allow-command] [--missed-run <run_once|skip>] "
              "[--retry <count>] [--retry-delay <seconds>] <task>")
-    try:
-        parts = shlex.split(argument)
-    except ValueError:
-        raise ValueError(usage) from None
     options: dict = {
-        "timezone": default_timezone, "workspace": ".",
-        "allow_write": False, "allow_command": False,
+        "timezone": default_timezone,
         "missed_run_policy": MissedRunPolicy.RUN_ONCE,
         "retry_limit": 0, "retry_delay_seconds": 60,
     }
+    if not automation:
+        options.update(workspace=".", allow_write=False, allow_command=False)
     schedule_flags = {"--at": ScheduleKind.ONCE,
                       "--every": ScheduleKind.INTERVAL, "--cron": ScheduleKind.CRON}
     value_flags = {
@@ -332,12 +336,16 @@ def _parse_schedule_create(argument: str, default_timezone: str) -> dict:
     while parts and parts[0].startswith("--"):
         flag = parts.pop(0)
         if flag in {"--allow-write", "--allow-command"}:
+            if automation:
+                raise ValueError(f"{flag} is set by the saved automation")
             options[flag.removeprefix("--").replace("-", "_")] = True
             continue
         if flag == "--":
             break
         if flag not in schedule_flags and flag not in value_flags:
             raise ValueError(f"unknown /schedule option: {flag}")
+        if automation and flag == "--workspace":
+            raise ValueError("--workspace is set by the saved automation")
         if not parts or parts[0].startswith("--"):
             raise ValueError(f"{flag} requires a value")
         value = parts.pop(0)
@@ -357,9 +365,37 @@ def _parse_schedule_create(argument: str, default_timezone: str) -> dict:
                 raise ValueError(f"{flag} must be a whole number") from None
         else:
             options[value_flags[flag]] = value
-    if "kind" not in options or not parts:
+    if "kind" not in options or (not automation and not parts):
         raise ValueError(usage)
-    options["prompt"] = " ".join(parts)
+    return options, parts
+
+
+def _parse_schedule_create(argument: str, default_timezone: str) -> dict:
+    try:
+        parts = shlex.split(argument)
+    except ValueError:
+        raise ValueError("invalid /schedule create quoting") from None
+    options, task = _parse_schedule_options(parts, default_timezone, automation=False)
+    options["prompt"] = " ".join(task)
+    return options
+
+
+def _parse_schedule_automation(argument: str, default_timezone: str) -> dict:
+    try:
+        parts = shlex.split(argument)
+    except ValueError:
+        raise ValueError("invalid /schedule automation quoting") from None
+    if not parts or parts[0].startswith("--"):
+        raise ValueError("usage: /schedule automation <name> (--at <ISO> | --every <seconds> | --cron <expr>) [key=value ...]")
+    name = parts.pop(0)
+    options, assignments = _parse_schedule_options(parts, default_timezone, automation=True)
+    parameters = {}
+    for assignment in assignments:
+        key, separator, value = assignment.partition("=")
+        if not separator or not key or key in parameters:
+            raise ValueError("automation parameters must be unique key=value pairs")
+        parameters[key] = parse_parameter_value(value)
+    options.update(automation_name=name, parameters=parameters)
     return options
 
 
@@ -374,13 +410,23 @@ def _schedule(context: CommandContext, argument: str) -> CommandOutcome:
             print(f"State: {service.state(schedule)}")
             print(f"Next run: {schedule.next_run_at or 'none'}")
             return CommandOutcome(handled=True)
+        if action == "automation":
+            timezone = getattr(context.user, "timezone", "UTC")
+            schedule = service.create_automation(**_parse_schedule_automation(rest, timezone))
+            print(f"Schedule created: {schedule.id}")
+            print(f"Automation: {schedule.automation.automation_name} version {schedule.automation.automation_version}")
+            print(f"State: {service.state(schedule)}")
+            print(f"Next run: {schedule.next_run_at or 'none'}")
+            return CommandOutcome(handled=True)
         if action == "list" and not rest:
             schedules = service.list_recent()
             if not schedules:
                 print("No schedules yet.")
             for schedule in schedules:
+                source = (f"  automation={schedule.automation.automation_name}"
+                          f"@v{schedule.automation.automation_version}" if schedule.automation else "")
                 print(f"{schedule.id}  {service.state(schedule)}  {schedule.kind.value}  "
-                      f"next={schedule.next_run_at or 'none'}")
+                      f"next={schedule.next_run_at or 'none'}{source}")
             return CommandOutcome(handled=True)
         if action in {"show", "pause", "resume", "history"}:
             try:
@@ -407,7 +453,15 @@ def _schedule(context: CommandContext, argument: str) -> CommandOutcome:
             print(f"Kind: {schedule.kind.value}")
             print(f"Expression: {schedule.expression}")
             print(f"Timezone: {schedule.timezone}")
-            print(f"Task: {schedule.prompt}")
+            if schedule.automation is None:
+                print(f"Task: {schedule.prompt}")
+            else:
+                snapshot = schedule.automation
+                print(f"Automation: {snapshot.automation_name}")
+                print(f"Version: {snapshot.automation_version}")
+                print(f"Version ID: {snapshot.automation_version_id}")
+                print(f"Parameters: {json.dumps(snapshot.parameters, ensure_ascii=False, sort_keys=True)}")
+                print(f"Skill version IDs: {', '.join(snapshot.skill_version_ids) or 'none'}")
             print(f"Workspace: {schedule.workspace}")
             print(f"Write: {'allowed' if schedule.allow_write else 'denied'}")
             print(f"Command: {'allowed' if schedule.allow_command else 'denied'}")
@@ -416,12 +470,18 @@ def _schedule(context: CommandContext, argument: str) -> CommandOutcome:
             print(f"Next run: {schedule.next_run_at or 'none'}")
             print(f"Last run: {schedule.last_run_at or 'none'}")
             return CommandOutcome(handled=True)
-        raise ValueError("usage: /schedule create|list|show|pause|resume|history ...")
+        raise ValueError("usage: /schedule create|automation|list|show|pause|resume|history ...")
     except (ValueError, OSError) as error:
-        print(f"Cannot {action or 'use'} schedule: {error}")
+        operation = "create automation schedule" if action == "automation" else f"{action or 'use'} schedule"
+        print(f"Cannot {operation}: {error}")
     except sqlite3.IntegrityError as error:
         message = str(error)
-        print("Cannot create schedule: quota reached" if "quota" in message or "rate limit" in message else "Cannot update schedule.")
+        if "quota" in message or "rate limit" in message:
+            print("Cannot create schedule: quota reached")
+        elif action in {"create", "automation"}:
+            print("Cannot create schedule: storage error.")
+        else:
+            print("Cannot update schedule.")
     except sqlite3.Error:
         print("Cannot use schedule: storage error.")
     return CommandOutcome(handled=True)

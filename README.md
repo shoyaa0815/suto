@@ -159,6 +159,20 @@ jobs keep their original version. A run validates required parameters and saves
 their values, including defaults. Definition skills must already exist. Keep
 secrets out of definitions and run parameters.
 
+You can also save a schedule for an existing automation:
+
+```text
+/schedule automation repo-review --cron "0 8 * * *" --timezone Asia/Bangkok repo=suto
+/schedule show <schedule_id>
+```
+
+The schedule pins the current automation version, validated parameters (including
+defaults), skill versions, workspace, and permission ceiling. Options may include
+`--at`, `--every`, `--cron`, `--timezone`, `--missed-run`, `--retry`, and
+`--retry-delay`; workspace and permissions come from the saved automation.
+`/automation update` does not change existing schedules. Scheduled automation
+execution is not available yet; creating one does not queue a job.
+
 If a job requests a write or command approval, inspect and decide its pending
 request by ID:
 

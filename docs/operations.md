@@ -322,6 +322,25 @@ snapshot, including defaults; updates do not change earlier jobs. Detected
 structured secrets and known token patterns are rejected from definitions,
 run parameters, `/run` prompts, and `/schedule create` prompts.
 
+`/schedule automation <name>` saves an inspection-only scheduled automation
+snapshot. Place exactly one timing option (`--at`, `--every`, or `--cron`), then
+optional `--timezone`, `--missed-run`, `--retry`, and `--retry-delay` options,
+followed by unique `key=value` parameters. Values use the same JSON-or-string
+parsing as `/automation run`. For example:
+
+```text
+/schedule automation repo-review --cron "0 8 * * *" --timezone Asia/Bangkok repo=suto
+/schedule show <schedule_id>
+```
+
+Creation validates and atomically pins the current automation version,
+parameters (including defaults), skill version IDs, workspace, and saved
+permission ceiling. Workspace and permission flags cannot override that ceiling.
+`/schedule list` and `/schedule show` display these schedules, and later
+`/automation update` calls do not alter their snapshots. The CLI reports
+`execution unavailable` because scheduled automation triggers are not enabled;
+no job or trigger history is created for these schedules yet.
+
 ```text
 /approvals
 /approval show <approval_id>

@@ -1,5 +1,6 @@
 """Public schedule commands are backed by durable scheduler state."""
 
+import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -137,3 +138,124 @@ def test_once_schedule_can_resume_pending_retry_after_pause(tmp_path, capsys):
     assert "State: exhausted" in capsys.readouterr().out
     assert Scheduler(store).tick(datetime.now(UTC) + timedelta(seconds=2)) == 1
     assert {event.job_id for event in store.list_trigger_history(schedule.id)} == {job.id}
+
+
+def _saved_review(store, tmp_path):
+    store.create_skill("review-skill", "Review changes.")
+    store.create_automation(
+        "review", "Review {{repo}} at {{depth}} depth.", tmp_path,
+        {"repo": {"type": "string", "required": True},
+         "depth": {"type": "string", "default": "quick"}},
+        allow_write=True, skill_names=["review-skill"],
+    )
+
+
+def test_schedule_automation_cli_pins_inputs_and_inspects_after_update(tmp_path, capsys):
+    store = JobStore(tmp_path / "suto.db")
+    worker = Worker()
+    _saved_review(store, tmp_path)
+    first = store.get_current_automation_version("review")
+    first_skill = store.list_automation_skill_versions(first.id)[0][1].id
+    ctx = context(store, worker)
+
+    assert handle_command(ctx, "/schedule automation review --at 2030-01-01T08:00 --retry 2 repo=suto").handled
+    schedule = JobStore(store.path).list_schedules()[0]
+    assert schedule.next_run_at == "2030-01-01T01:00:00+00:00"
+    assert schedule.automation.automation_version_id == first.id
+    assert schedule.automation.parameters == {"repo": "suto", "depth": "quick"}
+    assert schedule.automation.skill_version_ids == (first_skill,)
+    assert schedule.automation.workspace == str(tmp_path.resolve())
+    assert (schedule.automation.allow_write, schedule.automation.allow_command) == (True, False)
+    assert (schedule.retry_limit, schedule.timezone) == (2, "Asia/Bangkok")
+    assert worker.wakes == 0
+
+    update = tmp_path / "updated.json"
+    update.write_text(json.dumps({
+        "name": "review", "prompt_template": "Inspect {{repo}}.",
+        "parameter_schema": {"repo": {"type": "string", "required": True}},
+        "workspace": str(tmp_path), "allow_command": True, "skills": ["review-skill"],
+    }), encoding="utf-8")
+    store.revise_skill("review-skill", "New review steps.")
+    assert handle_command(ctx, f"/automation update review {update}").handled
+    assert store.get_current_automation_version("review").version == 2
+    assert handle_command(ctx, "/schedule list").handled
+    assert handle_command(ctx, f"/schedule show {schedule.id}").handled
+    output = capsys.readouterr().out
+    assert "State: execution unavailable" in output
+    assert "automation=review@v1" in output
+    assert "Automation: review" in output and "Version: 1" in output
+    assert 'Parameters: {"depth": "quick", "repo": "suto"}' in output
+    assert f"Skill version IDs: {first_skill}" in output
+    assert JobStore(store.path).get_schedule(schedule.id) == schedule
+    assert Scheduler(store).tick(datetime(2030, 1, 2, tzinfo=UTC)) == 0
+    assert store.list_jobs() == []
+    assert store.list_trigger_history(schedule.id) == []
+
+
+def test_schedule_automation_cli_rejects_invalid_inputs_without_rows(tmp_path, capsys):
+    store = JobStore(tmp_path / "suto.db")
+    _saved_review(store, tmp_path)
+    ctx = context(store)
+    for command in (
+        "/schedule automation missing --every 60 repo=suto",
+        "/schedule automation review --every 60",
+        "/schedule automation review --every 60 repo=1",
+        "/schedule automation review --every 60 repo=suto unknown=1",
+        "/schedule automation review --every 60 repo=suto repo=other",
+        "/schedule automation review --every 60 repo",
+        "/schedule automation review --every 0 repo=suto",
+        "/schedule automation review --cron bad repo=suto",
+        "/schedule automation review --every 60 --timezone No/Such_Zone repo=suto",
+        "/schedule automation review --every 60 --retry 11 repo=suto",
+        "/schedule automation review --every 60 --allow-command repo=suto",
+        "/schedule automation review --every 60 --workspace . repo=suto",
+        "/schedule automation review --every 60 repo=sk-123456789abc",
+    ):
+        assert handle_command(ctx, command).handled
+        assert store.list_schedules() == []
+    output = capsys.readouterr().out
+    assert "Cannot create automation schedule" in output
+    assert "sk-123456789abc" not in output
+    with store._connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM schedule_automation_snapshots").fetchone()[0] == 0
+
+
+def test_schedule_automation_cli_rolls_back_on_snapshot_failure(tmp_path, capsys):
+    store = JobStore(tmp_path / "suto.db")
+    _saved_review(store, tmp_path)
+    with store._connect() as connection:
+        connection.execute("""CREATE TRIGGER reject_snapshot BEFORE INSERT
+            ON schedule_automation_snapshots BEGIN SELECT RAISE(ABORT, 'test failure'); END""")
+
+    assert handle_command(
+        context(store), "/schedule automation review --every 60 repo=suto",
+    ).handled
+    assert store.list_schedules() == []
+    with store._connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM schedule_automation_snapshots").fetchone()[0] == 0
+    assert "Cannot create schedule: storage error." in capsys.readouterr().out
+
+
+def test_schedule_automation_cli_validates_workspace_and_skill_reference(tmp_path, capsys):
+    store = JobStore(tmp_path / "suto.db")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store.create_skill("review-skill", "Review changes.")
+    store.create_automation(
+        "review", "Review files.", workspace, skill_names=["review-skill"],
+    )
+    workspace.rmdir()
+    command = "/schedule automation review --every 60"
+    assert handle_command(context(store), command).handled
+    assert "workspace is not a directory" in capsys.readouterr().out
+    assert store.list_schedules() == []
+
+    workspace.mkdir()
+    with store._connect() as connection:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        connection.execute(
+            "UPDATE automation_version_skills SET skill_version_id = 'missing'",
+        )
+    assert handle_command(context(store), command).handled
+    assert "automation skill reference is invalid" in capsys.readouterr().out
+    assert store.list_schedules() == []

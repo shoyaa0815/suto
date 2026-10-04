@@ -141,6 +141,31 @@ def next_occurrence(schedule: Schedule, after: datetime) -> datetime | None:
     )
 
 
+def _prepare_schedule(
+    kind: str | ScheduleKind, expression: str, timezone: str, now: datetime | None,
+) -> tuple[ScheduleKind, str, str]:
+    schedule_kind = ScheduleKind(kind)
+    validate_timezone(timezone)
+    current = _utc(now or datetime.now(UTC))
+    if schedule_kind == ScheduleKind.ONCE:
+        first = parse_once(expression, timezone)
+        canonical_expression = first.isoformat()
+    elif schedule_kind == ScheduleKind.INTERVAL:
+        try:
+            seconds = int(expression)
+        except ValueError as error:
+            raise ValueError("--every must be a whole number of seconds") from error
+        if seconds < 1 or seconds > 31_536_000:
+            raise ValueError("interval must be between 1 and 31536000 seconds")
+        canonical_expression = str(seconds)
+        first = current + timedelta(seconds=seconds)
+    else:
+        cron = CronExpression.parse(expression)
+        canonical_expression = " ".join(expression.split())
+        first = cron.next_after(current, timezone)
+    return schedule_kind, canonical_expression, first.isoformat()
+
+
 class Scheduler:
     def __init__(self, store: JobStore) -> None:
         self.store = store
@@ -160,31 +185,15 @@ class Scheduler:
         retry_delay_seconds: int = 60,
         now: datetime | None = None,
     ) -> Schedule:
-        schedule_kind = ScheduleKind(kind)
-        validate_timezone(timezone)
-        current = _utc(now or datetime.now(UTC))
         if not prompt.strip():
             raise ValueError("schedule requires a task")
         reject_detectable_secrets(prompt, field="schedule prompt")
         workspace_path = Path(workspace).resolve()
         if not workspace_path.is_dir():
             raise ValueError(f"workspace is not a directory: {workspace_path}")
-        if schedule_kind == ScheduleKind.ONCE:
-            first = parse_once(expression, timezone)
-            canonical_expression = first.isoformat()
-        elif schedule_kind == ScheduleKind.INTERVAL:
-            try:
-                seconds = int(expression)
-            except ValueError as error:
-                raise ValueError("--every must be a whole number of seconds") from error
-            if seconds < 1 or seconds > 31_536_000:
-                raise ValueError("interval must be between 1 and 31536000 seconds")
-            canonical_expression = str(seconds)
-            first = current + timedelta(seconds=seconds)
-        else:
-            cron = CronExpression.parse(expression)
-            canonical_expression = " ".join(expression.split())
-            first = cron.next_after(current, timezone)
+        schedule_kind, canonical_expression, first = _prepare_schedule(
+            kind, expression, timezone, now,
+        )
         return self.store.create_schedule(
             kind=schedule_kind,
             expression=canonical_expression,
@@ -196,7 +205,25 @@ class Scheduler:
             missed_run_policy=missed_run_policy,
             retry_limit=retry_limit,
             retry_delay_seconds=retry_delay_seconds,
-            next_run_at=first.isoformat(),
+            next_run_at=first,
+        )
+
+    def create_automation(
+        self, *, automation_name: str, parameters: dict | None,
+        kind: str | ScheduleKind, expression: str, timezone: str = "UTC",
+        missed_run_policy: str | MissedRunPolicy = MissedRunPolicy.RUN_ONCE,
+        retry_limit: int = 0, retry_delay_seconds: int = 60,
+        now: datetime | None = None,
+    ) -> Schedule:
+        schedule_kind, canonical_expression, first = _prepare_schedule(
+            kind, expression, timezone, now,
+        )
+        return self.store.create_automation_schedule(
+            automation_name=automation_name, parameters=parameters,
+            kind=schedule_kind, expression=canonical_expression,
+            timezone=timezone, next_run_at=first,
+            missed_run_policy=missed_run_policy, retry_limit=retry_limit,
+            retry_delay_seconds=retry_delay_seconds,
         )
 
     def tick(self, now: datetime | None = None) -> int:
