@@ -235,17 +235,22 @@ class Scheduler:
 
         for schedule in self.store.list_due_schedules(current.isoformat()):
             scheduled_for = datetime.fromisoformat(schedule.next_run_at)
-            following = next_occurrence(schedule, scheduled_for)
             skip_detail = None
             if (
                 schedule.missed_run_policy == MissedRunPolicy.SKIP
                 and scheduled_for + timedelta(seconds=1) < current
             ):
                 skip_detail = "skipped missed occurrence"
-                while following is not None and following <= current:
-                    following = next_occurrence(schedule, following)
+                if schedule.kind == ScheduleKind.INTERVAL:
+                    interval = timedelta(seconds=int(schedule.expression))
+                    elapsed_intervals = (current - scheduled_for) // interval
+                    following = scheduled_for + (elapsed_intervals + 1) * interval
+                else:
+                    following = next_occurrence(schedule, current)
             elif schedule.missed_run_policy == MissedRunPolicy.RUN_ONCE:
                 following = next_occurrence(schedule, current)
+            else:
+                following = next_occurrence(schedule, scheduled_for)
             trigger = self.store.fire_schedule(
                 schedule.id,
                 schedule.next_run_at,

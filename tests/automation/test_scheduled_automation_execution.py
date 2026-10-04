@@ -16,6 +16,7 @@ from application.automation import JobService
 from workflows.runtime.context import ApprovalRequired
 from workflows.models import JobStatus
 from workflows.runtime.runner import JobRunner
+from workflows.runtime import scheduler as scheduler_module
 from workflows.runtime.scheduler import Scheduler
 from workflows.storage.store import JobStore
 
@@ -243,6 +244,62 @@ def test_missed_run_policy_preserves_pinned_automation(tmp_path):
     assert store.get_schedule(interval.id).next_run_at == (late + timedelta(minutes=1)).isoformat()
     assert store.get_schedule(skipped.id).next_run_at == (late + timedelta(minutes=1)).isoformat()
     assert store.list_trigger_history(skipped.id)[0].job_id is None
+
+
+def test_skip_large_backlog_keeps_interval_cadence_without_replaying_it(tmp_path, monkeypatch):
+    store = JobStore(tmp_path / "suto.db")
+    store.create_automation("daily", "Review.", tmp_path, {})
+    schedule = Scheduler(store).create_automation(
+        automation_name="daily", parameters={}, kind="interval",
+        expression="1", timezone="UTC", now=START,
+        missed_run_policy="skip",
+    )
+    real_next = scheduler_module.next_occurrence
+    calls = 0
+
+    def bounded_next(item, after):
+        nonlocal calls
+        calls += 1
+        assert calls <= 2, "skip must not traverse every missed occurrence"
+        return real_next(item, after)
+
+    monkeypatch.setattr(scheduler_module, "next_occurrence", bounded_next)
+    late = START + timedelta(days=2, milliseconds=500)
+    assert Scheduler(store).tick(late) == 0
+    assert store.get_schedule(schedule.id).next_run_at == (
+        START + timedelta(days=2, seconds=1)
+    ).isoformat()
+    history = store.list_trigger_history(schedule.id)
+    assert len(history) == 1
+    assert history[0].job_id is None
+    assert history[0].scheduled_for == (START + timedelta(seconds=1)).isoformat()
+
+
+def test_skip_large_cron_backlog_selects_next_calendar_occurrence(tmp_path, monkeypatch):
+    store = JobStore(tmp_path / "suto.db")
+    store.create_automation("daily", "Review.", tmp_path, {})
+    schedule = Scheduler(store).create_automation(
+        automation_name="daily", parameters={}, kind="cron",
+        expression="0 0 * * *", timezone="UTC", now=START,
+        missed_run_policy="skip",
+    )
+    real_next = scheduler_module.next_occurrence
+    calls = 0
+
+    def bounded_next(item, after):
+        nonlocal calls
+        calls += 1
+        assert calls <= 2, "skip must not traverse every missed occurrence"
+        return real_next(item, after)
+
+    monkeypatch.setattr(scheduler_module, "next_occurrence", bounded_next)
+    late = START + timedelta(days=366 * 5, hours=12)
+    assert Scheduler(store).tick(late) == 0
+    assert store.get_schedule(schedule.id).next_run_at == (
+        late.replace(hour=0) + timedelta(days=1)
+    ).isoformat()
+    assert len(store.list_trigger_history(schedule.id)) == 1
+    assert store.list_jobs() == []
 
 
 def test_scheduled_job_keeps_approval_and_sandbox_guard(tmp_path):
