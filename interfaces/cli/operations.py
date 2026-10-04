@@ -76,13 +76,45 @@ async def handle_operations(store, command: str, argument: str) -> bool:
     return True
 
 
-async def notify_cli(store):
-    """Opt-in local delivery; acknowledgement follows printing (at least once)."""
+_LIVE_NOTIFICATION_SUMMARIES = {
+    'completed': 'Job completed.',
+    'failed': 'Job failed.',
+    'cancelled': 'Job cancelled.',
+    'approval_required': 'Approval required. Use /approvals to review.',
+    'retry_exhausted': 'Job failed after retry allowance was exhausted.',
+}
+
+
+async def notify_cli(store, *, after_id: int):
+    """Show only notifications committed during this CLI session."""
+    pending_ack = None
     while True:
-        for event in reversed(store.notifications()):
-            print(f"\n[suto notification #{event['id']}] {event['job_id']}: {event['status']}", flush=True)
-            store.acknowledge_notification(event['id'])
-        await asyncio.sleep(1)
+        try:
+            if pending_ack is not None:
+                await asyncio.to_thread(store.acknowledge_notification, pending_ack)
+                pending_ack = None
+            events = await asyncio.to_thread(store.notifications_after, after_id)
+            for event in events:
+                summary = _LIVE_NOTIFICATION_SUMMARIES.get(event['kind'])
+                if summary is not None:
+                    print(
+                        f"\n[suto notification #{event['id']}] "
+                        f"{event['job_id']}: {summary}",
+                        flush=True,
+                    )
+                after_id = event['id']
+                if summary is not None:
+                    # Keep the cursor ahead of the acknowledgement so a retry
+                    # cannot print the same notification again.
+                    pending_ack = after_id
+                    await asyncio.to_thread(store.acknowledge_notification, pending_ack)
+                    pending_ack = None
+        except (OSError, sqlite3.Error):
+            # Delivery is optional; storage/worker transitions do not depend on it.
+            await asyncio.sleep(1)
+            continue
+        if not events:
+            await asyncio.sleep(1)
 
 
 def _reminder_time(reminder) -> str:

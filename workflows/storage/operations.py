@@ -128,6 +128,18 @@ class OperationsStore:
             return [dict(row) for row in db.execute('SELECT * FROM notifications WHERE (?=0 OR read_at IS NULL) '
                 'ORDER BY id DESC LIMIT ?', (int(unread_only), min(max(int(limit), 1), 500)))]
 
+    def latest_notification_id(self) -> int:
+        with self._connect() as db:
+            return db.execute('SELECT COALESCE(MAX(id), 0) FROM notifications').fetchone()[0]
+
+    def notifications_after(self, event_id: int, *, limit: int = 100) -> list[dict]:
+        with self._connect() as db:
+            return [dict(row) for row in db.execute(
+                'SELECT * FROM notifications WHERE id > ? AND read_at IS NULL '
+                'ORDER BY id ASC LIMIT ?',
+                (event_id, min(max(int(limit), 1), 500)),
+            )]
+
     def acknowledge_notification(self, event_id: int) -> bool:
         with self._connect() as db:
             cursor = db.execute('UPDATE notifications SET read_at=? WHERE id=? AND read_at IS NULL',

@@ -146,10 +146,11 @@ async def run_session(
         user.id, CLI_STORAGE_INTERFACE, thread_id
     )
     skills.bind(store, conversation.id)
+    notification_cursor = store.latest_notification_id()
     worker = AutomationWorker(store, JobRunner(store))
     worker_task = asyncio.create_task(worker.start())
     notification_task = (
-        asyncio.create_task(notify_cli(store))
+        asyncio.create_task(notify_cli(store, after_id=notification_cursor))
         if os.environ.get(
             "SUTO_NOTIFY_CLI", os.environ.get("SUTO_NOTIFY_TUI", "")
         ).lower()
