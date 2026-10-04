@@ -215,16 +215,10 @@ that job and passes an `AgentRequest` with its job and schedule references throu
 the same agent runtime used for other requests. The job runner keeps workspace
 permissions, budgets, approvals, retries, and results in the existing workflow
 tables. Cancelling a running scheduled job cancels its active agent request.
-The public `/schedule create` command accepts `--at`, `--every`, or `--cron`,
-plus timezone, workspace permission, missed-run, and retry options. The other
-public commands are `/schedule list`, `show`, `pause`, `resume`, and `history`.
-The profile timezone is used when none is supplied. Pause stops future triggers
-without cancelling jobs already queued or running. A retry requeues the same
-logical job and records another trigger-history row; the next worker claim
-creates a new durable execution attempt. Trigger creation, job creation or
-requeue, and schedule advancement commit atomically so restart cannot create a
-second logical job for the same occurrence. A `skip` occurrence more than one
-second overdue is recorded as skipped; `run_once` creates one recovery job.
+Trigger creation, job creation or requeue, and schedule advancement commit
+atomically so restart cannot create a second logical job for the same
+occurrence. A retry requeues the same logical job and records another
+trigger-history row; the next worker claim creates a new durable attempt.
 
 Exit, Ctrl-C and SIGTERM stop job admission, cancel active execution, kill command
 process trees and persist interrupted jobs. On a hard crash, the next owning
@@ -237,37 +231,111 @@ transient retries during one claim remain in that attempt. Databases upgraded
 from earlier schemas retain existing jobs and counts without inventing missing
 historical attempt records.
 
-The public CLI accepts `/run [--workspace <path>] [--allow-write]
-[--allow-command] <task>`, `/jobs`, `/status <job_id>`, `/cancel <job_id>`, and
-`/resume <job_id>`. `/run` persists a queued one-time job and reports its ID,
-canonical workspace, permission ceilings, and whether the session worker is
-ready. A saved job waits for an available worker; submission does not mean the
-job has started. `/jobs` lists recent jobs with their latest attempt IDs, and
-`/status` reports persisted timestamps, result summary, and safe error.
-Cancellation is idempotent, including queued and approval-waiting jobs. Resume
-accepts interrupted or blocked jobs only after checking the existing workspace
-checkpoint policy; the next worker claim creates a new attempt ID for the same
-job. Write and command flags do not bypass tool approval or sandbox checks.
-`/approvals` lists pending job requests. `/approval show <approval_id>` displays
-the job and attempt, requested action, tool, workspace, permission, timestamps,
-and decision state. `/approval allow <approval_id>` or `/approval deny
-<approval_id>` decides only that pending request. Allow queues the job for a new
-attempt; its exact action still passes the existing permission and sandbox
-checks before execution. Deny blocks the job. Expired and cancelled requests
-cannot authorize an action, and an expired decision queues the job to request
-a new approval. Approval output redacts recognized secrets and omits previews.
+## Automation CLI (Phase 1)
 
-The public `/automation create <definition.json>` and `/automation update <name>
-<definition.json>` commands save immutable numbered definitions. A definition is a
-JSON object with `name`, `prompt_template`, optional `description`,
-`parameter_schema`, `workspace`, `skills`, `allow_write`, and `allow_command`.
-Use `/automation list`, `/automation show <name>`, `/automation run <name>
-[key=value ...]`, and `/automation history <name>` to inspect and run them.
-Each run validates parameters, skills, workspace, and the saved permission ceiling
-before queuing a job. The job pins the exact version and a validated parameter
-snapshot, including defaults. Updating an automation does not change earlier jobs.
-Detected structured secrets and known token patterns are rejected; values must
-not be put in definition files or run parameters.
+Enter the following commands at the CLI prompt. Options for `/run` and
+`/schedule create` come before the task; quote tasks with spaces. The workspace
+defaults to the current directory and must resolve to an existing directory.
+Write and command execution are denied by default. `--allow-write` and
+`--allow-command` raise only the job's permission ceiling; each action still
+passes the existing permission, approval, and sandbox checks.
+
+```text
+/run [--workspace <path>] [--allow-write] [--allow-command] <task>
+/run --workspace . --allow-command "run tests and summarize failures"
+/jobs
+/status <job_id>
+/cancel <job_id>
+/resume <job_id>
+```
+
+`/run` persists a queued one-time job and reports its ID, canonical workspace,
+permission ceilings, and whether the CLI worker is ready. A saved job waits for
+an available worker; submission does not mean execution has started. `/jobs`
+lists recent jobs with their latest attempt IDs. `/status` reports the persisted
+attempt count and ID, timestamps, automation version reference or schedule
+trigger when present, result summary, and safe error. Cancellation is
+idempotent for queued, running, and approval-waiting jobs. Resume accepts only
+interrupted or blocked jobs after workspace checkpoint validation. The next
+worker claim creates a new attempt ID under the same job ID.
+
+```text
+/schedule create (--at <ISO> | --every <seconds> | --cron <expr>)
+    [--timezone <zone>] [--workspace <path>] [--allow-write]
+    [--allow-command] [--missed-run <run_once|skip>]
+    [--retry <count>] [--retry-delay <seconds>] <task>
+/schedule create --every 3600 --retry 2 "inspect repository status"
+/schedule create --cron "0 8 * * *" --timezone Asia/Bangkok "check daily status"
+/schedule list
+/schedule show <schedule_id>
+/schedule pause <schedule_id>
+/schedule resume <schedule_id>
+/schedule history <schedule_id>
+```
+
+`--at` accepts an ISO date and time. An included offset sets the instant;
+without one, the time is interpreted in `--timezone` or the profile timezone.
+Cron uses five fields in the selected timezone; `--every` is an interval in
+seconds. The defaults are the profile timezone, `run_once` for missed runs, zero
+retries, and a 60-second retry delay. A retry requeues the same logical job and
+records another trigger-history row; the next claim creates a new attempt.
+For an overdue occurrence, `run_once` creates one recovery job and advances to
+the next occurrence after the current time. `skip` records an occurrence more
+than one second overdue as skipped and advances without a job. Pause stops
+future triggers without cancelling jobs already queued or running. Use
+`/schedule history <schedule_id>` to inspect trigger and retry rows.
+
+A JSON automation definition accepts `name`, `prompt_template`, and optional
+`format_version` (currently 1), `description`, `parameter_schema`, `workspace`,
+`skills`, `allow_write`, and `allow_command`. `workspace` defaults to the CLI
+working directory; both permissions default to false. Parameters can be
+required or have defaults. Skill names must already exist. For a runnable
+example, save this as `review.json`:
+
+```json
+{
+  "name": "repo-review",
+  "prompt_template": "Review {{repo}} at {{depth}} depth.",
+  "parameter_schema": {
+    "repo": {"type": "string", "required": true},
+    "depth": {"type": "string", "default": "quick"}
+  },
+  "workspace": "."
+}
+```
+
+```text
+/automation create review.json
+/automation list
+/automation show repo-review
+/automation run repo-review repo=suto depth=full
+/automation history repo-review
+/automation update repo-review review.json
+```
+
+Edit the JSON file before `/automation update`; that command saves a new
+immutable numbered version. `/automation run <name> [key=value ...]` validates
+required and unknown parameters, skills, workspace, and the saved permission
+ceiling before queuing a job. Values are parsed as JSON when valid JSON, or as
+strings otherwise. Each job pins the exact version and validated parameter
+snapshot, including defaults; updates do not change earlier jobs. Detected
+structured secrets and known token patterns are rejected from definitions and
+run parameters.
+
+```text
+/approvals
+/approval show <approval_id>
+/approval allow <approval_id>
+/approval deny <approval_id>
+```
+
+`/approvals` lists pending job requests. `/approval show` displays the job and
+attempt, requested action, tool, workspace, requested permission, timestamps,
+and decision state. Allow queues the job for a new attempt; only that exact
+request may be consumed after permission and sandbox checks. Deny blocks the
+job. Expired and cancelled requests cannot authorize an action. An expired
+decision queues the job to request fresh approval. Approval output redacts
+recognized secrets and omits previews.
 
 ## Logs, metrics, quotas and retention
 
