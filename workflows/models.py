@@ -94,6 +94,32 @@ class SkillVersion:
     created_at: str
 
 
+class SkillProposalStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    DELETED = "deleted"
+
+
+@dataclass(frozen=True)
+class SkillDraftProposal:
+    id: str
+    name: str
+    instructions: str
+    status: SkillProposalStatus
+    source_job_ids: tuple[str, ...]
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class SkillProposalEvent:
+    id: int
+    proposal_id: str
+    status: SkillProposalStatus
+    created_at: str
+
+
 @dataclass(frozen=True)
 class Job:
     id: str

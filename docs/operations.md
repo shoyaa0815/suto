@@ -599,3 +599,19 @@ A skip means namespace isolation was not verified on that host. Run
 `venv/bin/pytest -q -rs tests/tools/test_sandbox.py` directly on a supported
 Linux host to exercise the integration tests. The `bwrap`
 setting never falls back to `process` when setup or namespace creation fails.
+
+## Draft Skill proposals (Phase 3D)
+
+Draft Skill proposals are stored separately from versioned Skills. A proposal
+contains a validated name, draft instructions, and the IDs of 2–50 distinct,
+completed jobs from one workspace. Job prompts, results, tool output, and
+permissions are not copied into proposals. Detectable secrets in draft
+instructions are rejected. This internal store and service do not detect
+repeated work, expose CLI approval commands, or create, revise, or activate a
+Skill. `approved` records a review decision only.
+
+The state path is `pending` to `approved`, `rejected`, or `deleted`; reviewed
+proposals may then become `deleted`. Every transition has a durable event.
+Deletion clears the name, instructions, and source job IDs while retaining a
+status and timestamp tombstone. Drafts persist until explicitly deleted; this
+foundation does not enable automatic proposal generation or retention cleanup.

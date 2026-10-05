@@ -43,6 +43,7 @@ from .operations import OperationsStore
 from ..runtime.options import validate_options
 from .subtasks import SubtaskStore
 from .knowledge import KnowledgeStore
+from .skill_proposals import SkillProposalStore
 from ..library.definitions import (
     reject_detectable_secrets,
     render_prompt,
@@ -79,6 +80,7 @@ class JobStore(
     OperationsStore,
     SubtaskStore,
     KnowledgeStore,
+    SkillProposalStore,
     IdentityStore,
     ConversationStore,
     MemoryStore,

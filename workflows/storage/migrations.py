@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .locking import ProcessLock
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 HARDENING = """
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -393,6 +393,48 @@ WHEN OLD.status != NEW.status AND NEW.status IN
 END;
 """
 
+SKILL_DRAFT_PROPOSALS = """
+CREATE TABLE skill_draft_proposals(
+ id TEXT PRIMARY KEY,
+ name TEXT NOT NULL,
+ instructions TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','deleted')),
+ source_job_ids TEXT NOT NULL CHECK(json_valid(source_job_ids) AND json_type(source_job_ids)='array'),
+ created_at TEXT NOT NULL,
+ updated_at TEXT NOT NULL,
+ CHECK(status != 'deleted' OR (name='' AND instructions='' AND source_job_ids='[]'))
+);
+CREATE INDEX skill_draft_proposals_status_idx ON skill_draft_proposals(status,created_at);
+CREATE TABLE skill_proposal_events(
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ proposal_id TEXT NOT NULL REFERENCES skill_draft_proposals(id) ON DELETE CASCADE,
+ status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','deleted')),
+ created_at TEXT NOT NULL
+);
+CREATE INDEX skill_proposal_events_proposal_idx ON skill_proposal_events(proposal_id,id);
+CREATE TRIGGER skill_draft_proposals_initial_status BEFORE INSERT ON skill_draft_proposals
+WHEN NEW.status!='pending'
+BEGIN SELECT RAISE(ABORT, 'skill proposal must start pending'); END;
+CREATE TRIGGER skill_draft_proposals_transition BEFORE UPDATE ON skill_draft_proposals
+WHEN NOT (
+ (OLD.status='pending' AND NEW.status IN ('approved','rejected','deleted')) OR
+ (OLD.status IN ('approved','rejected') AND NEW.status='deleted')
+) OR NEW.id!=OLD.id OR NEW.created_at!=OLD.created_at OR
+ (NEW.status!='deleted' AND (
+  NEW.name!=OLD.name OR NEW.instructions!=OLD.instructions OR
+  NEW.source_job_ids!=OLD.source_job_ids
+ )) OR (NEW.status='deleted' AND (
+  NEW.name!='' OR NEW.instructions!='' OR NEW.source_job_ids!='[]'
+ ))
+BEGIN SELECT RAISE(ABORT, 'invalid skill proposal transition'); END;
+CREATE TRIGGER skill_draft_proposals_created AFTER INSERT ON skill_draft_proposals
+BEGIN INSERT INTO skill_proposal_events(proposal_id,status,created_at)
+ VALUES(NEW.id,NEW.status,NEW.created_at); END;
+CREATE TRIGGER skill_draft_proposals_changed AFTER UPDATE ON skill_draft_proposals
+BEGIN INSERT INTO skill_proposal_events(proposal_id,status,created_at)
+ VALUES(NEW.id,NEW.status,NEW.updated_at); END;
+"""
+
 
 def backup_database(source: Path, destination: Path) -> Path:
     source, destination = source.resolve(), destination.expanduser().absolute()
@@ -454,6 +496,7 @@ def initialize_database(store) -> None:
                 (17, SCHEDULE_OCCURRENCE_IDENTITY),
                 (18, SCHEDULED_AUTOMATION_SNAPSHOTS),
                 (19, JOB_RESULT_NOTIFICATIONS),
+                (20, SKILL_DRAFT_PROPOSALS),
             ):
                 if number > SCHEMA_VERSION:
                     break
@@ -552,6 +595,27 @@ def initialize_database(store) -> None:
                             migration_script = ''
                         elif any(markers):
                             raise RuntimeError('database has a partial job notification migration; restore a verified backup')
+                    if number == 20:
+                        markers = tuple(
+                            connection.execute(
+                                "SELECT 1 FROM sqlite_master WHERE type=? AND name=?",
+                                (kind, name),
+                            ).fetchone() is not None
+                            for kind, name in (
+                                ('table', 'skill_draft_proposals'),
+                                ('table', 'skill_proposal_events'),
+                                ('index', 'skill_draft_proposals_status_idx'),
+                                ('index', 'skill_proposal_events_proposal_idx'),
+                                ('trigger', 'skill_draft_proposals_initial_status'),
+                                ('trigger', 'skill_draft_proposals_transition'),
+                                ('trigger', 'skill_draft_proposals_created'),
+                                ('trigger', 'skill_draft_proposals_changed'),
+                            )
+                        )
+                        if all(markers):
+                            migration_script = ''
+                        elif any(markers):
+                            raise RuntimeError('database has a partial skill proposal migration; restore a verified backup')
                     connection.executescript('BEGIN IMMEDIATE;\n' + migration_script)
                     connection.execute('INSERT OR REPLACE INTO schema_migrations VALUES (?,?)',
                                        (number, datetime.now(UTC).isoformat()))
