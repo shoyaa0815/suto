@@ -184,7 +184,7 @@ async def test_notification_store_wait_does_not_block_event_loop():
 
 
 @pytest.mark.asyncio
-async def test_cli_disconnect_reconnect_keeps_offline_items_unread(tmp_path, monkeypatch):
+async def test_cli_restart_delivers_multiple_offline_items_once_in_order(tmp_path, monkeypatch):
     path = tmp_path / "jobs.db"
     monkeypatch.setenv("SUTO_DB_PATH", str(path))
     monkeypatch.setenv("SUTO_NOTIFY_CLI", "1")
@@ -240,21 +240,150 @@ async def test_cli_disconnect_reconnect_keeps_offline_items_unread(tmp_path, mon
     close.set()
     await asyncio.wait_for(first, timeout=5)
 
-    offline = store.create_job("offline")
-    assert store.cancel_job(offline.id)
+    offline = [store.create_job(f"offline secret={index}") for index in range(3)]
+    for job in offline:
+        assert store.cancel_job(job.id)
+    assert [item["job_id"] for item in JobStore(path).notifications()] == [
+        job.id for job in reversed(offline)
+    ]
     started = asyncio.Event()
     close = asyncio.Event()
     second = asyncio.create_task(one_session(started, close))
     await asyncio.wait_for(started.wait(), timeout=5)
     newer = store.create_job("newer")
     assert store.cancel_job(newer.id)
-    await _wait_for_count(lines, 2, changed)
-    await _wait_for_count(acknowledged, 2, changed)
+    await _wait_for_count(lines, 5, changed)
+    await _wait_for_count(acknowledged, 5, changed)
     close.set()
     await asyncio.wait_for(second, timeout=5)
 
     assert live.id in lines[0]
-    assert newer.id in lines[1]
-    assert len(lines) == 2
-    assert offline.id not in "".join(lines)
-    assert [item["job_id"] for item in JobStore(path).notifications()] == [offline.id]
+    assert all(job.id in line for job, line in zip(offline, lines[1:4]))
+    assert newer.id in lines[4]
+    assert len(lines) == 5
+    assert "secret" not in "".join(lines)
+    assert JobStore(path).notifications() == []
+    assert len(JobStore(path).notifications(unread_only=False)) == 5
+
+    scanned = asyncio.Event()
+    original_query = JobStore.notifications_after
+
+    def query(self, event_id, *, limit=100):
+        result = original_query(self, event_id, limit=limit)
+        loop.call_soon_threadsafe(scanned.set)
+        return result
+
+    monkeypatch.setattr(JobStore, "notifications_after", query)
+    started = asyncio.Event()
+    close = asyncio.Event()
+    third = asyncio.create_task(one_session(started, close))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    await asyncio.wait_for(scanned.wait(), timeout=5)
+    close.set()
+    await asyncio.wait_for(third, timeout=5)
+    assert len(lines) == 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["presentation", "acknowledgement"])
+async def test_startup_delivery_failure_keeps_item_unread_for_restart(
+    tmp_path, monkeypatch, failure
+):
+    store = JobStore(tmp_path / "jobs.db")
+    job = store.create_job("secret=private")
+    assert store.cancel_job(job.id)
+    failed = asyncio.Event()
+    delivered = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    lines = []
+    original_ack = store.acknowledge_notification
+
+    def capture(message, **_kwargs):
+        if failure == "presentation" and not failed.is_set():
+            failed.set()
+            raise OSError("output unavailable")
+        lines.append(message)
+
+    def acknowledge(event_id):
+        if failure == "acknowledgement" and not failed.is_set():
+            loop.call_soon_threadsafe(failed.set)
+            raise sqlite3.OperationalError("temporary database lock")
+        result = original_ack(event_id)
+        loop.call_soon_threadsafe(delivered.set)
+        return result
+
+    monkeypatch.setattr(operations, "print", capture)
+    monkeypatch.setattr(store, "acknowledge_notification", acknowledge)
+    first = asyncio.create_task(operations.notify_cli(store, after_id=0))
+    try:
+        await asyncio.wait_for(failed.wait(), timeout=5)
+    finally:
+        first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+
+    assert [item["job_id"] for item in JobStore(store.path).notifications()] == [job.id]
+    assert JobStore(store.path).notifications(unread_only=False)[0]["read_at"] is None
+
+    second = asyncio.create_task(operations.notify_cli(store, after_id=0))
+    try:
+        await asyncio.wait_for(delivered.wait(), timeout=5)
+    finally:
+        second.cancel()
+        await asyncio.gather(second, return_exceptions=True)
+    assert len(lines) == (1 if failure == "presentation" else 2)
+    assert all(job.id in line and "private" not in line for line in lines)
+    assert JobStore(store.path).notifications() == []
+
+
+@pytest.mark.asyncio
+async def test_startup_query_and_new_notification_share_one_ordered_stream(
+    tmp_path, monkeypatch
+):
+    store = JobStore(tmp_path / "jobs.db")
+    offline = [store.create_job(f"offline {index}") for index in range(2)]
+    for job in offline:
+        assert store.cancel_job(job.id)
+
+    entered = asyncio.Event()
+    release = threading.Event()
+    changed = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    lines = []
+    acknowledged = []
+    original_query = store.notifications_after
+    original_ack = store.acknowledge_notification
+
+    def query(event_id):
+        if not entered.is_set():
+            loop.call_soon_threadsafe(entered.set)
+            release.wait(timeout=5)
+        return original_query(event_id)
+
+    def acknowledge(event_id):
+        result = original_ack(event_id)
+        acknowledged.append(event_id)
+        loop.call_soon_threadsafe(changed.set)
+        return result
+
+    def capture(message, **_kwargs):
+        lines.append(message)
+        changed.set()
+
+    monkeypatch.setattr(store, "notifications_after", query)
+    monkeypatch.setattr(store, "acknowledge_notification", acknowledge)
+    monkeypatch.setattr(operations, "print", capture)
+    task = asyncio.create_task(operations.notify_cli(store, after_id=0))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        live = store.create_job("live")
+        assert store.cancel_job(live.id)
+        release.set()
+        await _wait_for_count(lines, 3, changed)
+        await _wait_for_count(acknowledged, 3, changed)
+        assert all(job.id in line for job, line in zip((*offline, live), lines))
+        assert len(lines) == len(set(lines)) == 3
+        assert JobStore(store.path).notifications() == []
+    finally:
+        release.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

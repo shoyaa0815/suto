@@ -570,14 +570,16 @@ the CLI is open.
 /notifications ack 42
 ```
 
-`SUTO_NOTIFY_CLI=1` prints completed, failed, cancelled, approval-required, and
-retry-exhausted notifications committed while that CLI session is open. Each
-message includes the job ID and a fixed, safe summary;
-job prompts, results, and errors are not printed. The CLI acknowledges a shown
-item after printing it. Items created while the CLI is closed stay unread and
-are available through `/notifications`; automatic startup delivery is not yet
-enabled. If acknowledgement fails, the live task retries without printing the
-item again. External delivery of these job-lifecycle notifications is not included.
+`SUTO_NOTIFY_CLI=1` prints unread completed, failed, cancelled, approval-required,
+and retry-exhausted notifications when the CLI starts, then continues with new
+notifications during that session. Each message includes the job ID and a fixed,
+safe summary; job prompts, results, and errors are not printed. The CLI
+acknowledges a shown item after printing it. Delivery reads the persistent
+unread inbox in ID order, so items created while the CLI is closed appear on
+the next start. If printing fails, the item remains unread. If acknowledgement
+fails, the task retries without printing the item again. Closing the CLI before
+acknowledgement leaves the item unread for the next start. External delivery
+of these job-lifecycle notifications is not included.
 
 ```bash
 venv/bin/pytest -q

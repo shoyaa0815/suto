@@ -76,7 +76,7 @@ async def handle_operations(store, command: str, argument: str) -> bool:
     return True
 
 
-_LIVE_NOTIFICATION_SUMMARIES = {
+_NOTIFICATION_SUMMARIES = {
     'completed': 'Job completed.',
     'failed': 'Job failed.',
     'cancelled': 'Job cancelled.',
@@ -86,7 +86,7 @@ _LIVE_NOTIFICATION_SUMMARIES = {
 
 
 async def notify_cli(store, *, after_id: int):
-    """Show only notifications committed during this CLI session."""
+    """Deliver unread notifications after the cursor in ID order."""
     pending_ack = None
     while True:
         try:
@@ -95,7 +95,7 @@ async def notify_cli(store, *, after_id: int):
                 pending_ack = None
             events = await asyncio.to_thread(store.notifications_after, after_id)
             for event in events:
-                summary = _LIVE_NOTIFICATION_SUMMARIES.get(event['kind'])
+                summary = _NOTIFICATION_SUMMARIES.get(event['kind'])
                 if summary is not None:
                     print(
                         f"\n[suto notification #{event['id']}] "
