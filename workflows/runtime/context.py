@@ -5,6 +5,7 @@ from application.settings import env_float, env_int
 from permissions import Approval, PermissionEngine, PermissionPolicy
 
 from ..models import ActionType
+from ..errors import ErrorCode, WorkflowError, tag_error
 
 
 READ_ONLY_WORKSPACE_TOOLS = frozenset(
@@ -36,7 +37,7 @@ class ApprovalRequired(RuntimeError):
 
 
 class ExecutionLimitExceeded(RuntimeError):
-    pass
+    error_code = ErrorCode.QUOTA_EXCEEDED
 
 
 @dataclass(frozen=True)
@@ -72,10 +73,13 @@ class ExecutionContext:
 
     def __post_init__(self) -> None:
         if self.sandbox not in {"process", "bwrap"}:
-            raise ValueError("sandbox must be process or bwrap")
-        resolved = self.workspace.expanduser().resolve()
-        if not resolved.is_dir():
-            raise ValueError(f"workspace is not a directory: {resolved}")
+            raise WorkflowError(ErrorCode.INVALID_INPUT, "sandbox must be process or bwrap")
+        try:
+            resolved = self.workspace.expanduser().resolve()
+            if not resolved.is_dir():
+                raise WorkflowError(ErrorCode.WORKSPACE_INVALID, f"workspace is not a directory: {resolved}")
+        except PermissionError as error:
+            raise tag_error(error, ErrorCode.WORKSPACE_PERMISSION_DENIED)
         object.__setattr__(self, "workspace", resolved)
 
     def can_tool(self, name: str) -> bool:
@@ -84,7 +88,12 @@ class ExecutionContext:
 
     def require_tool(self, name: str) -> None:
         if not self.can_tool(name):
-            raise PermissionError(f"tool is not allowed for this job: {name}")
+            code = (
+                ErrorCode.COMMAND_DENIED if name in COMMAND_TOOLS else
+                ErrorCode.WORKSPACE_PERMISSION_DENIED if name in ALL_WORKSPACE_TOOLS else
+                ErrorCode.INTERNAL_ERROR
+            )
+            raise tag_error(PermissionError(f"tool is not allowed for this job: {name}"), code)
 
     def require_approval(
         self,
@@ -96,10 +105,22 @@ class ExecutionContext:
         kind = ActionType(action_type)
         engine = PermissionEngine(PermissionPolicy({item.value: rule for item, rule in ACTION_POLICIES.items()}))
         callback = self.approval_callback
-        engine.require(
-            kind.value,
-            approval=Approval(kind.value, action, summary, preview),
-            approval_callback=(
-                lambda request: callback(request.action_type, request.action, request.summary, request.preview)
-            ) if callback is not None else None,
-        )
+
+        def approve(request):
+            accepted = callback(request.action_type, request.action, request.summary, request.preview)
+            if accepted is not True:
+                raise tag_error(PermissionError(f"approval denied for {kind.value} action"),
+                                ErrorCode.APPROVAL_DENIED)
+            return True
+
+        try:
+            engine.require(
+                kind.value,
+                approval=Approval(kind.value, action, summary, preview),
+                approval_callback=approve if callback is not None else None,
+            )
+        except PermissionError as error:
+            if not hasattr(error, "error_code"):
+                code = ErrorCode.COMMAND_DENIED if kind == ActionType.COMMAND else ErrorCode.WORKSPACE_PERMISSION_DENIED
+                tag_error(error, code)
+            raise

@@ -10,6 +10,7 @@ import tomllib
 from typing import Any
 
 from application.automation import ApprovalService, AutomationService, JobService, ScheduleService
+from workflows.errors import ErrorCode, WorkflowError, normalize_error_code
 from application.skill_proposals import SkillProposalService
 from workflows.library.definitions import parse_parameter_value
 from workflows.models import MissedRunPolicy, ScheduleKind, SkillProposalStatus
@@ -45,6 +46,11 @@ class CommandOutcome:
 
 CommandHandler = Callable[[CommandContext, str], CommandOutcome]
 PROJECT_FILE = Path(__file__).resolve().parents[2] / "pyproject.toml"
+
+
+def _error_label(error: BaseException) -> str:
+    code = getattr(error, "error_code", None)
+    return f" [{normalize_error_code(code).value}]" if code is not None else ""
 
 
 def print_help(mode: str | None = None) -> None:
@@ -189,7 +195,8 @@ def _approval(context: CommandContext, argument: str) -> CommandOutcome:
             approval, job = service.get(approval_id)
         else:
             approval, job, decided, message = service.decide(approval_id, action == "allow")
-            print(f"Decision: {redact_text(message)}")
+            code = f" [{job.error_code}]" if job.error_code else ""
+            print(f"Decision{code}: {redact_text(message)}")
         _approval_details(approval, job)
     except ValueError as error:
         print(str(error))
@@ -203,7 +210,7 @@ def _parse_public_run(argument: str) -> tuple[str, str, bool, bool]:
     try:
         parts = shlex.split(argument)
     except ValueError:
-        raise ValueError(usage) from None
+        raise WorkflowError(ErrorCode.INVALID_INPUT, usage) from None
     workspace = "."
     allow_write = False
     allow_command = False
@@ -211,16 +218,16 @@ def _parse_public_run(argument: str) -> tuple[str, str, bool, bool]:
         option = parts.pop(0)
         if option == "--workspace":
             if not parts or parts[0].startswith("--"):
-                raise ValueError("--workspace requires a path")
+                raise WorkflowError(ErrorCode.INVALID_INPUT, "--workspace requires a path")
             workspace = parts.pop(0)
         elif option == "--allow-write":
             allow_write = True
         elif option == "--allow-command":
             allow_command = True
         else:
-            raise ValueError(f"unknown /run option: {option}")
+            raise WorkflowError(ErrorCode.INVALID_INPUT, f"unknown /run option: {option}")
     if not parts:
-        raise ValueError(usage)
+        raise WorkflowError(ErrorCode.INVALID_INPUT, usage)
     return " ".join(parts), workspace, allow_write, allow_command
 
 
@@ -233,10 +240,11 @@ def _run(context: CommandContext, argument: str) -> CommandOutcome:
             allow_write=allow_write, allow_command=allow_command,
         )
     except (ValueError, OSError) as error:
-        print(f"Cannot create job: {error}")
+        code = _error_label(error)
+        print(f"Cannot create job:{code} {redact_text(error)}")
     except sqlite3.IntegrityError as error:
-        message = str(error)
-        print("Cannot create job: quota reached" if "quota" in message or "rate limit" in message else "Cannot create job.")
+        print("Cannot create job: [QUOTA_EXCEEDED] quota reached"
+              if getattr(error, "error_code", None) == ErrorCode.QUOTA_EXCEEDED else "Cannot create job.")
     except sqlite3.Error:
         print("Cannot create job: storage error.")
     else:
@@ -269,6 +277,9 @@ def _status(context: CommandContext, argument: str) -> CommandOutcome:
             raise ValueError(f"Job not found: {job_id}")
         trigger_id = service.schedule_trigger_id(job)
         automation_version = service.automation_version(job)
+        metadata = service.result(job_id)
+        if metadata is None:
+            raise ValueError(f"Job not found: {job_id}")
     except ValueError as error:
         print(str(error))
         return CommandOutcome(handled=True)
@@ -276,19 +287,20 @@ def _status(context: CommandContext, argument: str) -> CommandOutcome:
         print("Cannot read job: storage error.")
         return CommandOutcome(handled=True)
     print(f"Job: {job.id}")
-    print(f"Status: {job.status.value}")
-    print(f"Attempt: {job.attempt_count} ({job.attempt_id or 'none'})")
+    print(f"Status: {metadata.status.value}")
+    print(f"Attempt: {job.attempt_count} ({metadata.attempt_id or 'none'})")
     print(f"Workspace: {job.workspace}")
-    print(f"Created: {job.created_at}")
-    print(f"Started: {job.started_at or 'none'}")
-    print(f"Finished: {job.finished_at or 'none'}")
+    print(f"Created: {metadata.created_at}")
+    print(f"Started: {metadata.started_at or 'none'}")
+    print(f"Finished: {metadata.finished_at or 'none'}")
     print(f"Automation version: {automation_version if automation_version is not None else 'none'}")
     print(f"Schedule trigger: {trigger_id if trigger_id is not None else 'none'}")
-    result = " ".join(redact_text(job.result).split()) if job.result else "none"
-    if len(result) > 200:
-        result = result[:197] + "..."
-    print(f"Result summary: {result}")
-    print(f"Safe error: {redact_text(job.error) if job.error else 'none'}")
+    print(f"Automation version ID: {metadata.automation_version_id or 'none'}")
+    print(f"Schedule: {metadata.schedule_id or 'none'}")
+    print(f"Retry count: {metadata.retry_count}")
+    print(f"Result summary: {metadata.result_summary or 'none'}")
+    print(f"Error code: {metadata.error_code or 'none'}")
+    print(f"Safe error: {metadata.safe_error_message or 'none'}")
     return CommandOutcome(handled=True)
 
 
@@ -501,11 +513,11 @@ def _schedule(context: CommandContext, argument: str) -> CommandOutcome:
         raise ValueError("usage: /schedule create|automation|upgrade|list|show|pause|resume|history ...")
     except (ValueError, OSError) as error:
         operation = "create automation schedule" if action == "automation" else f"{action or 'use'} schedule"
-        print(f"Cannot {operation}: {error}")
+        code = _error_label(error)
+        print(f"Cannot {operation}{code}: {error}")
     except sqlite3.IntegrityError as error:
-        message = str(error)
-        if "quota" in message or "rate limit" in message:
-            print("Cannot create schedule: quota reached")
+        if getattr(error, "error_code", None) == ErrorCode.QUOTA_EXCEEDED:
+            print("Cannot create schedule [QUOTA_EXCEEDED]: quota reached")
         elif action in {"create", "automation"}:
             print("Cannot create schedule: storage error.")
         else:
@@ -551,7 +563,7 @@ def _automation(context: CommandContext, argument: str) -> CommandOutcome:
             for assignment in assignments:
                 key, separator, value = assignment.partition("=")
                 if not separator or not key or key in parameters:
-                    raise ValueError("run parameters must be unique key=value pairs")
+                    raise WorkflowError(ErrorCode.INVALID_PARAMETER, "run parameters must be unique key=value pairs")
                 parameters[key] = parse_parameter_value(value)
             job, version = service.run(name, parameters)
             print(f"Automation: {name}")
@@ -569,10 +581,11 @@ def _automation(context: CommandContext, argument: str) -> CommandOutcome:
         else:
             raise ValueError(f"usage: /automation {action} ...")
     except (ValueError, OSError) as error:
-        print(f"Cannot {action} automation: {redact_text(error)}")
+        code = _error_label(error)
+        print(f"Cannot {action} automation{code}: {redact_text(error)}")
     except sqlite3.IntegrityError as error:
-        message = str(error)
-        print("Cannot run automation: quota reached" if "quota" in message or "rate limit" in message else "Cannot use automation: storage error.")
+        print("Cannot run automation: [QUOTA_EXCEEDED] quota reached"
+              if getattr(error, "error_code", None) == ErrorCode.QUOTA_EXCEEDED else "Cannot use automation: storage error.")
     except sqlite3.Error:
         print("Cannot use automation: storage error.")
     return CommandOutcome(handled=True)

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from ..models import AutomationVersion
+from ..errors import ErrorCode, WorkflowError, tag_error
 from ..storage.redaction import redact_text
 
 
@@ -53,9 +54,12 @@ def validate_name(name: str, label: str = "name") -> str:
 
 
 def validate_workspace(workspace: str | Path) -> str:
-    resolved = Path(workspace).expanduser().resolve()
-    if not resolved.is_dir():
-        raise ValueError(f"workspace is not a directory: {resolved}")
+    try:
+        resolved = Path(workspace).expanduser().resolve()
+        if not resolved.is_dir():
+            raise WorkflowError(ErrorCode.WORKSPACE_INVALID, f"workspace is not a directory: {resolved}")
+    except PermissionError as error:
+        raise tag_error(error, ErrorCode.WORKSPACE_PERMISSION_DENIED)
     return str(resolved)
 
 

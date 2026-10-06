@@ -143,6 +143,7 @@ class Job:
     parent_id: str | None = None
     options: dict = field(default_factory=dict)
     attempt_id: str | None = None
+    error_code: str | None = None
 
     @property
     def total_tokens(self) -> int:
@@ -157,6 +158,25 @@ class JobAttempt:
     status: JobStatus
     started_at: str
     finished_at: str | None
+    error_code: str | None = None
+    safe_error_message: str | None = None
+
+
+@dataclass(frozen=True)
+class JobResult:
+    job_id: str
+    attempt_id: str | None
+    status: JobStatus
+    result_summary: str | None
+    error_code: str | None
+    safe_error_message: str | None
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
+    automation_version_id: str | None
+    schedule_id: str | None
+    trigger_id: int | None
+    retry_count: int
 
 
 @dataclass(frozen=True)

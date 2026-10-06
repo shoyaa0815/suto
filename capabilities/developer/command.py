@@ -11,6 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from workflows.runtime.context import ExecutionContext
+from workflows.errors import ErrorCode, tag_error
 from .sandbox import sandbox_command
 
 
@@ -73,7 +74,8 @@ def _workspace_argument(context: ExecutionContext, value: str) -> str:
     try:
         relative = candidate.relative_to(context.workspace)
     except ValueError as error:
-        raise PermissionError(f"command path escapes workspace: {value}") from error
+        raise tag_error(PermissionError(f"command path escapes workspace: {value}"),
+                        ErrorCode.SANDBOX_VIOLATION) from error
     normalized = relative.as_posix() or "."
     return normalized + (separator + selector if separator else "")
 
@@ -269,7 +271,14 @@ def build_command_tools(
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     ) -> str:
         context.require_tool("run_workspace_command")
-        prepared = _prepare_command(context, command)
+        try:
+            prepared = _prepare_command(context, command)
+        except PermissionError as error:
+            if not hasattr(error, "error_code"):
+                tag_error(error, ErrorCode.COMMAND_DENIED)
+            raise
+        except ValueError as error:
+            raise tag_error(error, ErrorCode.INVALID_INPUT)
         timeout = min(max(int(timeout_seconds), 1), MAX_TIMEOUT_SECONDS)
         requested = [str(part) for part in command]
         command_preview = shlex.join(requested)

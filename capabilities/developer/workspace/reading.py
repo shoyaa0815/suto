@@ -2,7 +2,7 @@
 
 from workflows.runtime.context import ExecutionContext
 
-from .paths import relative_path, safe_path, sha256
+from .paths import relative_path, safe_path, sha256, workspace_boundary
 
 MAX_LIST_ENTRIES = 200
 MAX_READ_BYTES = 100_000
@@ -108,7 +108,7 @@ def build_workspace_read_tools(context: ExecutionContext) -> dict[str, object]:
         return "\n".join(matches) if matches else "no matches found"
 
     return {
-        "list_workspace_files": list_workspace_files,
-        "read_workspace_file": read_workspace_file,
-        "search_workspace": search_workspace,
+        "list_workspace_files": workspace_boundary(list_workspace_files),
+        "read_workspace_file": workspace_boundary(read_workspace_file),
+        "search_workspace": workspace_boundary(search_workspace),
     }

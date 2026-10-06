@@ -36,6 +36,7 @@ class ToolExecution:
     result: ToolResult
     elapsed_seconds: float
     reported_error: str | None = None
+    error_code: str | None = None
 
 
 async def _wait(awaitable: Awaitable[ToolResult], timeout: float | None) -> ToolResult:
@@ -101,6 +102,8 @@ class ToolExecutor:
                 ),
                 time.perf_counter() - started,
                 reported_error=f"tool failed: {name}",
+                error_code=str(error.error_code)
+                if isinstance(getattr(error, "error_code", None), str) else None,
             )
         return ToolExecution(
             "finished" if result.ok else "failed", result,

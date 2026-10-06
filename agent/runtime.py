@@ -227,7 +227,8 @@ class AgentRuntime:
                         await self._emit("tool.failed", run_id, session_id, {"status": "invalid_arguments"})
                         reason = f"invalid tool arguments: {call.name}: {error}"
                         await self.hooks.on_tool_finished(call, "failed", reason, reason, 0)
-                        return await self._stop("failed", f"tool failed: {call.name}", reason, run_id, session_id, usage)
+                        return await self._stop("failed", f"tool failed: {call.name}", reason, run_id, session_id, usage,
+                                                metadata={"error_code": "INVALID_INPUT"})
                     await self._emit("permission.requested", run_id, session_id)
                     try:
                         decision = self.permissions.decide(call.name)
@@ -311,6 +312,8 @@ class AgentRuntime:
                         return await self._stop(
                             "failed", f"tool failed: {call.name}",
                             execution.reported_error or reason, run_id, session_id, usage,
+                            metadata={"error_code": execution.error_code}
+                            if execution.error_code else None,
                         )
                     completed_tools.add(call.name)
                     await self._emit("tool.completed", run_id, session_id, {"tool_name": call.name, "duration_ms": round(execution.elapsed_seconds * 1000)})
@@ -339,7 +342,8 @@ class AgentRuntime:
             raise
 
     async def _stop(self, status: str, text: str, error: str | None, run_id: str,
-                    session_id: str | None, usage: dict[str, int]) -> AgentResult:
+                    session_id: str | None, usage: dict[str, int], *,
+                    metadata: dict[str, Any] | None = None) -> AgentResult:
         if self.state.status != RunState.FAILED:
             await self._transition(RunState.FAILED, run_id, session_id)
-        return AgentResult(session_id, text, status, dict(usage), error=error)
+        return AgentResult(session_id, text, status, dict(usage), metadata=metadata or {}, error=error)

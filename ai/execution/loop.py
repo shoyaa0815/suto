@@ -16,6 +16,8 @@ from tools.clarification import parse_request as parse_clarification_request
 from tools.registry import FunctionTool, ToolRegistry
 from skills import builtin_registry
 from workflows.runtime.context import ApprovalRequired, ExecutionLimitExceeded
+from workflows.runtime.context import ALL_WORKSPACE_TOOLS, COMMAND_TOOLS
+from workflows.errors import ErrorCode, tag_error
 
 from .. import config, response
 from ..providers.factory import build_model_router
@@ -43,9 +45,12 @@ class _LegacyHooks(RuntimeHooks):
         return await self.owner.guard.wait(awaitable)
 
     def limit_reason(self, tool_calls, *, pending_model=False, pending_tool=False):
-        return self.owner.guard.limit_reason(
+        reason = self.owner.guard.limit_reason(
             tool_calls, pending_model=pending_model, pending_tool=pending_tool
         )
+        if reason:
+            self.owner.failure_code = ErrorCode.QUOTA_EXCEEDED
+        return reason
 
     async def on_model_requested(self, iteration):
         await self.owner.progress.emit(
@@ -105,6 +110,11 @@ class _LegacyHooks(RuntimeHooks):
                                            usage=usage)
 
     async def on_tool_finished(self, call, status, content, error, elapsed_seconds):
+        if status == "blocked" and call.name not in self.owner.tools:
+            if call.name in COMMAND_TOOLS:
+                self.owner.failure_code = ErrorCode.COMMAND_DENIED
+            elif call.name in ALL_WORKSPACE_TOOLS:
+                self.owner.failure_code = ErrorCode.WORKSPACE_PERMISSION_DENIED
         arguments = (
             audit_tool_arguments(call.name, call.arguments)
             if isinstance(call.arguments, dict)
@@ -198,6 +208,7 @@ class ModelToolLoop:
         self.outcome = "completed"
         self.runtime = None
         self.plan = None
+        self.failure_code = None
 
     async def run(self):
         registry = ToolRegistry()
@@ -269,11 +280,20 @@ class ModelToolLoop:
                 DELEGATE_NAME, "Delegate one bounded task to a restricted child agent",
                 schemas[DELEGATE_NAME]["parameters"], manager.delegate,
             ))
-        result = await self.runtime.run(
-            self.agent_request,
-            self.messages,
-            generation_options={"think": self.think},
-        )
+        try:
+            result = await self.runtime.run(
+                self.agent_request,
+                self.messages,
+                generation_options={"think": self.think},
+            )
+        except (ApprovalRequired, ExecutionLimitExceeded):
+            raise
+        except Exception as error:
+            # The runtime emits model.failed at the provider await boundary.
+            # Failures in hooks, tool assembly, or storage remain unmapped.
+            if any(event.type == "model.failed" for event in self.runtime.events):
+                tag_error(error, ErrorCode.PROVIDER_ERROR)
+            raise
         if result.status == "blocked":
             self.outcome = f"blocked: {result.error}"
         elif result.status == "timed_out":
@@ -289,4 +309,5 @@ class ModelToolLoop:
             status=result.status,
             error=result.error,
             clarification=result.metadata.get("clarification"),
+            error_code=result.metadata.get("error_code") or self.failure_code,
         )

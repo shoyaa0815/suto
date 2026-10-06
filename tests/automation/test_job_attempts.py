@@ -104,6 +104,7 @@ def test_version_fourteen_migration_preserves_jobs_without_inventing_history(tmp
     store.claim_next_job()
     store.interrupt_job(job.id, "restart")
     with sqlite3.connect(path) as connection:
+        connection.execute("DROP TRIGGER job_attempt_error_metadata")
         connection.execute("DROP TRIGGER job_attempt_status")
         connection.execute("DROP TABLE job_attempts")
         connection.execute("ALTER TABLE jobs DROP COLUMN attempt_id")

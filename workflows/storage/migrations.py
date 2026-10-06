@@ -7,8 +7,30 @@ from pathlib import Path
 from uuid import uuid4
 
 from .locking import ProcessLock
+from ..errors import ErrorCode, SAFE_MESSAGES
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
+
+_SAFE_ATTEMPT_ERROR = "CASE NEW.error_code " + " ".join(
+    "WHEN '{code}' THEN '{message}'".format(code=code.value, message=message.replace("'", "''"))
+    for code, message in SAFE_MESSAGES.items()
+) + f" ELSE '{SAFE_MESSAGES[ErrorCode.INTERNAL_ERROR]}' END"
+
+STRUCTURED_JOB_ERRORS = """
+ALTER TABLE jobs ADD COLUMN error_code TEXT;
+ALTER TABLE job_attempts ADD COLUMN error_code TEXT;
+ALTER TABLE job_attempts ADD COLUMN safe_error_message TEXT;
+CREATE TRIGGER IF NOT EXISTS job_attempt_error_metadata
+AFTER UPDATE OF error, error_code ON jobs
+WHEN NEW.attempt_id IS NOT NULL
+ AND OLD.status IN ('running', 'waiting_approval', 'waiting_children')
+ AND NEW.status != 'running' BEGIN
+ UPDATE job_attempts SET error_code=NEW.error_code,
+  safe_error_message=CASE WHEN NEW.error_code IS NOT NULL OR NEW.error IS NOT NULL
+   THEN """ + _SAFE_ATTEMPT_ERROR + """ ELSE NULL END
+ WHERE id=NEW.attempt_id;
+END;
+"""
 
 HARDENING = """
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -549,6 +571,7 @@ def initialize_database(store) -> None:
                 (20, SKILL_DRAFT_PROPOSALS),
                 (21, REPEATED_WORKFLOW_PROPOSALS),
                 (22, PROPOSAL_RETENTION),
+                (23, STRUCTURED_JOB_ERRORS),
             ):
                 if number > SCHEMA_VERSION:
                     break
@@ -699,6 +722,17 @@ def initialize_database(store) -> None:
                             migration_script = ''
                         elif 'redacted' in columns:
                             raise RuntimeError('database has a partial proposal retention migration; restore a verified backup')
+                    if number == 23:
+                        # Additive nullable metadata can safely finish a restored
+                        # snapshot that already contains some of these columns.
+                        for table, column in (
+                            ('jobs', 'error_code'), ('job_attempts', 'error_code'),
+                            ('job_attempts', 'safe_error_message'),
+                        ):
+                            columns = {row[1] for row in connection.execute(f'PRAGMA table_info({table})')}
+                            if column in columns:
+                                migration_script = migration_script.replace(
+                                    f'ALTER TABLE {table} ADD COLUMN {column} TEXT;', '')
                     connection.executescript('BEGIN IMMEDIATE;\n' + migration_script)
                     connection.execute('INSERT OR REPLACE INTO schema_migrations VALUES (?,?)',
                                        (number, datetime.now(UTC).isoformat()))

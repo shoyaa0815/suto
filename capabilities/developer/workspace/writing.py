@@ -9,7 +9,7 @@ from pathlib import Path
 
 from workflows.runtime.context import ExecutionContext
 
-from .paths import relative_path, safe_path, sha256
+from .paths import relative_path, safe_path, sha256, workspace_boundary
 
 MAX_WRITE_BYTES = 100_000
 MAX_DIFF_CHARS = 50_000
@@ -130,4 +130,4 @@ def build_workspace_write_tools(
             f"after_sha256={after_sha256}\n{diff}{audit_warning}"
         )
 
-    return {"apply_workspace_patch": apply_workspace_patch}
+    return {"apply_workspace_patch": workspace_boundary(apply_workspace_patch)}

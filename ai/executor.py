@@ -17,6 +17,7 @@ from workflows.runtime.context import (
     ExecutionContext,
     ExecutionLimitExceeded,
 )
+from workflows.errors import ErrorCode, error_code_for_exception
 
 from . import client, config, prompting, response
 from .execution.limits import ExecutionGuard
@@ -91,6 +92,7 @@ async def execute_local_ai(
         status: str = "completed",
         error: str | None = None,
         clarification: dict[str, list[str] | str] | None = None,
+        error_code: str | None = None,
     ) -> AIExecutionResult:
         return AIExecutionResult(
             text=text,
@@ -100,12 +102,14 @@ async def execute_local_ai(
             output_tokens=progress.output_tokens,
             elapsed_seconds=time.perf_counter() - request_started,
             clarification=clarification,
+            error_code=error_code,
         )
 
     def blocked_result(reason: str) -> AIExecutionResult:
         nonlocal outcome
         outcome = f"blocked: {reason}"
-        return build_result(reason, status="blocked", error=reason)
+        return build_result(reason, status="blocked", error=reason,
+                            error_code=ErrorCode.QUOTA_EXCEEDED)
 
     try:
         mcp_config = load_mcp_config()
@@ -222,6 +226,7 @@ async def execute_local_ai(
             "can't connect check ai server",
             status="failed",
             error=outcome,
+            error_code=ErrorCode.PROVIDER_ERROR,
         )
     except (asyncio.TimeoutError, TimeoutError):
         outcome = f"timed out after {config.AI_TIMEOUT_SECONDS}s"
@@ -230,7 +235,8 @@ async def execute_local_ai(
             text = "AI ใช้เวลาประมวลผลนานเกินไป กรุณาลองใหม่อีกครั้ง"
         else:
             text = "AI processing timed out. Please try again."
-        return build_result(text, status="timed_out", error=outcome)
+        return build_result(text, status="timed_out", error=outcome,
+                            error_code=ErrorCode.PROVIDER_ERROR)
     except Exception as error:
         outcome = f"failed: {type(error).__name__}"
         config.debug(f"[ai] {type(error).__name__}")
@@ -243,6 +249,7 @@ async def execute_local_ai(
             text,
             status="failed",
             error=outcome,
+            error_code=error_code_for_exception(error),
         )
     finally:
         await mcp_manager.close()

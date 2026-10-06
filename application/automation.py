@@ -3,9 +3,10 @@
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from workflows.library.definitions import automation_options, load_definition_file, reject_detectable_secrets, validate_name
-from workflows.models import ApprovalRequest, Automation, AutomationVersion, Job, JobStatus, MissedRunPolicy, Schedule, ScheduleKind, TriggerEvent
-from workflows.runtime.checkpoints import checkpoint_error
+from workflows.library.definitions import automation_options, load_definition_file, reject_detectable_secrets, validate_name, validate_workspace
+from workflows.models import ApprovalRequest, Automation, AutomationVersion, Job, JobResult, JobStatus, MissedRunPolicy, Schedule, ScheduleKind, TriggerEvent
+from workflows.errors import ErrorCode, WorkflowError, tag_error
+from workflows.runtime.checkpoints import checkpoint_failure
 from workflows.runtime.scheduler import Scheduler
 from workflows.storage.store import JobStore
 
@@ -28,6 +29,9 @@ class JobService:
     def get(self, job_id: str) -> Job | None:
         return self.store.get_job(job_id)
 
+    def result(self, job_id: str) -> JobResult | None:
+        return self.store.get_job_result(job_id)
+
     def schedule_trigger_id(self, job: Job) -> int | None:
         return self.store.get_job_trigger_id(job.id) if job.source == "schedule" else None
 
@@ -42,12 +46,13 @@ class JobService:
         self, prompt: str, *, workspace: str | Path = ".",
         allow_write: bool = False, allow_command: bool = False,
     ) -> Job:
-        if not prompt.strip():
-            raise ValueError("/run requires a task")
-        reject_detectable_secrets(prompt, field="job prompt")
-        path = Path(workspace).expanduser().resolve()
-        if not path.is_dir():
-            raise ValueError(f"workspace is not a directory: {path}")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise WorkflowError(ErrorCode.INVALID_INPUT, "/run requires a task")
+        try:
+            reject_detectable_secrets(prompt, field="job prompt")
+        except ValueError as error:
+            raise tag_error(error, ErrorCode.INVALID_INPUT)
+        path = validate_workspace(workspace)
         job = self.store.create_job(
             prompt.strip(), source="cli", workspace=str(path),
             allow_write=allow_write, allow_command=allow_command,
@@ -73,8 +78,8 @@ class JobService:
         job = self._require_job(job_id)
         if job.status not in {JobStatus.INTERRUPTED, JobStatus.BLOCKED}:
             raise ValueError(f"job cannot be resumed from {job.status.value}")
-        if error := checkpoint_error(self.store, job, resuming=True):
-            raise ValueError(error)
+        if error := checkpoint_failure(self.store, job, resuming=True):
+            raise error
         if self.worker is not None:
             resumed = self.worker.resume(job_id)
         else:
@@ -207,14 +212,24 @@ class AutomationService:
         self.worker = worker
 
     def create(self, definition_file: str | Path) -> Automation:
-        return self.store.create_automation(**automation_options(load_definition_file(definition_file)))
+        try:
+            return self.store.create_automation(**automation_options(load_definition_file(definition_file)))
+        except ValueError as error:
+            if not hasattr(error, "error_code"):
+                tag_error(error, ErrorCode.INVALID_INPUT)
+            raise
 
     def update(self, name: str, definition_file: str | Path) -> AutomationVersion:
-        name = validate_name(name, "automation name")
-        options = automation_options(load_definition_file(definition_file), default_name=name)
-        if validate_name(options.pop("name"), "automation name") != name:
-            raise ValueError("definition name does not match automation name")
-        return self.store.revise_automation(name, **options)
+        try:
+            name = validate_name(name, "automation name")
+            options = automation_options(load_definition_file(definition_file), default_name=name)
+            if validate_name(options.pop("name"), "automation name") != name:
+                raise WorkflowError(ErrorCode.INVALID_INPUT, "definition name does not match automation name")
+            return self.store.revise_automation(name, **options)
+        except ValueError as error:
+            if not hasattr(error, "error_code"):
+                tag_error(error, ErrorCode.INVALID_INPUT)
+            raise
 
     def list_recent(self) -> list[Automation]:
         return self.store.list_automations()
@@ -222,10 +237,10 @@ class AutomationService:
     def show(self, name: str) -> tuple[Automation, AutomationVersion, list[str]]:
         automation = self.store.get_automation(name)
         if automation is None:
-            raise ValueError(f"automation not found: {name}")
+            raise WorkflowError(ErrorCode.AUTOMATION_NOT_FOUND, f"automation not found: {name}")
         version = self.store.get_current_automation_version(automation.id)
         if version is None:
-            raise ValueError(f"automation version not found: {name}")
+            raise WorkflowError(ErrorCode.AUTOMATION_VERSION_NOT_FOUND, f"automation version not found: {name}")
         skills = [skill for skill, _ in self.store.list_automation_skill_versions(version.id)]
         return automation, version, skills
 

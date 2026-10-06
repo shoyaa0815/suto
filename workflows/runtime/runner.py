@@ -18,9 +18,10 @@ from .context import (
     ExecutionLimitExceeded,
 )
 from ..models import Job, JobStatus, StepStatus
+from ..errors import ErrorCode, SAFE_MESSAGES, normalize_error_code, error_code_for_exception, safe_error_message
 from ..storage.store import JobStore
 from .options import job_limits
-from .checkpoints import checkpoint_error
+from .checkpoints import checkpoint_error, checkpoint_failure
 from tools.advanced import RETRIEVAL_TOOLS, SUBTASK_TOOLS
 
 AIExecutor = Callable[..., Awaitable[AIExecutionResult]]
@@ -171,12 +172,13 @@ class JobRunner:
             return True
 
         try:
-            if checkpoint_error := self._checkpoint_error(job):
+            if failure := checkpoint_failure(self.store, job):
                 self.store.block_job(
                     job.id,
-                    checkpoint_error,
+                    str(failure),
                     base_prompt_tokens,
                     base_output_tokens,
+                    error_code=failure.error_code,
                 )
                 return
             allowed_tools = READ_ONLY_WORKSPACE_TOOLS
@@ -218,7 +220,10 @@ class JobRunner:
             )
             while True:
                 if reason := budget_check():
-                    self.store.block_job(job.id, reason, base_prompt_tokens, base_output_tokens)
+                    self.store.block_job(
+                        job.id, reason, base_prompt_tokens, base_output_tokens,
+                        error_code=ErrorCode.QUOTA_EXCEEDED,
+                    )
                     return
                 changes_before_attempt = self.store.change_event_count(job.id)
                 commands_before_attempt = self.store.command_event_count(job.id)
@@ -239,6 +244,7 @@ class JobRunner:
                         0,
                         0,
                         0,
+                        error_code=ErrorCode.QUOTA_EXCEEDED,
                     )
                 elif remaining_tokens <= 0:
                     result = AIExecutionResult(
@@ -248,6 +254,7 @@ class JobRunner:
                         0,
                         0,
                         0,
+                        error_code=ErrorCode.QUOTA_EXCEEDED,
                     )
                 elif remaining_tool_calls <= 0:
                     result = AIExecutionResult(
@@ -257,6 +264,7 @@ class JobRunner:
                         0,
                         0,
                         0,
+                        error_code=ErrorCode.QUOTA_EXCEEDED,
                     )
                 else:
                     attempt_context = replace(
@@ -303,6 +311,7 @@ class JobRunner:
                             0,
                             0,
                             remaining_seconds,
+                            error_code=ErrorCode.QUOTA_EXCEEDED,
                         )
                 total_prompt_tokens = base_prompt_tokens + result.prompt_tokens
                 total_output_tokens = base_output_tokens + result.output_tokens
@@ -317,7 +326,7 @@ class JobRunner:
                 if not can_retry:
                     break
                 delay = self.retry_delays[retry_count]
-                reason = result.error or result.text or result.status
+                reason = SAFE_MESSAGES[normalize_error_code(result.error_code)]
                 self.store.record_retry(
                     job.id,
                     reason,
@@ -339,12 +348,17 @@ class JobRunner:
                 )
             raise
         except Exception as error:
-            self.store.fail_job(job.id, f"{type(error).__name__}: {error}")
+            self.store.fail_job(
+                job.id,
+                safe_error_message(error),
+                error_code=error_code_for_exception(error),
+            )
             return
 
         self.store.update_job_usage(job.id, total_prompt_tokens, total_output_tokens)
         if result.status == 'completed' and (reason := budget_check()):
-            self.store.block_job(job.id, reason, total_prompt_tokens, total_output_tokens)
+            self.store.block_job(job.id, reason, total_prompt_tokens, total_output_tokens,
+                                 error_code=ErrorCode.QUOTA_EXCEEDED)
             return
         if result.status == "waiting_approval":
             self.store.update_job_usage(
@@ -402,22 +416,28 @@ class JobRunner:
                 total_output_tokens,
             )
         elif result.status == "blocked":
+            code = normalize_error_code(result.error_code)
             self.store.block_job(
                 job.id,
-                result.error or result.text or "execution blocked",
+                SAFE_MESSAGES[code] if result.error_code is not None else (result.error or result.text or "Execution was blocked."),
                 total_prompt_tokens,
                 total_output_tokens,
+                error_code=code,
             )
         else:
+            exhausted = (
+                self._is_transient(result)
+                and retry_count >= len(self.retry_delays)
+                and bool(self.retry_delays)
+                and job.source != "schedule"
+            )
+            code = ErrorCode.RETRY_EXHAUSTED if exhausted else normalize_error_code(result.error_code)
             self.store.fail_job(
                 job.id,
-                result.error or result.text or result.status,
+                SAFE_MESSAGES[code] if result.error_code is not None or exhausted else
+                (result.error or result.text or "The job could not be completed."),
                 total_prompt_tokens,
                 total_output_tokens,
-                retry_exhausted=(
-                    self._is_transient(result)
-                    and retry_count >= len(self.retry_delays)
-                    and bool(self.retry_delays)
-                    and job.source != "schedule"
-                ),
+                retry_exhausted=exhausted,
+                error_code=code,
             )

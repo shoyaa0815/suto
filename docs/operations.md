@@ -257,7 +257,22 @@ attempt count and ID, timestamps, automation version reference or schedule
 trigger when present, result summary, and safe error. Cancellation is
 idempotent for queued, running, and approval-waiting jobs. Resume accepts only
 interrupted or blocked jobs after workspace checkpoint validation. The next
-worker claim creates a new attempt ID under the same job ID.
+worker claim creates a new attempt ID under the same job ID. `/status` also
+shows the durable `error_code` separately from its safe human-readable error;
+older jobs without a recorded code show `none`.
+
+`JobService.result(job_id)` exposes the same structured result snapshot: job and
+attempt IDs, status, bounded result summary, error code and safe error message,
+creation/start/finish timestamps, pinned automation version ID, schedule and
+latest trigger IDs, and retry count. Codes identify failures at their owning
+validation, permission, execution, or provider boundary; unclassified exceptions
+use `INTERNAL_ERROR` without exposing exception details. Existing exception
+types remain available to callers. Schema version 23 adds nullable job and
+attempt error metadata without inferring codes for historical rows. A new claim
+clears the current job error while preserving earlier attempt metadata. An
+expired approval retains `APPROVAL_EXPIRED` while waiting for the next claim;
+the job remains queued for a fresh approval. Quota rejection and unavailable
+worker ownership surface codes at admission/startup without failing waiting jobs.
 
 ```text
 /schedule create (--at <ISO> | --every <seconds> | --cron <expr>)
@@ -567,8 +582,9 @@ is used up. Existing `blocked` and `interrupted` items remain available. The
 `status` field continues to show the job state, and `read_at` records an
 acknowledgement. `/notifications` shows unread items; the store's
 `notifications(unread_only=False)` query includes acknowledged items until
-normal retention cleanup. Cleanup also removes unread items past the selected
-retention cutoff. Acknowledging an item twice has no effect. These
+normal retention cleanup. Cleanup preserves unread items regardless of age and
+removes acknowledged notifications past the selected retention cutoff.
+Acknowledging an item twice has no effect. These
 rows are derived from committed SQLite job transitions, independent of whether
 the CLI is open.
 

@@ -19,3 +19,4 @@ class AIExecutionResult:
     elapsed_seconds: float
     clarification: dict[str, list[str] | str] | None = None
     plan: Plan | None = None
+    error_code: str | None = None

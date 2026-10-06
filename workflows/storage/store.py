@@ -22,6 +22,7 @@ from ..models import (
     CommandEvent,
     Job,
     JobAttempt,
+    JobResult,
     JobEvent,
     JobStatus,
     JobStep,
@@ -36,6 +37,7 @@ from ..models import (
     TriggerEvent,
     TriggerStatus,
 )
+from ..errors import ErrorCode, SAFE_MESSAGES, WorkflowError, tag_error, normalize_error_code
 from .redaction import redact_text, redact_value
 from .runs import RunStore
 from .migrations import initialize_database
@@ -105,6 +107,10 @@ class JobStore(
         try:
             with connection:
                 yield connection
+        except sqlite3.IntegrityError as error:
+            if str(error) in {"job queue quota reached", "job submission rate limit reached"}:
+                tag_error(error, ErrorCode.QUOTA_EXCEEDED)
+            raise
         finally:
             connection.close()
 
@@ -127,6 +133,7 @@ class JobStore(
                     retry_count INTEGER NOT NULL DEFAULT 0,
                     result TEXT,
                     error TEXT,
+                    error_code TEXT,
                     prompt_tokens INTEGER NOT NULL DEFAULT 0,
                     output_tokens INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
@@ -380,6 +387,7 @@ class JobStore(
     def _to_job(row: sqlite3.Row | None) -> Job | None:
         if row is None:
             return None
+        code = row["error_code"] if "error_code" in row.keys() else None
         return Job(
             id=row["id"],
             prompt=row["prompt"],
@@ -402,12 +410,15 @@ class JobStore(
             parent_id=row["parent_id"],
             options=json.loads(row["options"]),
             attempt_id=row["attempt_id"],
+            error_code=normalize_error_code(code).value if code else None,
         )
 
     @staticmethod
     def _to_attempt(row: sqlite3.Row | None) -> JobAttempt | None:
         if row is None:
             return None
+        code = row["error_code"] if "error_code" in row.keys() else None
+        message = row["safe_error_message"] if "safe_error_message" in row.keys() else None
         return JobAttempt(
             id=row["id"],
             job_id=row["job_id"],
@@ -415,6 +426,8 @@ class JobStore(
             status=JobStatus(row["status"]),
             started_at=row["started_at"],
             finished_at=row["finished_at"],
+            error_code=normalize_error_code(code).value if code else None,
+            safe_error_message=SAFE_MESSAGES[normalize_error_code(code)] if code or message else None,
         )
 
     @staticmethod
@@ -650,8 +663,13 @@ class JobStore(
         options: dict | None = None,
     ) -> Job:
         if mode != "agent":
-            raise ValueError("only agent mode is supported")
-        options = validate_options(options)
+            raise WorkflowError(ErrorCode.INVALID_INPUT, "only agent mode is supported")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise WorkflowError(ErrorCode.INVALID_INPUT, "job requires a task")
+        try:
+            options = validate_options(options)
+        except ValueError as error:
+            raise tag_error(error, ErrorCode.INVALID_INPUT)
         options.setdefault("sandbox", "process")
         job_id = f"job_{uuid4().hex[:8]}"
         created_at = _now()
@@ -689,6 +707,34 @@ class JobStore(
                 (job_id,),
             ).fetchone()
         return self._to_job(row)
+
+    def get_job_result(self, job_id: str) -> JobResult | None:
+        """Read one consistent result snapshot from existing durable job state."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT jobs.*, parameters.automation_version_id,
+                   (SELECT id FROM trigger_history WHERE job_id=jobs.id
+                    ORDER BY id DESC LIMIT 1) AS trigger_id
+                   FROM jobs LEFT JOIN automation_run_parameters AS parameters
+                     ON parameters.job_id=jobs.id WHERE jobs.id=?""",
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        code = normalize_error_code(row["error_code"]) if row["error_code"] else None
+        summary = " ".join(redact_text(row["result"]).split()) if row["result"] else None
+        if summary and len(summary) > 200:
+            summary = summary[:197] + "..."
+        return JobResult(
+            job_id=row["id"], attempt_id=row["attempt_id"], status=JobStatus(row["status"]),
+            result_summary=summary, error_code=code.value if code else None,
+            safe_error_message=SAFE_MESSAGES[code or ErrorCode.INTERNAL_ERROR]
+            if code or row["error"] else None,
+            created_at=row["created_at"], started_at=row["started_at"], finished_at=row["finished_at"],
+            automation_version_id=row["automation_version_id"],
+            schedule_id=row["source_ref"] if row["source"] == "schedule" else None,
+            trigger_id=row["trigger_id"], retry_count=row["retry_count"],
+        )
 
     def list_job_attempts(self, job_id: str) -> list[JobAttempt]:
         with self._connect() as connection:
@@ -749,7 +795,7 @@ class JobStore(
             connection.execute(
                 """
                 UPDATE jobs
-                SET status = ?, started_at = ?, finished_at = NULL, error = NULL,
+                SET status = ?, started_at = ?, finished_at = NULL, error = NULL, error_code = NULL,
                     attempt_count = attempt_count + 1, attempt_id = ?
                 WHERE id = ? AND status = ?
                 """,
@@ -1494,10 +1540,11 @@ class JobStore(
                 )
                 connection.execute(
                     """
-                    UPDATE jobs SET status = ?, started_at = NULL, finished_at = NULL
+                    UPDATE jobs SET status = ?, error = 'Approval expired; a new approval is required.',
+                        error_code = ?, started_at = NULL, finished_at = NULL
                     WHERE id = ? AND status = ?
                     """,
-                    (JobStatus.QUEUED, job_id, JobStatus.WAITING_APPROVAL),
+                    (JobStatus.QUEUED, ErrorCode.APPROVAL_EXPIRED.value, job_id, JobStatus.WAITING_APPROVAL),
                 )
                 return False, "approval expired; job queued to request a new approval"
 
@@ -1522,7 +1569,7 @@ class JobStore(
                 connection.execute(
                     """
                     UPDATE jobs
-                    SET status = ?, error = NULL, started_at = NULL, finished_at = NULL
+                    SET status = ?, error = NULL, error_code = NULL, started_at = NULL, finished_at = NULL
                     WHERE id = ? AND status = ?
                     """,
                     (JobStatus.QUEUED, job_id, JobStatus.WAITING_APPROVAL),
@@ -1530,12 +1577,13 @@ class JobStore(
                 return True, f"approved {row['id']}; job queued"
             connection.execute(
                 """
-                UPDATE jobs SET status = ?, error = ?, finished_at = ?
+                UPDATE jobs SET status = ?, error = ?, error_code = ?, finished_at = ?
                 WHERE id = ? AND status = ?
                 """,
                 (
                     JobStatus.BLOCKED,
                     redact_text(f"approval rejected by {actor}: {row['action_summary']}"),
+                    ErrorCode.APPROVAL_DENIED.value,
                     now,
                     job_id,
                     JobStatus.WAITING_APPROVAL,
@@ -1588,7 +1636,7 @@ class JobStore(
             cursor = connection.execute(
                 """
                 UPDATE jobs
-                SET status = ?, result = ?, error = NULL,
+                SET status = ?, result = ?, error = NULL, error_code = NULL,
                     prompt_tokens = ?, output_tokens = ?, finished_at = ?
                 WHERE id = ? AND status = ?
                 """,
@@ -1612,18 +1660,30 @@ class JobStore(
         output_tokens: int = 0,
         *,
         retry_exhausted: bool = False,
+        error_code: ErrorCode | str = ErrorCode.INTERNAL_ERROR,
     ) -> bool:
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            retry_exhausted = retry_exhausted or bool(connection.execute(
+                """SELECT 1 FROM trigger_history AS history
+                   JOIN schedules ON schedules.id=history.schedule_id
+                   JOIN jobs ON jobs.id=history.job_id
+                   WHERE jobs.id=? AND jobs.source='schedule' AND history.status='created'
+                     AND history.attempt > schedules.retry_limit
+                     AND (schedules.retry_limit > 0 OR jobs.retry_count > 0)
+                   LIMIT 1""", (job_id,),
+            ).fetchone())
             cursor = connection.execute(
                 """
                 UPDATE jobs
-                SET status = ?, error = ?, prompt_tokens = ?,
+                SET status = ?, error = ?, error_code = ?, prompt_tokens = ?,
                     output_tokens = ?, finished_at = ?
                 WHERE id = ? AND status = ?
                 """,
                 (
                     JobStatus.FAILED,
                     redact_text(error),
+                    normalize_error_code(ErrorCode.RETRY_EXHAUSTED if retry_exhausted else error_code).value,
                     prompt_tokens,
                     output_tokens,
                     _now(),
@@ -1646,18 +1706,21 @@ class JobStore(
         reason: str,
         prompt_tokens: int = 0,
         output_tokens: int = 0,
+        *,
+        error_code: ErrorCode | str = ErrorCode.INTERNAL_ERROR,
     ) -> bool:
         with self._connect() as connection:
             cursor = connection.execute(
                 """
                 UPDATE jobs
-                SET status = ?, error = ?, prompt_tokens = ?,
+                SET status = ?, error = ?, error_code = ?, prompt_tokens = ?,
                     output_tokens = ?, finished_at = ?
                 WHERE id = ? AND status = ?
                 """,
                 (
                     JobStatus.BLOCKED,
                     redact_text(reason),
+                    normalize_error_code(error_code).value,
                     prompt_tokens,
                     output_tokens,
                     _now(),
@@ -1728,12 +1791,13 @@ class JobStore(
         with self._connect() as connection:
             cursor = connection.execute(
                 """
-                UPDATE jobs SET status = ?, error = ?, finished_at = ?
+                UPDATE jobs SET status = ?, error = ?, error_code = ?, finished_at = ?
                 WHERE id = ? AND status = ?
                 """,
                 (
                     JobStatus.INTERRUPTED,
                     redact_text(reason),
+                    ErrorCode.INTERRUPTED.value,
                     _now(),
                     job_id,
                     JobStatus.RUNNING,
@@ -1759,7 +1823,7 @@ class JobStore(
             cursor = connection.execute(
                 """
                 UPDATE jobs
-                SET status = ?, error = NULL, started_at = NULL, finished_at = NULL
+                SET status = ?, error = NULL, error_code = NULL, started_at = NULL, finished_at = NULL
                 WHERE id = ? AND status IN (?, ?)
                 """,
                 (JobStatus.QUEUED, job_id, JobStatus.INTERRUPTED, JobStatus.BLOCKED),
@@ -1773,11 +1837,12 @@ class JobStore(
                 cursor = connection.execute(
                     """
                     UPDATE jobs
-                    SET status = ?, finished_at = ?
+                    SET status = ?, error = 'Request cancelled.', error_code = ?, finished_at = ?
                     WHERE id = ? AND status IN (?, ?, ?, ?, ?)
                     """,
                     (
                         JobStatus.CANCELLED,
+                        ErrorCode.CANCELLED.value,
                         _now(),
                         target_id,
                         JobStatus.QUEUED,
@@ -1849,12 +1914,13 @@ class JobStore(
             cursor = connection.execute(
                 """
                 UPDATE jobs
-                SET status = ?, error = ?, finished_at = ?
+                SET status = ?, error = ?, error_code = ?, finished_at = ?
                 WHERE status = ?
                 """,
                 (
                     JobStatus.INTERRUPTED,
                     "worker stopped before job completed; safe resume is available",
+                    ErrorCode.INTERRUPTED.value,
                     _now(),
                     JobStatus.RUNNING,
                 ),
@@ -1975,12 +2041,24 @@ class JobStore(
         ).fetchone()
         version = JobStore._to_automation_version(row)
         if version is None:
-            raise ValueError(f"automation version not found: {name} {target_version}")
-        values = validate_parameters(version.parameter_schema, parameters)
-        reject_detectable_secrets(values, field="automation parameters")
+            exists = connection.execute(
+                "SELECT 1 FROM automations WHERE name=? COLLATE NOCASE", (name,)
+            ).fetchone()
+            raise WorkflowError(
+                ErrorCode.AUTOMATION_VERSION_NOT_FOUND if exists else ErrorCode.AUTOMATION_NOT_FOUND,
+                f"automation version not found: {name} {target_version}",
+            )
+        try:
+            values = validate_parameters(version.parameter_schema, parameters)
+        except ValueError as error:
+            raise WorkflowError(ErrorCode.INVALID_PARAMETER, str(error)) from error
+        try:
+            reject_detectable_secrets(values, field="automation parameters")
+        except ValueError as error:
+            raise tag_error(error, ErrorCode.INVALID_PARAMETER)
         workspace = validate_workspace(version.workspace)
         if workspace != version.workspace:
-            raise ValueError("automation workspace has changed")
+            raise WorkflowError(ErrorCode.WORKSPACE_INVALID, "automation workspace has changed")
         skill_rows = connection.execute(
             """SELECT links.skill_version_id, skills.id AS existing_skill
                FROM automation_version_skills AS links
@@ -1989,7 +2067,7 @@ class JobStore(
             (version.id,),
         ).fetchall()
         if any(item["existing_skill"] is None for item in skill_rows):
-            raise ValueError("automation skill reference is invalid")
+            raise WorkflowError(ErrorCode.SKILL_NOT_FOUND, "automation skill reference is invalid")
         return (
             row["automation_name"], version.id, version.version,
             json.dumps(values, ensure_ascii=False, sort_keys=True, allow_nan=False),
@@ -2373,7 +2451,7 @@ class JobStore(
             updated = connection.execute(
                 """
                 UPDATE jobs SET status = ?, retry_count = retry_count + 1,
-                    result = NULL, error = NULL, started_at = NULL,
+                    result = NULL, error = NULL, error_code = NULL, started_at = NULL,
                     finished_at = NULL
                 WHERE id = ? AND status = ?
                 """,
@@ -2441,7 +2519,7 @@ class JobStore(
                 "SELECT * FROM skills WHERE name = ? COLLATE NOCASE", (name,)
             ).fetchone()
             if skill is None:
-                raise ValueError(f"skill not found: {name}")
+                raise WorkflowError(ErrorCode.SKILL_NOT_FOUND, f"skill not found: {name}")
             version = int(skill["current_version"]) + 1
             version_id = f"skv_{uuid4().hex[:8]}"
             connection.execute(
@@ -2574,7 +2652,7 @@ class JobStore(
                 "SELECT * FROM automations WHERE name = ? COLLATE NOCASE", (name,)
             ).fetchone()
             if automation is None:
-                raise ValueError(f"automation not found: {name}")
+                raise WorkflowError(ErrorCode.AUTOMATION_NOT_FOUND, f"automation not found: {name}")
             version = int(automation["current_version"]) + 1
             version_id = f"av_{uuid4().hex[:8]}"
             skill_ids = self._resolve_skill_versions(connection, skill_names or [])
@@ -2621,7 +2699,7 @@ class JobStore(
                 (name,),
             ).fetchone()
             if row is None:
-                raise ValueError(f"skill not found: {name}")
+                raise WorkflowError(ErrorCode.SKILL_NOT_FOUND, f"skill not found: {name}")
             resolved.append(row["id"])
         return resolved
 
@@ -2759,12 +2837,24 @@ class JobStore(
             ).fetchone()
             version = self._to_automation_version(row)
             if version is None:
-                raise ValueError(f"automation not found: {name}")
-            values = validate_parameters(version.parameter_schema, parameters)
-            reject_detectable_secrets(values, field="automation parameters")
+                exists = connection.execute(
+                    "SELECT 1 FROM automations WHERE name=? COLLATE NOCASE", (name,)
+                ).fetchone()
+                raise WorkflowError(
+                    ErrorCode.AUTOMATION_VERSION_NOT_FOUND if exists else ErrorCode.AUTOMATION_NOT_FOUND,
+                    f"automation not found: {name}",
+                )
+            try:
+                values = validate_parameters(version.parameter_schema, parameters)
+            except ValueError as error:
+                raise WorkflowError(ErrorCode.INVALID_PARAMETER, str(error)) from error
+            try:
+                reject_detectable_secrets(values, field="automation parameters")
+            except ValueError as error:
+                raise tag_error(error, ErrorCode.INVALID_PARAMETER)
             workspace = validate_workspace(version.workspace)
             if workspace != version.workspace:
-                raise ValueError("automation workspace has changed")
+                raise WorkflowError(ErrorCode.WORKSPACE_INVALID, "automation workspace has changed")
             skills = connection.execute(
                 """SELECT COUNT(*) FROM automation_version_skills AS links
                    JOIN skill_versions AS versions ON versions.id = links.skill_version_id
@@ -2776,7 +2866,7 @@ class JobStore(
                 (version.id,),
             ).fetchone()[0]
             if skills != expected:
-                raise ValueError("automation skill reference is invalid")
+                raise WorkflowError(ErrorCode.SKILL_NOT_FOUND, "automation skill reference is invalid")
             if type(version.allow_write) is not bool or type(version.allow_command) is not bool:
                 raise ValueError("invalid permission ceiling")
             prompt = render_prompt(version.prompt_template, version.parameter_schema, values)

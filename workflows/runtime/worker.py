@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from ..models import Job, JobStatus
+from ..errors import ErrorCode, tag_error
 from .runner import JobRunner
 from .scheduler import Scheduler
 from ..storage.store import JobStore
@@ -113,7 +114,8 @@ class AutomationWorker:
         self._started = True
         try:
             if not self._lock.acquire():
-                raise RuntimeError('another worker already owns this database')
+                raise tag_error(RuntimeError('another worker already owns this database'),
+                                ErrorCode.WORKER_UNAVAILABLE)
             self.store.recover_interrupted_jobs()
             last_heartbeat = 0.0
             last_cleanup = 0.0
@@ -131,8 +133,12 @@ class AutomationWorker:
                             task.result()
                         except asyncio.CancelledError:
                             pass
-                        except Exception as error:
-                            self.store.fail_job(job_id, f'worker runner failed: {error}')
+                        except Exception:
+                            self.store.fail_job(
+                                job_id,
+                                "The job could not be completed.",
+                                error_code=ErrorCode.INTERNAL_ERROR,
+                            )
                         del self._tasks[job_id]
                 try:
                     self.scheduler.tick()
