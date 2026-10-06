@@ -89,6 +89,11 @@ class ExecutionContext:
         engine = PermissionEngine(PermissionPolicy({tool: "allow" for tool in self.allowed_tools}))
         return engine.decide(name).allowed
 
+    def require_workspace(self) -> None:
+        if self.workspace.resolve() != self.workspace:
+            raise tag_error(PermissionError("job workspace identity has changed"),
+                            ErrorCode.SANDBOX_VIOLATION)
+
     def require_tool(self, name: str) -> None:
         if not self.can_tool(name):
             code = (
@@ -97,6 +102,7 @@ class ExecutionContext:
                 ErrorCode.INTERNAL_ERROR
             )
             raise tag_error(PermissionError(f"tool is not allowed for this job: {name}"), code)
+        self.require_workspace()
 
     def require_approval(
         self,
@@ -105,6 +111,7 @@ class ExecutionContext:
         summary: str,
         preview: str,
     ) -> None:
+        self.require_workspace()
         kind = ActionType(action_type)
         engine = PermissionEngine(PermissionPolicy({item.value: rule for item, rule in ACTION_POLICIES.items()}))
         callback = self.approval_callback
@@ -122,6 +129,7 @@ class ExecutionContext:
                 approval=Approval(kind.value, action, summary, preview),
                 approval_callback=approve if callback is not None else None,
             )
+            self.require_workspace()
         except PermissionError as error:
             if not hasattr(error, "error_code"):
                 code = ErrorCode.COMMAND_DENIED if kind == ActionType.COMMAND else ErrorCode.WORKSPACE_PERMISSION_DENIED

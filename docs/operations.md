@@ -278,6 +278,9 @@ Execution and resume revalidate the canonical workspace pinned at submission.
 Replacing that path with a symlink to another directory blocks the job with
 `SANDBOX_VIOLATION` before provider or tool execution, including after restart.
 Older jobs with relative workspace paths retain their existing resolution policy.
+Tools also recheck that resolved root before access and after exact approval,
+so replacing the directory during a model round or approval cannot redirect
+an approved command into another directory.
 
 When child jobs need attention, the blocked parent records the first failed
 child's error code in creation order (then job ID), or `INTERNAL_ERROR` for

@@ -276,3 +276,30 @@ def test_resume_rejects_rebound_workspace_without_checkpoint_changes(tmp_path):
     assert caught.value.error_code == ErrorCode.SANDBOX_VIOLATION
     assert reopened.get_job(job.id).status == JobStatus.INTERRUPTED
     assert reopened.list_job_attempts(job.id)[0].id == claimed.attempt_id
+
+
+async def test_running_job_rejects_command_if_workspace_changes_during_model_round(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    store = JobStore(tmp_path / "jobs.db")
+    job = JobService(store).submit("inspect git status", workspace=workspace, allow_command=True)
+
+    async def chat(session, messages, schemas, think=False):
+        workspace.rename(tmp_path / "original-workspace")
+        workspace.symlink_to(outside, target_is_directory=True)
+        return {"message": {"content": "", "tool_calls": [{"function": {
+            "name": "run_workspace_command",
+            "arguments": {"command": ["git", "status", "--short"]},
+        }}]}}
+
+    _fake_provider(monkeypatch, chat)
+    await JobRunner(store).run(store.claim_next_job())
+    persisted = JobStore(store.path)
+    result = persisted.get_job_result(job.id)
+    assert result.status == JobStatus.FAILED
+    assert result.error_code == ErrorCode.SANDBOX_VIOLATION
+    assert persisted.list_job_attempts(job.id)[0].error_code == ErrorCode.SANDBOX_VIOLATION
+    assert persisted.list_command_events(job.id) == []
+    assert persisted.latest_approval(job.id) is None

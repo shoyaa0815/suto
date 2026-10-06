@@ -432,3 +432,39 @@ def test_child_failure_persists_parent_error_and_attempt_after_restart(tmp_path,
     assert reopened.list_job_attempts(parent.id)[0].safe_error_message == result.safe_error_message
     assert any(item["job_id"] == parent.id and item["status"] == "blocked"
                for item in reopened.notifications())
+
+
+@pytest.mark.parametrize("replace_during_approval", [False, True])
+async def test_command_rechecks_pinned_workspace_before_side_effect(tmp_path, monkeypatch, replace_during_approval):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    approvals = []
+    processes = []
+
+    def rebind():
+        workspace.rename(tmp_path / "original-workspace")
+        workspace.symlink_to(outside, target_is_directory=True)
+
+    def approve(*args):
+        approvals.append(args)
+        if replace_during_approval:
+            rebind()
+        return True
+
+    async def spawn(*args, **kwargs):
+        processes.append(kwargs)
+        raise AssertionError("no process may be started in the rebound workspace")
+
+    context = ExecutionContext("job", workspace, allowed_tools=COMMAND_TOOLS,
+                               workspace_is_pinned=True, approval_callback=approve)
+    tools = build_command_tools(context)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    if not replace_during_approval:
+        rebind()
+    with pytest.raises(PermissionError) as caught:
+        await tools["run_workspace_command"](["git", "status", "--short"])
+    assert error_code_for_exception(caught.value) == ErrorCode.SANDBOX_VIOLATION
+    assert len(approvals) == int(replace_during_approval)
+    assert processes == []
