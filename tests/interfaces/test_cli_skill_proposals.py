@@ -54,3 +54,30 @@ def test_cli_reject_delete_and_invalid_commands(tmp_path, capsys):
     assert "pending" in capsys.readouterr().out
     assert JobStore(path).list_skills() == []
     assert service.get(draft.id).instructions == ""
+
+
+def test_cli_detection_only_creates_a_pending_proposal(tmp_path, capsys):
+    store = JobStore(tmp_path / "detect.db")
+    store.create_automation("daily", "Review {{item}}", tmp_path,
+                            {"item": {"type": "string", "required": True}})
+    jobs = []
+    for index in range(3):
+        job, _ = store.create_automation_job("daily", {"item": f"item {index}"})
+        assert store.claim_next_job().id == job.id
+        assert store.complete_job(job.id, "done", 0, 0)
+        jobs.append(job)
+    with store._connect() as connection:
+        for index, job in enumerate(jobs):
+            connection.execute(
+                "UPDATE jobs SET finished_at=? WHERE id=?",
+                (f"2026-08-0{index + 1}T12:00:00+00:00", job.id),
+            )
+    context = CommandContext(store, None, "conversation", "agent")
+
+    assert handle_command(context, "/skill-proposal detect").handled
+    output = capsys.readouterr().out
+    assert "pending review" in output
+    assert "at least 3 completed runs across at least 2 UTC dates" in output
+    assert "/skill-proposal show" in output
+    assert len(store.list_skill_proposals()) == 1
+    assert store.list_skills() == []

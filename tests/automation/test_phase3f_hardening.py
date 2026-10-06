@@ -60,7 +60,8 @@ def test_proposal_keeps_only_review_content_and_delete_scrubs_it(tmp_path):
     draft = service.create("review", "Summarize the completed work.", sources)
     with sqlite3.connect(path) as db:
         row = db.execute("SELECT * FROM skill_draft_proposals WHERE id=?", (draft.id,)).fetchone()
-        assert len(row) == 7
+        assert len(row) == 8
+        assert row[-1] is None
         stored = json.dumps(row)
         assert "private raw result" not in stored
         assert "private prompt" not in stored

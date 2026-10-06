@@ -87,6 +87,11 @@ the file format and tool rules.
 
 Review saved draft automation Skills with `/skill-proposal list`,
 `/skill-proposal show <id>`, and `/skill-proposal history <id>`.
+Run `/skill-proposal detect` to inspect completed saved-automation runs and
+create review-only proposals when one pinned automation version completed at
+least three runs across at least two UTC dates. Detection reads execution
+metadata only and stores three source job IDs as provenance; it does not copy
+prompts, results, parameters, or conversation history into proposal data.
 Use `/skill-proposal approve <id>`, `/skill-proposal reject <id>`, or
 `/skill-proposal delete <id>` to decide a draft. Approval saves a new versioned
 Skill without activating it.

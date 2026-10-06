@@ -13,6 +13,10 @@ class SkillProposalService:
     ) -> SkillDraftProposal:
         return self.store.create_skill_proposal(name, instructions, source_job_ids)
 
+    def detect_repeated(self) -> list[tuple[SkillDraftProposal, bool, int]]:
+        """Propose repeated saved-automation workflows for explicit review."""
+        return self.store.detect_repeated_workflow_proposals()
+
     def get(self, proposal_id: str) -> SkillDraftProposal | None:
         return self.store.get_skill_proposal(proposal_id)
 

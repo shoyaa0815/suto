@@ -114,7 +114,8 @@ def test_sql_guards_and_write_failure_roll_back(tmp_path):
     with service.store._connect() as connection:
         with pytest.raises(sqlite3.IntegrityError, match="must start pending"):
             connection.execute(
-                "INSERT INTO skill_draft_proposals VALUES "
+                "INSERT INTO skill_draft_proposals "
+                "(id,name,instructions,status,source_job_ids,created_at,updated_at) VALUES "
                 "('invalid','review','text','approved','[]','now','now')"
             )
         with pytest.raises(sqlite3.IntegrityError, match="invalid skill proposal transition"):

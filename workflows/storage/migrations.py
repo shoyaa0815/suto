@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .locking import ProcessLock
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 HARDENING = """
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -435,6 +435,26 @@ BEGIN INSERT INTO skill_proposal_events(proposal_id,status,created_at)
  VALUES(NEW.id,NEW.status,NEW.updated_at); END;
 """
 
+REPEATED_WORKFLOW_PROPOSALS = """
+ALTER TABLE skill_draft_proposals ADD COLUMN detection_key TEXT;
+CREATE UNIQUE INDEX skill_draft_proposals_detection_key_idx
+ ON skill_draft_proposals(detection_key) WHERE detection_key IS NOT NULL;
+DROP TRIGGER skill_draft_proposals_transition;
+CREATE TRIGGER skill_draft_proposals_transition BEFORE UPDATE ON skill_draft_proposals
+WHEN NOT (
+ (OLD.status='pending' AND NEW.status IN ('approved','rejected','deleted')) OR
+ (OLD.status IN ('approved','rejected') AND NEW.status='deleted')
+) OR NEW.id!=OLD.id OR NEW.created_at!=OLD.created_at OR
+ NEW.detection_key IS NOT OLD.detection_key OR
+ (NEW.status!='deleted' AND (
+  NEW.name!=OLD.name OR NEW.instructions!=OLD.instructions OR
+  NEW.source_job_ids!=OLD.source_job_ids
+ )) OR (NEW.status='deleted' AND (
+  NEW.name!='' OR NEW.instructions!='' OR NEW.source_job_ids!='[]'
+ ))
+BEGIN SELECT RAISE(ABORT, 'invalid skill proposal transition'); END;
+"""
+
 
 def backup_database(source: Path, destination: Path) -> Path:
     source, destination = source.resolve(), destination.expanduser().absolute()
@@ -497,6 +517,7 @@ def initialize_database(store) -> None:
                 (18, SCHEDULED_AUTOMATION_SNAPSHOTS),
                 (19, JOB_RESULT_NOTIFICATIONS),
                 (20, SKILL_DRAFT_PROPOSALS),
+                (21, REPEATED_WORKFLOW_PROPOSALS),
             ):
                 if number > SCHEMA_VERSION:
                     break
@@ -616,6 +637,21 @@ def initialize_database(store) -> None:
                             migration_script = ''
                         elif any(markers):
                             raise RuntimeError('database has a partial skill proposal migration; restore a verified backup')
+                    if number == 21:
+                        columns = {row[1] for row in connection.execute(
+                            'PRAGMA table_info(skill_draft_proposals)')}
+                        index = connection.execute(
+                            "SELECT 1 FROM sqlite_master WHERE type='index' "
+                            "AND name='skill_draft_proposals_detection_key_idx'"
+                        ).fetchone()
+                        trigger = connection.execute(
+                            "SELECT sql FROM sqlite_master WHERE type='trigger' "
+                            "AND name='skill_draft_proposals_transition'"
+                        ).fetchone()
+                        if 'detection_key' in columns and index and trigger and 'detection_key' in trigger[0]:
+                            migration_script = ''
+                        elif 'detection_key' in columns or index:
+                            raise RuntimeError('database has a partial repeated workflow proposal migration; restore a verified backup')
                     connection.executescript('BEGIN IMMEDIATE;\n' + migration_script)
                     connection.execute('INSERT OR REPLACE INTO schema_migrations VALUES (?,?)',
                                        (number, datetime.now(UTC).isoformat()))

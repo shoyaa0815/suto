@@ -602,16 +602,25 @@ A skip means namespace isolation was not verified on that host. Run
 Linux host to exercise the integration tests. The `bwrap`
 setting never falls back to `process` when setup or namespace creation fails.
 
-## Draft Skill proposals (Phase 3D–3F)
+## Draft Skill proposals (Phase 3D–3G)
 
 Draft Skill proposals are stored separately from versioned Skills. A proposal
 contains a validated name, draft instructions, and the IDs of 2–50 distinct,
 completed jobs from one workspace. Job prompts, results, tool output, and
 permissions are not copied into proposals. Detectable secrets in draft
-instructions are rejected. Proposal creation remains an internal API; repeated
-work detection and automatic proposal generation are not enabled.
+instructions are rejected.
 
-The CLI supports `/skill-proposal list [pending|approved|rejected|deleted|all]`,
+`/skill-proposal detect` checks one pinned saved automation version for at least
+three completed runs across at least two UTC dates. It uses only job ID,
+completion time, workspace, and saved automation identity. It does not read
+prompts, results, parameters, conversation history, or indexed workspace
+content. A proposal contains generic instructions, three completed source job IDs,
+and an opaque workflow key used to prevent duplicate proposals. Detection does
+not create or change a Skill or its permissions. Repeated detection returns the
+existing proposal, including after restart.
+
+The CLI supports `/skill-proposal detect`,
+`/skill-proposal list [pending|approved|rejected|deleted|all]`,
 `/skill-proposal show <id>`, and `/skill-proposal history <id>` for review.
 `/skill-proposal approve <id>` explicitly saves a new versioned automation Skill
 and records the approval event in the same SQLite transaction. Approval
@@ -630,4 +639,5 @@ status and timestamp tombstone. Drafts persist until explicitly deleted;
 rejected and approved drafts are retained until deletion too. Proposal cleanup
 is manual. Approval rechecks source job provenance and fails if stored
 provenance is invalid or the source jobs are no longer completed in one
-workspace. This workflow does not enable automatic proposal generation.
+workspace. Detection never approves a proposal; every Skill publication still
+uses the explicit `/skill-proposal approve <id>` path.

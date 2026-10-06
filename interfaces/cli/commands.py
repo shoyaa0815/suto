@@ -84,6 +84,7 @@ def print_help(mode: str | None = None) -> None:
     print("  /skill activate <name>  activate a skill for this CLI session")
     print("  /skill deactivate <name>  deactivate a skill")
     print("  /skill-proposal list [pending|approved|rejected|deleted|all]")
+    print("  /skill-proposal detect  propose repeated saved-automation workflows for review")
     print("  /skill-proposal show|history|approve|reject|delete <proposal_id>")
     print("  /<skill-name> <message>  use a skill for one message")
     print("  /exit  exit suto")
@@ -722,7 +723,7 @@ def _skill(context: CommandContext, argument: str) -> CommandOutcome:
 
 
 def _skill_proposal(context: CommandContext, argument: str) -> CommandOutcome:
-    usage = ("usage: /skill-proposal list [pending|approved|rejected|deleted|all] "
+    usage = ("usage: /skill-proposal detect | list [pending|approved|rejected|deleted|all] "
              "or /skill-proposal show|history|approve|reject|delete <proposal_id>")
     parts = argument.split()
     if not parts:
@@ -731,7 +732,17 @@ def _skill_proposal(context: CommandContext, argument: str) -> CommandOutcome:
     action = parts[0]
     service = SkillProposalService(context.store)
     try:
-        if action == "list" and len(parts) in {1, 2}:
+        if action == "detect" and len(parts) == 1:
+            results = service.detect_repeated()
+            if not results:
+                print("No repeated saved-automation workflows met the threshold (3 completed runs across 2 UTC dates).")
+            for proposal, created, run_count in results:
+                if created:
+                    print(f"Draft proposal {proposal.id} is pending review: at least 3 completed runs across at least 2 UTC dates ({run_count} runs observed).")
+                else:
+                    print(f"Existing proposal {proposal.id} covers this workflow ({proposal.status.value}).")
+            print("Detection creates proposals only; review with /skill-proposal show and approve explicitly.")
+        elif action == "list" and len(parts) in {1, 2}:
             status_name = parts[1] if len(parts) == 2 else "pending"
             if status_name != "all" and status_name not in {item.value for item in SkillProposalStatus}:
                 print(usage)

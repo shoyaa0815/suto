@@ -1,5 +1,6 @@
 """Durable draft Skill proposals and atomic, explicit Skill publication."""
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -57,6 +58,103 @@ def _proposal(row: sqlite3.Row | None) -> SkillDraftProposal | None:
 
 
 class SkillProposalStore:
+    def detect_repeated_workflow_proposals(
+        self, minimum_runs: int = 3, minimum_utc_days: int = 2
+    ) -> list[tuple[SkillDraftProposal, bool, int]]:
+        """Create review-only proposals from repeated saved-automation runs.
+
+        Detection reads only completion metadata and the validated automation
+        name. It never reads job prompts, results, parameters, or conversation
+        history. Three successful runs of one pinned automation version,
+        spanning at least two UTC dates, are required; only three job IDs are
+        retained as proposal provenance.
+        """
+        if minimum_runs != 3 or minimum_utc_days != 2:
+            raise ValueError("repeated workflow thresholds are fixed at 3 runs across 2 UTC dates")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            candidates = connection.execute(
+                """SELECT jobs.workspace, versions.id AS automation_version_id,
+                          automations.name, COUNT(*) AS run_count
+                   FROM jobs
+                   JOIN automation_run_parameters AS runs ON runs.job_id=jobs.id
+                   JOIN automation_versions AS versions ON versions.id=runs.automation_version_id
+                   JOIN automations ON automations.id=versions.automation_id
+                   WHERE jobs.status='completed' AND jobs.finished_at IS NOT NULL
+                   GROUP BY jobs.workspace, versions.id
+                   HAVING COUNT(*) >= ? AND
+                          COUNT(DISTINCT substr(jobs.finished_at,1,10)) >= ?""",
+                (minimum_runs, minimum_utc_days),
+            ).fetchall()
+
+            results: list[tuple[SkillDraftProposal, bool, int]] = []
+            for candidate in candidates:
+                workspace = candidate["workspace"]
+                automation_version_id = candidate["automation_version_id"]
+                latest = connection.execute(
+                    """SELECT jobs.id, substr(jobs.finished_at,1,10) AS finished_day
+                       FROM jobs JOIN automation_run_parameters AS runs ON runs.job_id=jobs.id
+                       WHERE runs.automation_version_id=? AND jobs.workspace=?
+                         AND jobs.status='completed' AND jobs.finished_at IS NOT NULL
+                       ORDER BY jobs.finished_at DESC, jobs.id DESC LIMIT 1""",
+                    (automation_version_id, workspace),
+                ).fetchone()
+                second = connection.execute(
+                    """SELECT jobs.id FROM jobs
+                       JOIN automation_run_parameters AS runs ON runs.job_id=jobs.id
+                       WHERE runs.automation_version_id=? AND jobs.workspace=?
+                         AND jobs.status='completed' AND jobs.finished_at IS NOT NULL
+                         AND substr(jobs.finished_at,1,10)!=?
+                       ORDER BY jobs.finished_at DESC, jobs.id DESC LIMIT 1""",
+                    (automation_version_id, workspace, latest["finished_day"]),
+                ).fetchone()
+                third = connection.execute(
+                    """SELECT jobs.id FROM jobs
+                       JOIN automation_run_parameters AS runs ON runs.job_id=jobs.id
+                       WHERE runs.automation_version_id=? AND jobs.workspace=?
+                         AND jobs.status='completed' AND jobs.finished_at IS NOT NULL
+                         AND jobs.id NOT IN (?,?)
+                       ORDER BY jobs.finished_at DESC, jobs.id DESC LIMIT 1""",
+                    (automation_version_id, workspace, latest["id"], second["id"]),
+                ).fetchone()
+                source_job_ids = (latest["id"], second["id"], third["id"])
+
+                key_material = f"{automation_version_id}\0{workspace}".encode("utf-8")
+                detection_key = hashlib.sha256(key_material).hexdigest()
+                existing = connection.execute(
+                    "SELECT * FROM skill_draft_proposals WHERE detection_key=?",
+                    (detection_key,),
+                ).fetchone()
+                if existing is not None:
+                    results.append((_proposal(existing), False, candidate["run_count"]))
+                    continue
+
+                automation_name = candidate["name"]
+                name = f"{automation_name[:55].rstrip('-_')}-workflow"
+                instructions = (
+                    f"Candidate based on saved automation '{automation_name}'. "
+                    "This pattern had at least three completed runs of one "
+                    "pinned automation version across at least two UTC dates. "
+                    "Before using this Skill, review the saved automation and "
+                    "confirm its current steps and inputs. Keep work within the "
+                    "access provided to the current job, and ask the user to "
+                    "clarify missing scope or inputs."
+                )
+                proposal_id = f"skp_{uuid4().hex}"
+                timestamp = datetime.now(UTC).isoformat()
+                connection.execute(
+                    "INSERT INTO skill_draft_proposals "
+                    "(id,name,instructions,status,source_job_ids,created_at,updated_at,detection_key) "
+                    "VALUES (?,?,?,'pending',?,?,?,?)",
+                    (proposal_id, name, instructions, json.dumps(source_job_ids),
+                     timestamp, timestamp, detection_key),
+                )
+                proposal = _proposal(connection.execute(
+                    "SELECT * FROM skill_draft_proposals WHERE id=?", (proposal_id,),
+                ).fetchone())
+                results.append((proposal, True, candidate["run_count"]))
+        return results
+
     def approve_skill_proposal(self, proposal_id: str) -> SkillDraftProposal:
         """Publish a new versioned Skill and record approval in one transaction."""
         timestamp = datetime.now(UTC).isoformat()
@@ -122,8 +220,8 @@ class SkillProposalStore:
                 raise ValueError("source jobs must exist, be completed, and share a workspace")
             connection.execute(
                 "INSERT INTO skill_draft_proposals "
-                "(id,name,instructions,status,source_job_ids,created_at,updated_at) "
-                "VALUES (?,?,?,'pending',?,?,?)",
+                "(id,name,instructions,status,source_job_ids,created_at,updated_at,detection_key) "
+                "VALUES (?,?,?,'pending',?,?,?,NULL)",
                 (proposal_id, name, instructions, json.dumps(source_job_ids), timestamp, timestamp),
             )
             result = _proposal(connection.execute(
