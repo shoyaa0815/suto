@@ -10,8 +10,9 @@ import tomllib
 from typing import Any
 
 from application.automation import ApprovalService, AutomationService, JobService, ScheduleService
+from application.skill_proposals import SkillProposalService
 from workflows.library.definitions import parse_parameter_value
-from workflows.models import MissedRunPolicy, ScheduleKind
+from workflows.models import MissedRunPolicy, ScheduleKind, SkillProposalStatus
 from workflows.storage.redaction import redact_text
 from interfaces.cli import CLI_STORAGE_INTERFACE
 from interfaces.cli.operations import print_pending_reminders
@@ -82,6 +83,8 @@ def print_help(mode: str | None = None) -> None:
     print("  /skills  list available and active skills")
     print("  /skill activate <name>  activate a skill for this CLI session")
     print("  /skill deactivate <name>  deactivate a skill")
+    print("  /skill-proposal list [pending|approved|rejected|deleted|all]")
+    print("  /skill-proposal show|history|approve|reject|delete <proposal_id>")
     print("  /<skill-name> <message>  use a skill for one message")
     print("  /exit  exit suto")
 
@@ -718,6 +721,58 @@ def _skill(context: CommandContext, argument: str) -> CommandOutcome:
     return CommandOutcome(handled=True)
 
 
+def _skill_proposal(context: CommandContext, argument: str) -> CommandOutcome:
+    usage = ("usage: /skill-proposal list [pending|approved|rejected|deleted|all] "
+             "or /skill-proposal show|history|approve|reject|delete <proposal_id>")
+    parts = argument.split()
+    if not parts:
+        print(usage)
+        return CommandOutcome(handled=True)
+    action = parts[0]
+    service = SkillProposalService(context.store)
+    try:
+        if action == "list" and len(parts) in {1, 2}:
+            status_name = parts[1] if len(parts) == 2 else "pending"
+            if status_name != "all" and status_name not in {item.value for item in SkillProposalStatus}:
+                print(usage)
+                return CommandOutcome(handled=True)
+            status = None if status_name == "all" else SkillProposalStatus(status_name)
+            proposals = service.list(status)
+            if not proposals:
+                print("No Skill proposals.")
+            for proposal in proposals:
+                print(f"{proposal.id}  {proposal.status.value}  {redact_text(proposal.name)}")
+        elif len(parts) == 2 and action in {"show", "history", "approve", "reject", "delete"}:
+            proposal_id = parts[1]
+            if action == "history":
+                proposal = service.get(proposal_id)
+                if proposal is None:
+                    raise ValueError(f"skill proposal not found: {proposal_id}")
+                for event in service.history(proposal_id):
+                    print(f"{event.status.value}  {event.created_at}")
+            else:
+                proposal = (service.get(proposal_id) if action == "show"
+                            else getattr(service, action)(proposal_id))
+                if proposal is None:
+                    raise ValueError(f"skill proposal not found: {proposal_id}")
+                print(f"Proposal: {proposal.id}")
+                print(f"Status: {proposal.status.value}")
+                print(f"Name: {redact_text(proposal.name)}")
+                print(f"Instructions: {redact_text(proposal.instructions)}")
+                print(f"Source jobs: {', '.join(proposal.source_job_ids) or 'none'}")
+                print(f"Created: {proposal.created_at}")
+                print(f"Updated: {proposal.updated_at}")
+                if action == "approve":
+                    print("New versioned Skill saved; it is not activated.")
+        else:
+            print(usage)
+    except ValueError as error:
+        print(str(error))
+    except sqlite3.Error:
+        print("Cannot access Skill proposal: storage error.")
+    return CommandOutcome(handled=True)
+
+
 COMMAND_HANDLERS: dict[str, CommandHandler] = {
     "/help": _help,
     "/version": _version,
@@ -737,6 +792,7 @@ COMMAND_HANDLERS: dict[str, CommandHandler] = {
     "/reset": _reset,
     "/skills": _skills,
     "/skill": _skill,
+    "/skill-proposal": _skill_proposal,
 }
 
 

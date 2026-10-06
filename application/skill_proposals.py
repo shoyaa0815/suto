@@ -1,7 +1,4 @@
-"""Application boundary for reviewing draft Skill proposals.
-
-Approval records a decision only. Publishing a Skill is outside this boundary.
-"""
+"""Application boundary for reviewing and deciding draft Skill proposals."""
 
 from workflows.models import SkillDraftProposal, SkillProposalEvent, SkillProposalStatus
 from workflows.storage.store import JobStore
@@ -26,7 +23,7 @@ class SkillProposalService:
         return self.store.list_skill_proposal_events(proposal_id)
 
     def approve(self, proposal_id: str) -> SkillDraftProposal:
-        return self.store.transition_skill_proposal(proposal_id, SkillProposalStatus.APPROVED)
+        return self.store.approve_skill_proposal(proposal_id)
 
     def reject(self, proposal_id: str) -> SkillDraftProposal:
         return self.store.transition_skill_proposal(proposal_id, SkillProposalStatus.REJECTED)

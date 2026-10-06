@@ -60,3 +60,10 @@ restored when that session resumes. Each request resolves selected names,
 filters available tools, and gives the active instructions to
 `ContextManager`. Existing versioned automation skill instructions enter the
 same context path, while their storage and pinning behavior remains unchanged.
+
+Draft proposals for versioned automation Skills can be inspected with
+`/skill-proposal list`, `/skill-proposal show <id>`, and
+`/skill-proposal history <id>`. Explicit `/skill-proposal approve <id>` saves a
+new versioned Skill; `/skill-proposal reject <id>` and
+`/skill-proposal delete <id>` leave Skills untouched. Approval does not activate
+the Skill or add it to an automation. See [operations](operations.md#draft-skill-proposals-phase-3d3e).

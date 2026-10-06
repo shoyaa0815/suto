@@ -2407,28 +2407,29 @@ class JobStore(
     def create_skill(self, name: str, instructions: str) -> Skill:
         name = validate_name(name, "skill name")
         instructions = redact_text(validate_skill_instructions(instructions))
-        skill_id = f"skill_{uuid4().hex[:8]}"
-        version_id = f"skv_{uuid4().hex[:8]}"
-        timestamp = _now()
         try:
             with self._connect() as connection:
-                connection.execute(
-                    "INSERT INTO skills (id, name, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?)",
-                    (skill_id, name, timestamp, timestamp),
-                )
-                connection.execute(
-                    "INSERT INTO skill_versions "
-                    "(id, skill_id, version, instructions, created_at) "
-                    "VALUES (?, ?, 1, ?, ?)",
-                    (version_id, skill_id, instructions, timestamp),
-                )
+                self._insert_skill(connection, name, instructions, _now())
         except sqlite3.IntegrityError as error:
             raise ValueError(f"skill already exists: {name}") from error
         skill = self.get_skill(name)
         if skill is None:
             raise RuntimeError(f"failed to create skill: {name}")
         return skill
+
+    @staticmethod
+    def _insert_skill(connection: sqlite3.Connection, name: str, instructions: str,
+                      timestamp: str) -> None:
+        skill_id = f"skill_{uuid4().hex[:8]}"
+        connection.execute(
+            "INSERT INTO skills (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (skill_id, name, timestamp, timestamp),
+        )
+        connection.execute(
+            "INSERT INTO skill_versions (id, skill_id, version, instructions, created_at) "
+            "VALUES (?, ?, 1, ?, ?)",
+            (f"skv_{uuid4().hex[:8]}", skill_id, instructions, timestamp),
+        )
 
     def revise_skill(self, name: str, instructions: str) -> SkillVersion:
         name = validate_name(name, "skill name")

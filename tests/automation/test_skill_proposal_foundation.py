@@ -24,7 +24,7 @@ def _service(tmp_path):
     return SkillProposalService(store), tuple(job.id for job in jobs), path
 
 
-def test_proposal_persists_provenance_and_review_without_creating_skill(tmp_path):
+def test_proposal_persists_provenance_and_approval_creates_skill(tmp_path):
     service, source_ids, path = _service(tmp_path)
     draft = service.create("Review-Workflow", "Check the result.", source_ids)
     assert (draft.name, draft.instructions, draft.status, draft.source_job_ids) == (
@@ -40,7 +40,10 @@ def test_proposal_persists_provenance_and_review_without_creating_skill(tmp_path
     assert [event.status for event in SkillProposalService(JobStore(path)).history(draft.id)] == [
         SkillProposalStatus.PENDING, SkillProposalStatus.APPROVED,
     ]
-    assert JobStore(path).list_skills() == []
+    skill = JobStore(path).get_skill("review-workflow")
+    assert skill is not None
+    assert skill.current_version == 1
+    assert JobStore(path).get_current_skill_version(skill.id).instructions == "Check the result."
 
 
 def test_reject_delete_scrubs_draft_and_preserves_tombstone(tmp_path):
@@ -124,6 +127,7 @@ def test_sql_guards_and_write_failure_roll_back(tmp_path):
         service.approve(draft.id)
     assert JobStore(path).get_skill_proposal(draft.id) == draft
     assert [event.status for event in service.history(draft.id)] == [SkillProposalStatus.PENDING]
+    assert JobStore(path).list_skills() == []
     with service.store._connect() as connection:
         connection.execute("DROP TRIGGER reject_decision")
         connection.execute("""CREATE TRIGGER reject_draft BEFORE INSERT ON skill_draft_proposals

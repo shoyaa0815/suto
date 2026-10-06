@@ -600,18 +600,29 @@ A skip means namespace isolation was not verified on that host. Run
 Linux host to exercise the integration tests. The `bwrap`
 setting never falls back to `process` when setup or namespace creation fails.
 
-## Draft Skill proposals (Phase 3D)
+## Draft Skill proposals (Phase 3D–3E)
 
 Draft Skill proposals are stored separately from versioned Skills. A proposal
 contains a validated name, draft instructions, and the IDs of 2–50 distinct,
 completed jobs from one workspace. Job prompts, results, tool output, and
 permissions are not copied into proposals. Detectable secrets in draft
-instructions are rejected. This internal store and service do not detect
-repeated work, expose CLI approval commands, or create, revise, or activate a
-Skill. `approved` records a review decision only.
+instructions are rejected. Proposal creation remains an internal API; repeated
+work detection and automatic proposal generation are not enabled.
 
-The state path is `pending` to `approved`, `rejected`, or `deleted`; reviewed
-proposals may then become `deleted`. Every transition has a durable event.
+The CLI supports `/skill-proposal list [pending|approved|rejected|deleted|all]`,
+`/skill-proposal show <id>`, and `/skill-proposal history <id>` for review.
+`/skill-proposal approve <id>` explicitly saves a new versioned automation Skill
+and records the approval event in the same SQLite transaction. Approval
+revalidates the name and instructions, rejects tool or permission directives,
+and fails if the Skill name already exists. A failure leaves the proposal pending
+and creates no partial Skill. The new Skill is not added to an automation or
+activated in a CLI session. Skills remain subject to existing tool registration,
+job permissions, approval, and sandbox checks.
+
+`/skill-proposal reject <id>` and `/skill-proposal delete <id>` do not create or
+change a Skill. The state path is `pending` to `approved`, `rejected`, or
+`deleted`; reviewed proposals may then become `deleted`. Every transition has a
+durable event.
 Deletion clears the name, instructions, and source job IDs while retaining a
 status and timestamp tombstone. Drafts persist until explicitly deleted; this
-foundation does not enable automatic proposal generation or retention cleanup.
+workflow does not enable automatic proposal generation or retention cleanup.

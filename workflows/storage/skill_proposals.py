@@ -1,6 +1,7 @@
-"""Durable draft Skill proposals. No method here creates or enables a Skill."""
+"""Durable draft Skill proposals and atomic, explicit Skill publication."""
 
 import json
+import re
 import sqlite3
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -11,6 +12,25 @@ from ..library.definitions import (
     validate_skill_instructions,
 )
 from ..models import SkillDraftProposal, SkillProposalEvent, SkillProposalStatus
+
+
+_CAPABILITY_DIRECTIVE = re.compile(
+    r"(?im)^\s*(?:allowed_tools|recommended_tools|tool_access|permissions|"
+    r"allow_write|allow_command)\s*:|\b(?:bypass|disable|skip|ignore|grant|"
+    r"elevate|escalate)\b[^\n]{0,80}\b(?:permissions?|approvals?|sandbox|"
+    r"tool access)\b"
+)
+
+
+def _validate_publishable(name: str, instructions: str) -> tuple[str, str]:
+    name = validate_name(name, "skill name")
+    if not isinstance(instructions, str):
+        raise ValueError("skill instructions must be text")
+    instructions = validate_skill_instructions(instructions)
+    reject_detectable_secrets(instructions, field="skill proposal instructions")
+    if _CAPABILITY_DIRECTIVE.search(instructions):
+        raise ValueError("skill proposal cannot request tool access or permissions")
+    return name, instructions
 
 
 def _proposal(row: sqlite3.Row | None) -> SkillDraftProposal | None:
@@ -25,6 +45,33 @@ def _proposal(row: sqlite3.Row | None) -> SkillDraftProposal | None:
 
 
 class SkillProposalStore:
+    def approve_skill_proposal(self, proposal_id: str) -> SkillDraftProposal:
+        """Publish a new versioned Skill and record approval in one transaction."""
+        timestamp = datetime.now(UTC).isoformat()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM skill_draft_proposals WHERE id=?", (proposal_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"skill proposal not found: {proposal_id}")
+            if row["status"] != SkillProposalStatus.PENDING:
+                raise ValueError(f"skill proposal cannot transition from {row['status']} to approved")
+            name, instructions = _validate_publishable(row["name"], row["instructions"])
+            if connection.execute(
+                "SELECT 1 FROM skills WHERE name=? COLLATE NOCASE", (name,)
+            ).fetchone():
+                raise ValueError(f"skill already exists: {name}")
+            self._insert_skill(connection, name, instructions, timestamp)
+            connection.execute(
+                "UPDATE skill_draft_proposals SET status='approved',updated_at=? WHERE id=?",
+                (timestamp, proposal_id),
+            )
+        result = self.get_skill_proposal(proposal_id)
+        if result is None:
+            raise RuntimeError("failed to approve skill proposal")
+        return result
+
     def create_skill_proposal(
         self, name: str, instructions: str, source_job_ids: tuple[str, ...]
     ) -> SkillDraftProposal:
@@ -99,6 +146,8 @@ class SkillProposalStore:
         status = SkillProposalStatus(status)
         if status == SkillProposalStatus.PENDING:
             raise ValueError("skill proposal cannot return to pending")
+        if status == SkillProposalStatus.APPROVED:
+            raise ValueError("skill approval requires explicit publication")
         timestamp = datetime.now(UTC).isoformat()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")

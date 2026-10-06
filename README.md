@@ -85,6 +85,12 @@ and `/exit` remain available. Put personal skills in
 then use `/<name> <message>` for one request. See [skills](docs/skills.md) for
 the file format and tool rules.
 
+Review saved draft automation Skills with `/skill-proposal list`,
+`/skill-proposal show <id>`, and `/skill-proposal history <id>`.
+Use `/skill-proposal approve <id>`, `/skill-proposal reject <id>`, or
+`/skill-proposal delete <id>` to decide a draft. Approval saves a new versioned
+Skill without activating it.
+
 ## Automation CLI (Phase 1)
 
 Enter these commands at the Suto CLI prompt. `/run` saves a one-time job and
