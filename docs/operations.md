@@ -279,6 +279,11 @@ Replacing that path with a symlink to another directory blocks the job with
 `SANDBOX_VIOLATION` before provider or tool execution, including after restart.
 Older jobs with relative workspace paths retain their existing resolution policy.
 
+When child jobs need attention, the blocked parent records the first failed
+child's error code in creation order (then job ID), or `INTERNAL_ERROR` for
+unclassified historical failures. The parent attempt retains the same safe
+error metadata after restart.
+
 ```text
 /schedule create (--at <ISO> | --every <seconds> | --cron <expr>)
     [--timezone <zone>] [--workspace <path>] [--allow-write]

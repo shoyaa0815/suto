@@ -405,3 +405,30 @@ def test_structured_scheduled_result_exposes_all_fields_and_final_retry_code(tmp
     assert "Safe error: The job exhausted its retry allowance." in output
     assert f"Schedule: {schedule.id}" in output
     assert "Retry count: 1" in output
+
+
+@pytest.mark.parametrize("child_code, expected", [
+    (ErrorCode.PROVIDER_ERROR, ErrorCode.PROVIDER_ERROR),
+    (None, ErrorCode.INTERNAL_ERROR),
+])
+def test_child_failure_persists_parent_error_and_attempt_after_restart(tmp_path, child_code, expected):
+    store = JobStore(tmp_path / "jobs.db")
+    parent = store.create_job("inspect", workspace=str(tmp_path), options={"subtasks": True})
+    store.claim_next_job()
+    child = store.create_subtask(parent.id, "read data", key="read")
+    assert store.wait_for_children(parent.id)
+    store.claim_next_job()
+    store.fail_job(child.id, "provider unavailable", error_code=ErrorCode.PROVIDER_ERROR)
+    if child_code is None:
+        # Historical child failures may have no recorded category.
+        with store._connect() as db:
+            db.execute("UPDATE jobs SET error_code=NULL WHERE id=?", (child.id,))
+    store.reconcile_children()
+    reopened = JobStore(store.path)
+    result = reopened.get_job_result(parent.id)
+    assert result.status == JobStatus.BLOCKED
+    assert result.error_code == expected
+    assert reopened.list_job_attempts(parent.id)[0].error_code == expected
+    assert reopened.list_job_attempts(parent.id)[0].safe_error_message == result.safe_error_message
+    assert any(item["job_id"] == parent.id and item["status"] == "blocked"
+               for item in reopened.notifications())

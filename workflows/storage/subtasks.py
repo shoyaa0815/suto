@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from ..runtime.options import job_limits, validate_options
+from ..errors import normalize_error_code
 from .redaction import redact_text
 
 
@@ -83,13 +84,15 @@ class SubtaskStore:
             db.execute('BEGIN IMMEDIATE')
             parents = db.execute("SELECT id FROM jobs WHERE status='waiting_children'").fetchall()
             for parent in parents:
-                children = db.execute('SELECT id,status FROM jobs WHERE parent_id=?', (parent['id'],)).fetchall()
-                failed = [row['id'] for row in children if row['status'] in ('failed','blocked','cancelled','interrupted')]
+                children = db.execute('SELECT id,status,error_code FROM jobs WHERE parent_id=? ORDER BY created_at,id', (parent['id'],)).fetchall()
+                failed = [row for row in children if row['status'] in ('failed','blocked','cancelled','interrupted')]
                 if failed:
-                    db.execute("UPDATE jobs SET status='blocked',error=?,finished_at=? WHERE id=?",
-                        ('subtasks need attention: ' + ', '.join(failed), datetime.now(UTC).isoformat(), parent['id']))
+                    db.execute("UPDATE jobs SET status='blocked',error=?,error_code=?,finished_at=? WHERE id=?",
+                        ('subtasks need attention: ' + ', '.join(row['id'] for row in failed),
+                         normalize_error_code(failed[0]['error_code']).value,
+                         datetime.now(UTC).isoformat(), parent['id']))
                 elif children and all(row['status'] == 'completed' for row in children):
-                    db.execute("UPDATE jobs SET status='queued',error=NULL,finished_at=NULL WHERE id=?", (parent['id'],))
+                    db.execute("UPDATE jobs SET status='queued',error=NULL,error_code=NULL,finished_at=NULL WHERE id=?", (parent['id'],))
             orphaned = [row[0] for row in db.execute("SELECT child.id FROM jobs AS child JOIN jobs AS parent "
                 "ON child.parent_id=parent.id WHERE parent.status IN ('failed','blocked','cancelled') "
                 "AND child.status IN ('queued','running','waiting_approval','interrupted')")]
