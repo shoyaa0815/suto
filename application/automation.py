@@ -3,6 +3,8 @@
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from application.runtime_configuration import RuntimeSettings, load_runtime_settings
+
 from workflows.library.definitions import automation_options, load_definition_file, reject_detectable_secrets, validate_name, validate_workspace
 from workflows.models import ApprovalRequest, Automation, AutomationVersion, Job, JobResult, JobStatus, MissedRunPolicy, Schedule, ScheduleKind, TriggerEvent
 from workflows.errors import ErrorCode, WorkflowError, tag_error
@@ -15,9 +17,11 @@ if TYPE_CHECKING:
 
 
 class JobService:
-    def __init__(self, store: JobStore, worker: "AutomationWorker | None" = None) -> None:
+    def __init__(self, store: JobStore, worker: "AutomationWorker | None" = None,
+                 *, runtime: RuntimeSettings | None = None) -> None:
         self.store = store
         self.worker = worker
+        self.runtime = runtime or load_runtime_settings()
 
     @property
     def worker_ready(self) -> bool:
@@ -45,7 +49,7 @@ class JobService:
         return version.version if version is not None else None
 
     def submit(
-        self, prompt: str, *, workspace: str | Path = ".",
+        self, prompt: str, *, workspace: str | Path | None = None,
         allow_write: bool = False, allow_command: bool = False,
         source: str = "cli",
     ) -> Job:
@@ -55,7 +59,7 @@ class JobService:
             reject_detectable_secrets(prompt, field="job prompt")
         except ValueError as error:
             raise tag_error(error, ErrorCode.INVALID_INPUT)
-        path = validate_workspace(workspace)
+        path = validate_workspace(self.runtime.workspace if workspace is None else workspace)
         job = self.store.create_job(
             prompt.strip(), source=source, workspace=str(path),
             allow_write=allow_write, allow_command=allow_command,
@@ -130,20 +134,23 @@ class ApprovalService:
 
 
 class ScheduleService:
-    def __init__(self, store: JobStore, worker: "AutomationWorker | None" = None) -> None:
+    def __init__(self, store: JobStore, worker: "AutomationWorker | None" = None,
+                 *, runtime: RuntimeSettings | None = None) -> None:
         self.store = store
         self.worker = worker
+        self.runtime = runtime or load_runtime_settings()
 
     def create(
         self, *, kind: ScheduleKind, expression: str, prompt: str,
-        timezone: str, workspace: str | Path = ".",
+        timezone: str | None = None, workspace: str | Path | None = None,
         allow_write: bool = False, allow_command: bool = False,
         missed_run_policy: MissedRunPolicy = MissedRunPolicy.RUN_ONCE,
         retry_limit: int = 0, retry_delay_seconds: int = 60,
     ) -> Schedule:
         schedule = Scheduler(self.store).create(
             kind=kind, expression=expression, prompt=prompt,
-            timezone=timezone, workspace=Path(workspace).expanduser(),
+            timezone=self.runtime.timezone if timezone is None else timezone,
+            workspace=Path(self.runtime.workspace if workspace is None else workspace).expanduser(),
             allow_write=allow_write, allow_command=allow_command,
             missed_run_policy=missed_run_policy, retry_limit=retry_limit,
             retry_delay_seconds=retry_delay_seconds,
@@ -154,13 +161,14 @@ class ScheduleService:
 
     def create_automation(
         self, *, automation_name: str, parameters: dict | None,
-        kind: ScheduleKind, expression: str, timezone: str,
+        kind: ScheduleKind, expression: str, timezone: str | None = None,
         missed_run_policy: MissedRunPolicy = MissedRunPolicy.RUN_ONCE,
         retry_limit: int = 0, retry_delay_seconds: int = 60,
     ) -> Schedule:
         schedule = Scheduler(self.store).create_automation(
             automation_name=automation_name, parameters=parameters,
-            kind=kind, expression=expression, timezone=timezone,
+            kind=kind, expression=expression,
+            timezone=self.runtime.timezone if timezone is None else timezone,
             missed_run_policy=missed_run_policy, retry_limit=retry_limit,
             retry_delay_seconds=retry_delay_seconds,
         )

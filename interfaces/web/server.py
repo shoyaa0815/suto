@@ -13,6 +13,8 @@ from pathlib import Path
 
 from aiohttp import web
 
+from application.configuration import configuration_path
+
 from . import history
 from .settings import SettingsConflict, SettingsEditor
 
@@ -67,7 +69,7 @@ def create_app(*, config_path=None, browser_opener=None, database_path=None):
     app = web.Application(middlewares=[guard], client_max_size=65536)
     state = {
         "bootstrap": secrets.token_urlsafe(32), "session": secrets.token_urlsafe(32),
-        "settings": SettingsEditor(Path(config_path or "config.yaml")),
+        "settings": SettingsEditor(configuration_path(config_path)),
         "history_db": Path(database_path or os.environ.get("SUTO_DB_PATH", "data/suto.db")).expanduser().resolve(),
         "browser_opener": browser_opener or webbrowser.open,
     }

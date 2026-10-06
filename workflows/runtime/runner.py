@@ -6,7 +6,7 @@ from pathlib import Path
 
 from agent import AgentRequest
 from ai import AIExecutionResult, execute_local_ai
-from application.settings import env_int
+from application.runtime_configuration import load_runtime_settings
 
 from .context import (
     COMMAND_TOOLS,
@@ -26,11 +26,7 @@ from tools.advanced import RETRIEVAL_TOOLS, SUBTASK_TOOLS
 
 AIExecutor = Callable[..., Awaitable[AIExecutionResult]]
 DEFAULT_RETRY_DELAYS = (1.0, 2.0, 4.0)
-APPROVAL_TTL_SECONDS = env_int(
-    "APPROVAL_TTL_SECONDS",
-    600,
-    minimum=1,
-)
+APPROVAL_TTL_SECONDS = load_runtime_settings().options.approval_ttl_seconds
 
 
 class JobRunner:

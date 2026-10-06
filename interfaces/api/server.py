@@ -12,6 +12,7 @@ from aiohttp import web
 from agent import AgentRequest, AgentResult
 from ai import execute_local_ai
 from application.configuration import load_settings
+from application.runtime_configuration import load_runtime_settings
 from application.automation import AutomationService, JobService, ScheduleService
 from assistant import AssistantContext
 from sessions import SessionService, SessionStore
@@ -155,9 +156,10 @@ def _public_event(row: dict) -> dict:
 
 def create_app(*, database_path=None, store=None, executor=execute_local_ai):
     """Create one in-process local API; tests may inject a store or fake executor."""
+    runtime = load_runtime_settings()
+    profile = load_settings().profile
     store = store or JobStore(database_path or os.environ.get("SUTO_DB_PATH", "data/suto.db"))
     store.recover_interrupted_runs()
-    profile = load_settings().profile
     user = store.resolve_channel_identity(
         INTERFACE, "local", display_name=profile.display_name,
         timezone=profile.timezone, locale=profile.locale,
@@ -168,7 +170,7 @@ def create_app(*, database_path=None, store=None, executor=execute_local_ai):
     )
     state = {
         "store": store, "user": user, "sessions": SessionService(SessionStore(store)),
-        "runs": {}, "active_sessions": {}, "executor": executor,
+        "runs": {}, "active_sessions": {}, "executor": executor, "runtime": runtime,
     }
     app = web.Application(middlewares=[runtime_errors, local_guard], client_max_size=16384)
     app[STATE] = state
@@ -343,8 +345,8 @@ def create_app(*, database_path=None, store=None, executor=execute_local_ai):
     app.router.add_get("/runs/{run_id}/events", events)
     app.router.add_post("/runs/{run_id}/cancel", cancel_run)
     add_runtime_routes(
-        app, jobs=JobService(store), automations=AutomationService(store),
-        schedules=ScheduleService(store),
+        app, jobs=JobService(store, runtime=runtime), automations=AutomationService(store),
+        schedules=ScheduleService(store, runtime=runtime),
     )
     app.on_cleanup.append(cleanup)
     return app

@@ -64,7 +64,7 @@ def print_help(mode: str | None = None) -> None:
     print("  /task [title]  list or create personal tasks")
     print("  /task remove <name-or-id>  delete an open task")
     print("  /run [--workspace <path>] [--allow-write] [--allow-command] <task>  queue a job")
-    print("    defaults: current workspace, read-only, command denied")
+    print("    defaults: runtime workspace (current directory if unset), read-only, command denied")
     print("  /jobs  show recent automation jobs")
     print("  /approvals  list pending job approvals")
     print("  /approval show|allow|deny <approval_id>  inspect or decide an approval")
@@ -77,7 +77,7 @@ def print_help(mode: str | None = None) -> None:
     print("  /schedule automation <name> (--at <ISO> | --every <seconds> | --cron <expr>) [options] [key=value ...]")
     print("    options: --timezone <zone> --missed-run <run_once|skip> --retry <count> --retry-delay <seconds>")
     print("    workspace and permissions come from the pinned automation version")
-    print("    defaults: profile timezone, run_once, 0 retries, 60-second retry delay")
+    print("    defaults: runtime timezone (legacy profile if unset), run_once, 0 retries, 60-second retry delay")
     print("  /schedule list  list schedules")
     print("  /schedule show|pause|resume|history <schedule_id>")
     print("  /schedule upgrade <schedule_id> --automation-version <latest|number> [key=value ...]")
@@ -205,13 +205,13 @@ def _approval(context: CommandContext, argument: str) -> CommandOutcome:
     return CommandOutcome(handled=True)
 
 
-def _parse_public_run(argument: str) -> tuple[str, str, bool, bool]:
+def _parse_public_run(argument: str) -> tuple[str, str | None, bool, bool]:
     usage = "usage: /run [--workspace <path>] [--allow-write] [--allow-command] <task>"
     try:
         parts = shlex.split(argument)
     except ValueError:
         raise WorkflowError(ErrorCode.INVALID_INPUT, usage) from None
-    workspace = "."
+    workspace = None
     allow_write = False
     allow_command = False
     while parts and parts[0].startswith("--"):
@@ -342,7 +342,7 @@ def _parse_schedule_options(parts: list[str], default_timezone: str, *, automati
         "retry_limit": 0, "retry_delay_seconds": 60,
     }
     if not automation:
-        options.update(workspace=".", allow_write=False, allow_command=False)
+        options.update(workspace=None, allow_write=False, allow_command=False)
     schedule_flags = {"--at": ScheduleKind.ONCE,
                       "--every": ScheduleKind.INTERVAL, "--cron": ScheduleKind.CRON}
     value_flags = {
@@ -417,19 +417,19 @@ def _parse_schedule_automation(argument: str, default_timezone: str) -> dict:
 
 
 def _schedule(context: CommandContext, argument: str) -> CommandOutcome:
-    service = ScheduleService(context.store, context.worker)
     action = ""
     try:
+        service = ScheduleService(context.store, context.worker)
         action, _, rest = argument.strip().partition(" ")
         if action == "create":
-            timezone = getattr(context.user, "timezone", "UTC")
+            timezone = service.runtime.timezone
             schedule = service.create(**_parse_schedule_create(rest, timezone))
             print(f"Schedule created: {schedule.id}")
             print(f"State: {service.state(schedule)}")
             print(f"Next run: {schedule.next_run_at or 'none'}")
             return CommandOutcome(handled=True)
         if action == "automation":
-            timezone = getattr(context.user, "timezone", "UTC")
+            timezone = service.runtime.timezone
             schedule = service.create_automation(**_parse_schedule_automation(rest, timezone))
             print(f"Schedule created: {schedule.id}")
             print(f"Automation: {schedule.automation.automation_name} version {schedule.automation.automation_version}")

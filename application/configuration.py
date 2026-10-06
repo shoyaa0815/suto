@@ -10,6 +10,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 
+from application.runtime_configuration import RuntimeSettings, parse_runtime_settings
+
 
 CONFIG_VERSION = 1
 DEFAULT_CONFIG_PATH = Path("config.yaml")
@@ -41,6 +43,7 @@ class AppSettings:
     version: int
     profile: ProfileSettings
     voice: VoiceSettings = field(default_factory=VoiceSettings)
+    runtime: RuntimeSettings | None = None
 
 
 def _text(value: object, label: str, minimum: int, maximum: int) -> str:
@@ -128,40 +131,65 @@ def _voice(values: object) -> VoiceSettings:
     )
 
 
-def load_settings(path: str | Path = DEFAULT_CONFIG_PATH) -> AppSettings:
+def configuration_path(path: str | Path | None = None) -> Path:
+    selected = path if path is not None else os.environ.get("SUTO_CONFIG_PATH", "").strip() or DEFAULT_CONFIG_PATH
+    return Path(selected).expanduser()
+
+
+def read_configuration(path: str | Path | None = None) -> dict:
     """Load YAML settings, falling back to legacy environment defaults."""
-    config_path = Path(path)
+    config_path = configuration_path(path)
     if config_path.exists():
         try:
             raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        except OSError as error:
-            raise ValueError(f"cannot read {config_path}: {error}") from error
-        except yaml.YAMLError as error:
-            raise ValueError(f"invalid YAML in {config_path}") from error
+        except (OSError, UnicodeError):
+            raise ValueError("cannot read configuration file") from None
+        except yaml.YAMLError:
+            # Parser tracebacks can contain private fragments from the file.
+            raise ValueError("invalid YAML in configuration file") from None
     else:
+        if path is None and os.environ.get("SUTO_CONFIG_PATH", "").strip():
+            raise ValueError("configured SUTO_CONFIG_PATH does not exist")
         raw = {}
-    return parse_settings(raw)
+    return _configuration(raw)
 
 
-def parse_settings(raw: object) -> AppSettings:
+def load_settings(path: str | Path | None = None) -> AppSettings:
+    return parse_settings(read_configuration(path))
+
+
+def _configuration(raw: object) -> dict:
     """Validate decoded configuration using the same rules as file loading."""
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
         raise ValueError("config must be a mapping")
-    unknown = set(raw) - {"version", "profile", "voice"}
+    unknown = set(raw) - {"version", "profile", "voice", "runtime"}
     if unknown:
-        raise ValueError(f"unknown config section: {sorted(unknown)[0]}")
+        raise ValueError("unknown config section")
     version = raw.get("version", CONFIG_VERSION)
     if isinstance(version, bool) or version != CONFIG_VERSION:
         raise ValueError(f"config version must be {CONFIG_VERSION}")
-    return AppSettings(version=version, profile=_profile(raw.get("profile")),
-                       voice=_voice(raw.get("voice")))
+    return raw
+
+
+def parse_settings(raw: object) -> AppSettings:
+    """Validate decoded configuration using the same rules as file loading."""
+    raw = _configuration(raw)
+    version = raw.get("version", CONFIG_VERSION)
+    profile = _profile(raw.get("profile"))
+    return AppSettings(version=version, profile=profile,
+                       voice=_voice(raw.get("voice")),
+                       runtime=parse_runtime_settings(raw["runtime"], legacy_timezone=profile.timezone)
+                       if "runtime" in raw else None)
 
 
 def render_settings(settings: AppSettings) -> str:
+    values = asdict(settings)
+    if settings.runtime is None:
+        values.pop("runtime")
     return yaml.safe_dump(
-        asdict(settings),
+        values,
         allow_unicode=True,
         sort_keys=False,
     )
@@ -177,15 +205,16 @@ def update_profile_setting(
         raise ValueError(f"setting is not editable: {key}")
     values = asdict(settings.profile)
     values[normalized] = value
-    return AppSettings(version=CONFIG_VERSION, profile=_profile(values), voice=settings.voice)
+    return AppSettings(version=CONFIG_VERSION, profile=_profile(values), voice=settings.voice,
+                       runtime=settings.runtime)
 
 
 def save_settings(
     settings: AppSettings,
-    path: str | Path = DEFAULT_CONFIG_PATH,
+    path: str | Path | None = None,
 ) -> Path:
     """Atomically replace the non-secret YAML settings file."""
-    config_path = Path(path)
+    config_path = configuration_path(path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
     try:

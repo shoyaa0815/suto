@@ -5,12 +5,15 @@ import os
 import signal
 
 from application.modes import get_mode_policy
+from application.runtime_configuration import load_runtime_settings
 from workflows.runtime.runner import JobRunner
 from workflows.runtime.worker import AutomationWorker
 from workflows.storage.store import JobStore
 
 
 async def run_worker(*, stop_event: asyncio.Event | None = None) -> None:
+    # Validate host configuration before opening storage or claiming work.
+    load_runtime_settings()
     store = JobStore(os.environ.get("SUTO_DB_PATH", "data/suto.db"))
     worker = AutomationWorker(store, JobRunner(store))
     loop = asyncio.get_running_loop()

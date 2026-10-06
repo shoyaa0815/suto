@@ -44,13 +44,13 @@ def test_print_help_lists_exit_commands(capsys):
     assert "/quit" not in output
     assert "/plan" not in output
     assert "  /run " in output
-    assert "current workspace, read-only, command denied" in output
+    assert "runtime workspace (current directory if unset), read-only, command denied" in output
     assert "  /status <job_id>" in output
     assert "  /cancel <job_id>" in output
     assert "  /resume <job_id>" in output
     assert "/schedule create (--at <ISO> | --every <seconds> | --cron <expr>)" in output
     assert "--missed-run <run_once|skip> --retry <count> --retry-delay <seconds>" in output
-    assert "profile timezone, run_once, 0 retries, 60-second retry delay" in output
+    assert "runtime timezone (legacy profile if unset), run_once, 0 retries, 60-second retry delay" in output
     assert "  /schedule list  " in output
     assert "  /schedule show|pause|resume|history <schedule_id>" in output
     assert "  /automation create <definition.json>" in output

@@ -185,6 +185,87 @@ unknown profile keys, unsupported config versions, invalid timezones, and
 non-mapping YAML fail closed. `config.yaml` is local and ignored by Git;
 `config.example.yaml` documents the versioned schema.
 
+## Runtime configuration
+
+`application.runtime_configuration.load_runtime_settings()` is the shared,
+validated source for the CLI, Runtime API, AI provider factory and standalone
+Worker. Edit the optional `runtime` section of the existing version 1 YAML
+directly; no Chat, Dashboard, user identity or chat session is needed to configure
+or execute the Worker. The loader reads runtime fields independently of voice
+and personal profile validation. The API retains its existing personal routes
+and profile validation, but `/jobs` needs no conversation or chat session.
+
+Default path: `config.yaml` in the process working directory. Set
+`SUTO_CONFIG_PATH` to an absolute filename in the host environment or `.env` to
+select another file for **every** CLI/API/Worker process. An explicitly selected
+missing file fails startup; a missing default file or omitted runtime fields use
+compatible defaults. A file containing only `version: 1` and `runtime` is enough
+for a new runtime installation. Restart all processes after configuration edits:
+provider, execution limits and approval TTL are bound at module startup, and this
+is not a hot-reload interface. Use the same `SUTO_DB_PATH` for durable jobs.
+
+```yaml
+version: 1
+runtime:
+  provider: ollama
+  model: qwen3.5:9b
+  base_url: http://localhost:11434
+  timezone: Asia/Bangkok
+  workspace: /absolute/path/to/project
+  options:
+    temperature: 0.2
+    timeout_seconds: 300
+  limits:
+    max_tokens: 100000
+    max_tool_calls: 40
+```
+
+Precedence is per field: runtime YAML → primary environment variable → legacy
+alias → built-in default. Timezone is the compatibility exception:
+`runtime.timezone` → `profile.timezone` → `SUTO_TIMEZONE` → `UTC`. Personal reminders
+keep using the profile/user timezone. Workspace defaults affect newly submitted
+ad hoc jobs and schedules; an explicit CLI/API workspace overrides the default.
+Relative workspace paths (including the default `.`) resolve from the process
+working directory. Use absolute paths for services. Existing jobs, schedules and
+pinned automation workspaces/options/permissions are not rewritten. Runtime
+configuration grants no write or command permission and adds no tool allowlist.
+
+| YAML field under `runtime` | Environment fallback (legacy alias) | Default |
+| --- | --- | --- |
+| `provider` | `AI_PROVIDER` | `ollama` |
+| `model` | `AI_MODEL` (`OLLAMA_MODEL`) | `qwen3.5:9b` |
+| `base_url` | `AI_BASE_URL` (`OLLAMA_URL`) | `http://localhost:11434`; `https://api.openai.com/v1` for `openai` |
+| `timezone` | `SUTO_TIMEZONE`, after legacy profile | `UTC` |
+| `workspace` | `SUTO_WORKSPACE` | `.` |
+| `options.temperature` | `AI_TEMPERATURE` (`OLLAMA_TEMPERATURE`) | `0.2` |
+| `options.timeout_seconds` | `AI_TIMEOUT_SECONDS` (`OLLAMA_TIMEOUT_SECONDS`) | `300` |
+| `options.max_tool_rounds` | `MAX_TOOL_ROUNDS` | `6` |
+| `options.max_agent_tool_rounds` | `MAX_AGENT_TOOL_ROUNDS` | `20` |
+| `options.max_language_corrections` | `MAX_LANGUAGE_CORRECTIONS` | `2` |
+| `options.progress_interval_seconds` | `PROGRESS_INTERVAL_SECONDS` | `10` |
+| `options.approval_ttl_seconds` | `APPROVAL_TTL_SECONDS` | `600` |
+| `limits.max_elapsed_seconds` | `MAX_JOB_SECONDS` | `900` |
+| `limits.max_tokens` | `MAX_JOB_TOKENS` | `100000` |
+| `limits.max_tool_calls` | `MAX_TOOL_CALLS` | `40` |
+| `limits.max_changed_files` | `MAX_CHANGED_FILES` | `10` |
+| `limits.repeated_tool_call_limit` | `REPEATED_TOOL_CALL_LIMIT` | `3` |
+
+Supported providers are `ollama`, `openai`, and `openai-compatible`. API keys
+remain exclusively in `AI_API_KEY` from the environment; `openai` requires a key
+when building the provider. Base URLs must be HTTP(S) without embedded
+credentials, query strings or fragments. Secrets/unknown fields, unsupported
+providers, invalid timezones, non-mapping sections, incorrect YAML types,
+non-finite numbers and out-of-range options fail closed without echoing runtime
+values. Dashboard profile saves preserve the runtime section; legacy profile-only
+files remain valid and profile saves do not add a runtime section.
+
+SQLite `runtime_settings` remains the shared, durable source for concurrency,
+workspace concurrency, admission quotas, daily token quota and retention. These
+already work independently of Chat/Dashboard through `JobStore.settings()` and
+validated, atomic `JobStore.configure()`; startup does not overwrite them from
+YAML. Execution limits above preserve the existing per-job validation/budget
+rules. No database schema or migration changes are needed.
+
 ## MCP server lifecycle
 
 MCP servers are configured separately in ignored `mcp.yaml`. Set
@@ -238,9 +319,9 @@ venv/bin/python main.py worker
 
 This foreground process runs until SIGINT (Ctrl-C) or SIGTERM. It loads `.env`
 through the normal entry point and uses `SUTO_DB_PATH` (default `data/suto.db`),
-the same provider configuration and persisted runtime limits as before. Start
+the shared runtime configuration and persisted operational limits. Start
 the CLI separately with `venv/bin/python main.py`; both processes must use the
-same database path. The worker needs no user identity, conversation, chat input,
+same database and configuration paths. The worker needs no user identity, conversation, chat input,
 or Dashboard. It owns scheduling, job claims, AgentRuntime execution, retries,
 recovery and durable results/notifications. Opening or closing a CLI session
 does not start or stop the worker. Keep the worker's terminal/service running
@@ -424,9 +505,10 @@ across a non-leap century, so an accepted leap-day schedule can advance after
 its current occurrence.
 
 `--at` accepts an ISO date and time. An included offset sets the instant;
-without one, the time is interpreted in `--timezone` or the profile timezone.
+without one, the time is interpreted in `--timezone` or the runtime timezone
+(legacy profile timezone if no runtime timezone is set).
 Cron uses five fields in the selected timezone; `--every` is an interval in
-seconds. The defaults are the profile timezone, `run_once` for missed runs, zero
+seconds. The defaults are the runtime timezone, `run_once` for missed runs, zero
 retries, and a 60-second retry delay. A retry requeues the same logical job and
 records another trigger-history row; the next claim creates a new attempt.
 For an overdue occurrence, `run_once` creates one recovery job and advances to

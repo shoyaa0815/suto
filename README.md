@@ -13,17 +13,29 @@ python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 ```
 
-Copy `config.example.yaml` to `config.yaml` and set the non-secret local profile:
+Copy `config.example.yaml` to `config.yaml` and set the runtime and local profile:
 
 ```yaml
 version: 1
+runtime:
+  provider: ollama
+  model: qwen3.5:9b
+  base_url: http://localhost:11434
+  timezone: Asia/Bangkok
+  workspace: /absolute/path/to/project
 profile:
   timezone: Asia/Bangkok
   locale: th
   display_name: Your name
 ```
 
-Create a `.env` file for provider configuration and secrets. Example for Ollama:
+The CLI, API and Worker use this same runtime configuration without opening
+Chat or Dashboard. Set `SUTO_CONFIG_PATH=/absolute/path/to/config.yaml` when
+running processes from different directories, and use the same `SUTO_DB_PATH`.
+Restart all running Suto processes after edits. See
+[runtime settings](docs/operations.md#runtime-configuration) for options and limits.
+
+Existing `.env` provider settings still work when their YAML fields are absent:
 
 ```dotenv
 AI_PROVIDER=ollama
@@ -32,6 +44,8 @@ AI_MODEL=qwen3.5:9b
 ```
 
 Never commit `.env` files or API keys to Git.
+For OpenAI, select `provider: openai`, set a model, and put `AI_API_KEY` in `.env`.
+YAML runtime fields override environment fallbacks; secrets remain environment only.
 
 ## Usage
 
@@ -133,8 +147,8 @@ Jobs saved while the independent worker is unavailable wait until a worker is re
 
 Create a schedule with exactly one of `--at <ISO>`, `--every <seconds>`, or
 `--cron <five-field expression>`. Options precede the task. An `--at` value
-without an offset uses the profile timezone; an offset in the value specifies
-the instant. `--timezone` overrides the profile timezone for local times and
+without an offset uses the runtime timezone (legacy profile timezone if unset);
+an offset in the value specifies the instant. `--timezone` overrides the default for local times and
 cron. The defaults are `--missed-run run_once`, `--retry 0`, and
 `--retry-delay 60` seconds. Workspace and permission defaults match `/run`.
 

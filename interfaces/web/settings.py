@@ -39,7 +39,8 @@ class SettingsEditor:
         if not isinstance(values, dict) or set(values) != {"display_name", "locale", "timezone"}:
             raise ValueError("Expected all profile fields")
         settings = parse_settings({"version": 1, "profile": values})
-        settings = replace(settings, voice=self.parse(self.snapshot()["yaml"]).voice)
+        existing = self.parse(self.snapshot()["yaml"])
+        settings = replace(settings, voice=existing.voice, runtime=existing.runtime)
         result = self.update(render_settings(settings), revision, save=save)
         return {"profile": asdict(settings.profile), "revision": result["revision"],
                 **({"saved": True} if save else {"diff": result["diff"]})}

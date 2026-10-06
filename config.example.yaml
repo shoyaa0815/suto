@@ -1,4 +1,27 @@
 version: 1
+# Optional: without this section, existing AI_* / OLLAMA_* environment values
+# remain supported. Runtime fields take precedence over environment fallbacks.
+# Keep API keys in .env (AI_API_KEY), never here. Restart all processes on edits.
+runtime:
+  provider: ollama
+  model: qwen3.5:9b
+  base_url: http://localhost:11434
+  timezone: Asia/Bangkok
+  workspace: .  # Process working directory; use an absolute path for services.
+  options:
+    temperature: 0.2
+    timeout_seconds: 300
+    max_tool_rounds: 6
+    max_agent_tool_rounds: 20
+    max_language_corrections: 2
+    progress_interval_seconds: 10
+    approval_ttl_seconds: 600
+  limits:
+    max_elapsed_seconds: 900
+    max_tokens: 100000
+    max_tool_calls: 40
+    max_changed_files: 10
+    repeated_tool_call_limit: 3
 profile:
   timezone: Asia/Bangkok
   locale: th

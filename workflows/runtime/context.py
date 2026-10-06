@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from application.settings import env_float, env_int
+from application.runtime_configuration import load_runtime_settings
 from permissions import Approval, PermissionEngine, PermissionPolicy
 
 from ..models import ActionType
@@ -40,21 +40,16 @@ class ExecutionLimitExceeded(RuntimeError):
     error_code = ErrorCode.QUOTA_EXCEEDED
 
 
+_runtime_limits = load_runtime_settings().limits
+
+
 @dataclass(frozen=True)
 class ExecutionLimits:
-    max_elapsed_seconds: float = env_float(
-        "MAX_JOB_SECONDS",
-        900,
-        minimum=1,
-    )
-    max_tokens: int = env_int("MAX_JOB_TOKENS", 100_000, minimum=1)
-    max_tool_calls: int = env_int("MAX_TOOL_CALLS", 40, minimum=1)
-    max_changed_files: int = env_int("MAX_CHANGED_FILES", 10, minimum=1)
-    repeated_tool_call_limit: int = env_int(
-        "REPEATED_TOOL_CALL_LIMIT",
-        3,
-        minimum=2,
-    )
+    max_elapsed_seconds: float = _runtime_limits.max_elapsed_seconds
+    max_tokens: int = _runtime_limits.max_tokens
+    max_tool_calls: int = _runtime_limits.max_tool_calls
+    max_changed_files: int = _runtime_limits.max_changed_files
+    repeated_tool_call_limit: int = _runtime_limits.repeated_tool_call_limit
 
 
 @dataclass(frozen=True)

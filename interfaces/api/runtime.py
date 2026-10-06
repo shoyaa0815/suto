@@ -88,11 +88,11 @@ def add_runtime_routes(
     async def submit_job(request):
         body = await _body(request, {"prompt", "workspace", "allow_write", "allow_command"})
         prompt = body.get("prompt")
-        workspace = body.get("workspace", ".")
+        workspace = body.get("workspace")
         if (
             not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 8000
-            or not isinstance(workspace, str) or not workspace.strip()
-            or len(workspace) > 4096 or "\x00" in workspace
+            or ("workspace" in body and (not isinstance(workspace, str) or not workspace.strip()
+                or len(workspace) > 4096 or "\x00" in workspace))
             or any(type(body.get(key, False)) is not bool for key in ("allow_write", "allow_command"))
         ):
             raise _invalid()
