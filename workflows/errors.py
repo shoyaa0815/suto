@@ -7,6 +7,10 @@ from typing import TypeVar
 
 class ErrorCode(StrEnum):
     INVALID_INPUT = "INVALID_INPUT"
+    PERMISSION_DENIED = "PERMISSION_DENIED"
+    JOB_NOT_FOUND = "JOB_NOT_FOUND"
+    JOB_STATE_CONFLICT = "JOB_STATE_CONFLICT"
+    SCHEDULE_NOT_FOUND = "SCHEDULE_NOT_FOUND"
     WORKSPACE_INVALID = "WORKSPACE_INVALID"
     WORKSPACE_PERMISSION_DENIED = "WORKSPACE_PERMISSION_DENIED"
     QUOTA_EXCEEDED = "QUOTA_EXCEEDED"
@@ -28,6 +32,10 @@ class ErrorCode(StrEnum):
 
 SAFE_MESSAGES = {
     ErrorCode.INVALID_INPUT: "The request contains invalid input.",
+    ErrorCode.PERMISSION_DENIED: "Access to the request was denied.",
+    ErrorCode.JOB_NOT_FOUND: "Job not found.",
+    ErrorCode.JOB_STATE_CONFLICT: "The job cannot perform this transition from its current state.",
+    ErrorCode.SCHEDULE_NOT_FOUND: "Schedule not found.",
     ErrorCode.WORKSPACE_INVALID: "The workspace is unavailable or has changed.",
     ErrorCode.WORKSPACE_PERMISSION_DENIED: "Access to the workspace was denied.",
     ErrorCode.QUOTA_EXCEEDED: "The job exceeded a quota or execution budget.",

@@ -47,6 +47,7 @@ class JobService:
     def submit(
         self, prompt: str, *, workspace: str | Path = ".",
         allow_write: bool = False, allow_command: bool = False,
+        source: str = "cli",
     ) -> Job:
         if not isinstance(prompt, str) or not prompt.strip():
             raise WorkflowError(ErrorCode.INVALID_INPUT, "/run requires a task")
@@ -56,7 +57,7 @@ class JobService:
             raise tag_error(error, ErrorCode.INVALID_INPUT)
         path = validate_workspace(workspace)
         job = self.store.create_job(
-            prompt.strip(), source="cli", workspace=str(path),
+            prompt.strip(), source=source, workspace=str(path),
             allow_write=allow_write, allow_command=allow_command,
         )
         if self.worker is not None:
@@ -73,7 +74,7 @@ class JobService:
             self.store.cancel_job(job_id)
         current = self._require_job(job_id)
         if current.status != JobStatus.CANCELLED:
-            raise ValueError(f"job cannot be cancelled from {current.status.value}")
+            raise WorkflowError(ErrorCode.JOB_STATE_CONFLICT, f"job cannot be cancelled from {current.status.value}")
         return current
 
     def resume(self, job_id: str) -> Job:
@@ -94,7 +95,7 @@ class JobService:
     def _require_job(self, job_id: str) -> Job:
         job = self.store.get_job(job_id)
         if job is None:
-            raise ValueError(f"Job not found: {job_id}")
+            raise WorkflowError(ErrorCode.JOB_NOT_FOUND, f"Job not found: {job_id}")
         return job
 
 
@@ -184,7 +185,7 @@ class ScheduleService:
     def get(self, schedule_id: str) -> Schedule:
         schedule = self.store.get_schedule(schedule_id)
         if schedule is None:
-            raise ValueError(f"Schedule not found: {schedule_id}")
+            raise WorkflowError(ErrorCode.SCHEDULE_NOT_FOUND, f"Schedule not found: {schedule_id}")
         return schedule
 
     def history(self, schedule_id: str) -> list[TriggerEvent]:
@@ -247,6 +248,9 @@ class AutomationService:
         return automation, version, skills
 
     def run(self, name: str, parameters: dict | None = None) -> tuple[Job, AutomationVersion]:
+        automation = self.store.get_automation(name)
+        if automation is not None:
+            name = automation.name
         job, version = self.store.create_automation_job(name, parameters)
         if self.worker is not None:
             self.worker.wake()

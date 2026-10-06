@@ -72,7 +72,7 @@ The stream closes after the run ends. Cancellation cancels the same asyncio
 task that awaits the model, tool, and any delegated child. It is best effort
 for blocking operations that do not support cancellation.
 
-The API passes an `AgentRequest` to the same AI executor as the CLI. The
+The `/runs` API passes an `AgentRequest` to the same AI executor as the CLI. The
 executor applies native tool, Skill, MCP, and delegation policy. MCP commands,
 secrets, and job-scoped workspace permissions come only from trusted local
 configuration and cannot be supplied in HTTP payloads. The API starts no
@@ -87,6 +87,86 @@ Up to four independent API runs may execute at once. API approval submission is
 not exposed; a request requiring interactive approval fails closed there.
 Pending interactive approvals are memory-only and invalid after restart.
 Trace delivery retains the database's existing durability and backup behavior.
+
+## Runtime API
+
+The same local server also exposes durable Jobs, Automations, and Schedules.
+These routes call `JobService`, `AutomationService`, and `ScheduleService`;
+they do not execute jobs in the API process. Start
+`venv/bin/python main.py worker` separately, using the same `SUTO_DB_PATH` as
+`venv/bin/python main.py api`. A submission returns **202** after the queued
+job is persisted, even if no worker is running. Closing or restarting the API
+does not cancel these jobs. The worker claims them, calls AgentRuntime, and
+persists attempts, results, error metadata, and notifications through the
+existing workflow lifecycle.
+
+All routes retain the loopback peer, numeric Host, Origin, and POST header
+checks above. Runtime jobs and automation definitions are shared within the
+host's workflow database, as in the CLI; they are not chat-session resources.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/jobs` | Persist a job; required `prompt`, optional `workspace`, `allow_write`, `allow_command` |
+| GET | `/jobs` | Recent jobs, returned as `{"jobs":[...]}` (up to 20) |
+| GET | `/jobs/{job_id}` | Job details, status, full result text, usage, and timestamps |
+| GET | `/jobs/{job_id}/result` | Structured result snapshot, including summary, safe error, attempt, automation version, schedule, trigger, and retry references |
+| POST | `/jobs/{job_id}/cancel` | Persist cancellation; send `{}`; repeated cancellation is idempotent |
+| GET | `/automations` | Saved definitions, returned as `{"automations":[...]}` |
+| GET | `/automations/{id_or_name}` | Definition, current version, parameter schema, and pinned Skill names |
+| POST | `/automations/{id_or_name}/run` | Persist a run of the current version; send `{"parameters":{...}}` or `{}` for defaults |
+| GET | `/schedules` | Recent schedules, returned as `{"schedules":[...]}` (up to 100) |
+| GET | `/schedules/{schedule_id}` | Schedule details, timezone, next occurrence, and pinned automation snapshot when present |
+
+Job prompts are limited to 8,000 characters and requests to 16 KiB. Workspace
+defaults to the API process's working directory and must resolve to an existing
+directory. Write and command flags must be JSON booleans and default to false.
+Unknown fields are rejected, including client-supplied tool allowlists,
+approval overrides, execution options, and automation version overrides.
+Automation run parameters must be an object and satisfy the stored schema;
+detectable secrets are rejected by the existing application validation.
+Running an automation atomically pins its current version, rendered parameters,
+workspace, permission ceiling, and Skill versions. Later definition updates do
+not change an existing job or schedule snapshot.
+
+Permission flags only enable consideration of an action. Workspace containment,
+exact-action durable approval, verification after writes, command allowlists,
+and sandbox checks still apply in the worker. A job requiring approval becomes
+`waiting_approval` without performing the action. Use the existing CLI
+`/approvals`, `/approval show <approval_id>`, and
+`/approval allow <approval_id>` or `/approval deny <approval_id>` to decide;
+this API does not add an approval-decision route. Cancellation invalidates
+pending approvals and is observed by the independent worker before finalizing
+its active attempt. Existing interruption/recovery rules remain in effect.
+
+Job detail `result` contains persisted full text when available; the `/result`
+snapshot contains the existing bounded `result_summary` (up to 200 characters).
+Both are available while polling, with null result fields before completion.
+Job errors expose safe messages rather than internal exception details.
+Runtime request failures use the existing string `error` field with an added
+stable `error_code`, for example:
+
+```json
+{"error":"Job not found.","error_code":"JOB_NOT_FOUND"}
+```
+
+Invalid input/workspace/parameters return 400; local access or workspace
+permission denial returns 403; missing resources return 404; cancellation from
+an incompatible state returns 409 (`JOB_STATE_CONFLICT`); admission quota
+failures return 429 (`QUOTA_EXCEEDED`). Oversized bodies return 413 and unexpected
+service failures return a generic 500 (`INTERNAL_ERROR`). Error responses also
+retain no-store and content-type protection headers.
+
+Example using another terminal on the same host:
+
+```bash
+curl -sS http://127.0.0.1:8766/jobs \
+  -H 'X-Suto-Request: 1' -H 'Content-Type: application/json' \
+  -d '{"prompt":"Inspect source files and report in English.","workspace":"/path/to/project"}'
+curl -sS http://127.0.0.1:8766/jobs/job_RETURNED_ID
+curl -sS http://127.0.0.1:8766/jobs/job_RETURNED_ID/result
+curl -sS http://127.0.0.1:8766/jobs/job_RETURNED_ID/cancel \
+  -H 'X-Suto-Request: 1' -H 'Content-Type: application/json' -d '{}'
+```
 
 ## Host-managed settings
 

@@ -12,12 +12,15 @@ from aiohttp import web
 from agent import AgentRequest, AgentResult
 from ai import execute_local_ai
 from application.configuration import load_settings
+from application.automation import AutomationService, JobService, ScheduleService
 from assistant import AssistantContext
 from sessions import SessionService, SessionStore
 from skills import builtin_registry
 from workflows.storage.redaction import redact_text
 from workflows.storage.store import JobStore
 from workflows.storage.runs import SessionBusyError, TERMINAL
+
+from .runtime import add_runtime_routes, runtime_errors
 
 
 HOST = "127.0.0.1"
@@ -167,7 +170,7 @@ def create_app(*, database_path=None, store=None, executor=execute_local_ai):
         "store": store, "user": user, "sessions": SessionService(SessionStore(store)),
         "runs": {}, "active_sessions": {}, "executor": executor,
     }
-    app = web.Application(middlewares=[local_guard], client_max_size=16384)
+    app = web.Application(middlewares=[runtime_errors, local_guard], client_max_size=16384)
     app[STATE] = state
 
     async def health(request):
@@ -339,6 +342,10 @@ def create_app(*, database_path=None, store=None, executor=execute_local_ai):
     app.router.add_get("/runs/{run_id}", get_run)
     app.router.add_get("/runs/{run_id}/events", events)
     app.router.add_post("/runs/{run_id}/cancel", cancel_run)
+    add_runtime_routes(
+        app, jobs=JobService(store), automations=AutomationService(store),
+        schedules=ScheduleService(store),
+    )
     app.on_cleanup.append(cleanup)
     return app
 
