@@ -1,13 +1,69 @@
 """Live job delivery uses the persisted notification inbox."""
 
 import asyncio
+import io
 import sqlite3
+import sys
 import threading
 
 import pytest
 
 from interfaces.cli import backend, operations
 from workflows.storage.store import JobStore
+
+
+@pytest.mark.asyncio
+async def test_plain_output_flush_failure_keeps_notification_unread(tmp_path, monkeypatch):
+    store = JobStore(tmp_path / "jobs.db")
+    job = store.create_job("private prompt")
+    assert store.cancel_job(job.id)
+    attempted = asyncio.Event()
+    acknowledged = asyncio.Event()
+    changed = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    original_ack = store.acknowledge_notification
+
+    class BufferedOutput(io.StringIO):
+        allow_flush = False
+
+        def flush(self):
+            attempted.set()
+            changed.set()
+            if not self.allow_flush:
+                raise OSError("output unavailable")
+            super().flush()
+
+    stream = BufferedOutput()
+
+    def acknowledge(event_id):
+        result = original_ack(event_id)
+        loop.call_soon_threadsafe(acknowledged.set)
+        loop.call_soon_threadsafe(changed.set)
+        return result
+
+    monkeypatch.setattr(store, "acknowledge_notification", acknowledge)
+    with monkeypatch.context() as patch:
+        patch.setattr(sys, "stdout", stream)
+        task = asyncio.create_task(operations.notify_cli(store, after_id=0))
+        try:
+            await asyncio.wait_for(changed.wait(), timeout=5)
+            assert attempted.is_set()
+            assert not acknowledged.is_set()
+            assert len(JobStore(store.path).notifications()) == 1
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+        stream.allow_flush = True
+        attempted.clear()
+        restarted = asyncio.create_task(operations.notify_cli(store, after_id=0))
+        try:
+            await asyncio.wait_for(acknowledged.wait(), timeout=5)
+            assert attempted.is_set()
+            assert JobStore(store.path).notifications() == []
+        finally:
+            restarted.cancel()
+            await asyncio.gather(restarted, return_exceptions=True)
 
 
 async def _wait_for_count(lines, count, changed):

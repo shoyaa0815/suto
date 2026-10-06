@@ -15,12 +15,14 @@ _activity_writer: ContextVar[ActivityWriter | None] = ContextVar(
 )
 
 
-def write(*values: object, sep: str = " ", end: str = "\n", **_: object) -> None:
+def write(
+    *values: object, sep: str = " ", end: str = "\n", flush: bool = False, **_: object
+) -> None:
     """Print normally, with optional routing for compatible callers."""
     text = sep.join(str(value) for value in values) + end
     writer = _writer.get()
     if writer is None:
-        builtins.print(*values, sep=sep, end=end)
+        builtins.print(*values, sep=sep, end=end, flush=flush)
     else:
         writer(text)
 
