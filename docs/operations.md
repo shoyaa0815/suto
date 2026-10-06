@@ -298,6 +298,10 @@ error metadata after restart.
 /schedule history <schedule_id>
 ```
 
+Cron occurrence lookup includes leap-day gaps, including the eight-year gap
+across a non-leap century, so an accepted leap-day schedule can advance after
+its current occurrence.
+
 `--at` accepts an ISO date and time. An included offset sets the instant;
 without one, the time is interpreted in `--timezone` or the profile timezone.
 Cron uses five fields in the selected timezone; `--every` is an interval in

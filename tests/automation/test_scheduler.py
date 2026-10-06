@@ -1,6 +1,7 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from agent import AgentRequest, AgentRuntime
 from ai import AIExecutionResult
 from llm.types import ModelResponse, ModelUsage
@@ -407,6 +408,26 @@ def test_cron_uses_requested_timezone_and_standard_weekday_alias():
 
     assert next_run == datetime(2026, 1, 1, 2, 0, tzinfo=UTC)
     assert CronExpression.parse("0 0 * * 7").weekday.values == frozenset({0})
+
+
+@pytest.mark.parametrize("year, next_year", [(2028, 2032), (2096, 2104)])
+def test_leap_day_cron_runs_and_retains_next_occurrence_after_restart(tmp_path, year, next_year):
+    store = JobStore(tmp_path / "jobs.db")
+    schedule = Scheduler(store).create(
+        kind="cron", expression="0 8 29 2 *", prompt="inspect leap day",
+        timezone="UTC", now=datetime(year - 1, 10, 6, tzinfo=UTC),
+    )
+    due = datetime(year, 2, 29, 8, tzinfo=UTC)
+    assert datetime.fromisoformat(schedule.next_run_at) == due
+    restarted = Scheduler(JobStore(store.path))
+    assert restarted.tick(due) == 1
+    persisted = JobStore(store.path)
+    history = persisted.list_trigger_history(schedule.id)
+    assert len(history) == 1
+    assert persisted.get_job(history[0].job_id).status == JobStatus.QUEUED
+    assert datetime.fromisoformat(persisted.get_schedule(schedule.id).next_run_at) == datetime(next_year, 2, 29, 8, tzinfo=UTC)
+    assert Scheduler(persisted).tick(due) == 0
+    assert len(persisted.list_jobs()) == 1
 
 
 def test_once_schedule_runs_after_restart_only_once(tmp_path):

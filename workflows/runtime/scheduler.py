@@ -122,12 +122,13 @@ class CronExpression:
     def next_after(self, after: datetime, timezone: str) -> datetime:
         zone = validate_timezone(timezone)
         candidate = _utc(after).replace(second=0, microsecond=0) + timedelta(minutes=1)
-        deadline = candidate + timedelta(days=366 * 2)
+        # February 29 can be eight years apart across a non-leap century.
+        deadline = candidate + timedelta(days=366 * 8)
         while candidate <= deadline:
             if self.matches(candidate.astimezone(zone)):
                 return candidate
             candidate += timedelta(minutes=1)
-        raise ValueError("cron expression has no occurrence in the next two years")
+        raise ValueError("cron expression has no occurrence in the next eight years")
 
 
 def next_occurrence(schedule: Schedule, after: datetime) -> datetime | None:
