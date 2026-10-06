@@ -83,6 +83,49 @@ async def test_live_delivery_uses_typed_safe_summaries_and_acknowledges(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_restart_suppresses_stale_approval_request_and_acknowledges_it(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "jobs.db"
+    store = JobStore(path)
+    job = store.create_job("private approval prompt")
+    assert store.claim_next_job().id == job.id
+    with store._connect() as db:
+        db.execute("UPDATE jobs SET status='waiting_approval' WHERE id=?", (job.id,))
+    assert store.cancel_job(job.id)
+    events = list(reversed(store.notifications()))
+    assert [event["kind"] for event in events] == ["approval_required", "cancelled"]
+    lines = []
+    acknowledged = []
+    changed = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    original_ack = store.acknowledge_notification
+
+    def acknowledge(event_id):
+        result = original_ack(event_id)
+        acknowledged.append(event_id)
+        loop.call_soon_threadsafe(changed.set)
+        return result
+
+    def capture(message, **_kwargs):
+        lines.append(message)
+        changed.set()
+
+    monkeypatch.setattr(store, "acknowledge_notification", acknowledge)
+    monkeypatch.setattr(operations, "print", capture)
+    task = asyncio.create_task(operations.notify_cli(store, after_id=0))
+    try:
+        await _wait_for_count(acknowledged, 2, changed)
+        assert acknowledged == [event["id"] for event in events]
+        assert len(lines) == 1 and "Job cancelled." in lines[0]
+        assert "Approval required" not in lines[0]
+        assert JobStore(path).notifications() == []
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_live_delivery_drains_concurrent_events_without_duplicates(tmp_path, monkeypatch):
     store = JobStore(tmp_path / "jobs.db")
     jobs = [store.create_job(f"event {index}") for index in range(110)]

@@ -36,10 +36,22 @@ def _validate_publishable(name: str, instructions: str) -> tuple[str, str]:
 def _proposal(row: sqlite3.Row | None) -> SkillDraftProposal | None:
     if row is None:
         return None
+    try:
+        status = SkillProposalStatus(row["status"])
+        source_job_ids = json.loads(row["source_job_ids"])
+    except (ValueError, TypeError):
+        raise ValueError("invalid skill proposal data") from None
+    if status == SkillProposalStatus.DELETED:
+        if source_job_ids != [] or row["name"] != "" or row["instructions"] != "":
+            raise ValueError("invalid skill proposal data")
+    elif (not isinstance(source_job_ids, list) or
+          not 2 <= len(source_job_ids) <= 50 or
+          any(not isinstance(job_id, str) or not job_id for job_id in source_job_ids) or
+          len(set(source_job_ids)) != len(source_job_ids)):
+        raise ValueError("invalid skill proposal provenance")
     return SkillDraftProposal(
         id=row["id"], name=row["name"], instructions=row["instructions"],
-        status=SkillProposalStatus(row["status"]),
-        source_job_ids=tuple(json.loads(row["source_job_ids"])),
+        status=status, source_job_ids=tuple(source_job_ids),
         created_at=row["created_at"], updated_at=row["updated_at"],
     )
 
@@ -54,9 +66,19 @@ class SkillProposalStore:
                 "SELECT * FROM skill_draft_proposals WHERE id=?", (proposal_id,)
             ).fetchone()
             if row is None:
-                raise ValueError(f"skill proposal not found: {proposal_id}")
-            if row["status"] != SkillProposalStatus.PENDING:
-                raise ValueError(f"skill proposal cannot transition from {row['status']} to approved")
+                raise ValueError("skill proposal not found")
+            proposal = _proposal(row)
+            if proposal.status != SkillProposalStatus.PENDING:
+                raise ValueError(f"skill proposal cannot transition from {proposal.status} to approved")
+            source_job_ids = proposal.source_job_ids
+            rows = connection.execute(
+                f"SELECT id, status, workspace FROM jobs WHERE id IN ({','.join('?' for _ in source_job_ids)})",
+                source_job_ids,
+            ).fetchall()
+            if (len(rows) != len(source_job_ids) or
+                    any(source["status"] != "completed" for source in rows) or
+                    len({source["workspace"] for source in rows}) != 1):
+                raise ValueError("invalid skill proposal provenance")
             name, instructions = _validate_publishable(row["name"], row["instructions"])
             if connection.execute(
                 "SELECT 1 FROM skills WHERE name=? COLLATE NOCASE", (name,)
@@ -67,9 +89,9 @@ class SkillProposalStore:
                 "UPDATE skill_draft_proposals SET status='approved',updated_at=? WHERE id=?",
                 (timestamp, proposal_id),
             )
-        result = self.get_skill_proposal(proposal_id)
-        if result is None:
-            raise RuntimeError("failed to approve skill proposal")
+            result = _proposal(connection.execute(
+                "SELECT * FROM skill_draft_proposals WHERE id=?", (proposal_id,)
+            ).fetchone())
         return result
 
     def create_skill_proposal(
@@ -155,8 +177,11 @@ class SkillProposalStore:
                 "SELECT status FROM skill_draft_proposals WHERE id=?", (proposal_id,)
             ).fetchone()
             if row is None:
-                raise ValueError(f"skill proposal not found: {proposal_id}")
-            current = SkillProposalStatus(row["status"])
+                raise ValueError("skill proposal not found")
+            try:
+                current = SkillProposalStatus(row["status"])
+            except ValueError:
+                raise ValueError("invalid skill proposal data") from None
             if current == SkillProposalStatus.DELETED or (
                 current != SkillProposalStatus.PENDING and status != SkillProposalStatus.DELETED
             ):
@@ -172,7 +197,7 @@ class SkillProposalStore:
                     "UPDATE skill_draft_proposals SET status=?,updated_at=? WHERE id=?",
                     (status, timestamp, proposal_id),
                 )
-        result = self.get_skill_proposal(proposal_id)
-        if result is None:
-            raise RuntimeError("failed to transition skill proposal")
+            result = _proposal(connection.execute(
+                "SELECT * FROM skill_draft_proposals WHERE id=?", (proposal_id,)
+            ).fetchone())
         return result

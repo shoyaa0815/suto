@@ -561,7 +561,8 @@ is used up. Existing `blocked` and `interrupted` items remain available. The
 `status` field continues to show the job state, and `read_at` records an
 acknowledgement. `/notifications` shows unread items; the store's
 `notifications(unread_only=False)` query includes acknowledged items until
-normal retention cleanup. Acknowledging an item twice has no effect. These
+normal retention cleanup. Cleanup also removes unread items past the selected
+retention cutoff. Acknowledging an item twice has no effect. These
 rows are derived from committed SQLite job transitions, independent of whether
 the CLI is open.
 
@@ -576,10 +577,11 @@ notifications during that session. Each message includes the job ID and a fixed,
 safe summary; job prompts, results, and errors are not printed. The CLI
 acknowledges a shown item after printing it. Delivery reads the persistent
 unread inbox in ID order, so items created while the CLI is closed appear on
-the next start. If printing fails, the item remains unread. If acknowledgement
-fails, the task retries without printing the item again. Closing the CLI before
-acknowledgement leaves the item unread for the next start. External delivery
-of these job-lifecycle notifications is not included.
+the next start. An approval-required item is acknowledged without display if
+the job has already left `waiting_approval`. If printing fails, the item remains
+unread. If acknowledgement fails, the task retries without printing the item
+again. Closing the CLI before acknowledgement leaves the item unread for the
+next start. External delivery of these job-lifecycle notifications is not included.
 
 ```bash
 venv/bin/pytest -q
@@ -600,7 +602,7 @@ A skip means namespace isolation was not verified on that host. Run
 Linux host to exercise the integration tests. The `bwrap`
 setting never falls back to `process` when setup or namespace creation fails.
 
-## Draft Skill proposals (Phase 3D–3E)
+## Draft Skill proposals (Phase 3D–3F)
 
 Draft Skill proposals are stored separately from versioned Skills. A proposal
 contains a validated name, draft instructions, and the IDs of 2–50 distinct,
@@ -624,5 +626,8 @@ change a Skill. The state path is `pending` to `approved`, `rejected`, or
 `deleted`; reviewed proposals may then become `deleted`. Every transition has a
 durable event.
 Deletion clears the name, instructions, and source job IDs while retaining a
-status and timestamp tombstone. Drafts persist until explicitly deleted; this
-workflow does not enable automatic proposal generation or retention cleanup.
+status and timestamp tombstone. Drafts persist until explicitly deleted;
+rejected and approved drafts are retained until deletion too. Proposal cleanup
+is manual. Approval rechecks source job provenance and fails if stored
+provenance is invalid or the source jobs are no longer completed in one
+workspace. This workflow does not enable automatic proposal generation.

@@ -747,19 +747,19 @@ def _skill_proposal(context: CommandContext, argument: str) -> CommandOutcome:
             if action == "history":
                 proposal = service.get(proposal_id)
                 if proposal is None:
-                    raise ValueError(f"skill proposal not found: {proposal_id}")
+                    raise ValueError("skill proposal not found")
                 for event in service.history(proposal_id):
                     print(f"{event.status.value}  {event.created_at}")
             else:
                 proposal = (service.get(proposal_id) if action == "show"
                             else getattr(service, action)(proposal_id))
                 if proposal is None:
-                    raise ValueError(f"skill proposal not found: {proposal_id}")
+                    raise ValueError("skill proposal not found")
                 print(f"Proposal: {proposal.id}")
                 print(f"Status: {proposal.status.value}")
                 print(f"Name: {redact_text(proposal.name)}")
                 print(f"Instructions: {redact_text(proposal.instructions)}")
-                print(f"Source jobs: {', '.join(proposal.source_job_ids) or 'none'}")
+                print(f"Source jobs: {', '.join(redact_text(job_id) for job_id in proposal.source_job_ids) or 'none'}")
                 print(f"Created: {proposal.created_at}")
                 print(f"Updated: {proposal.updated_at}")
                 if action == "approve":

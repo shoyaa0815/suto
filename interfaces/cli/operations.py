@@ -96,6 +96,9 @@ async def notify_cli(store, *, after_id: int):
             events = await asyncio.to_thread(store.notifications_after, after_id)
             for event in events:
                 summary = _NOTIFICATION_SUMMARIES.get(event['kind'])
+                if (event['kind'] == 'approval_required' and
+                        event['current_status'] != 'waiting_approval'):
+                    summary = None
                 if summary is not None:
                     print(
                         f"\n[suto notification #{event['id']}] "
@@ -103,7 +106,7 @@ async def notify_cli(store, *, after_id: int):
                         flush=True,
                     )
                 after_id = event['id']
-                if summary is not None:
+                if summary is not None or event['kind'] == 'approval_required':
                     # Keep the cursor ahead of the acknowledgement so a retry
                     # cannot print the same notification again.
                     pending_ack = after_id

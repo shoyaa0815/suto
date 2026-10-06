@@ -135,8 +135,10 @@ class OperationsStore:
     def notifications_after(self, event_id: int, *, limit: int = 100) -> list[dict]:
         with self._connect() as db:
             return [dict(row) for row in db.execute(
-                'SELECT * FROM notifications WHERE id > ? AND read_at IS NULL '
-                'ORDER BY id ASC LIMIT ?',
+                'SELECT notifications.*, jobs.status AS current_status FROM notifications '
+                'JOIN jobs ON jobs.id=notifications.job_id '
+                'WHERE notifications.id > ? AND notifications.read_at IS NULL '
+                'ORDER BY notifications.id ASC LIMIT ?',
                 (event_id, min(max(int(limit), 1), 500)),
             )]
 
