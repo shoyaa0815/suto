@@ -150,6 +150,38 @@ refresh.
 
 ## Database and worker lifecycle
 
+Start the automation worker in its own terminal or host-managed service:
+
+```bash
+venv/bin/python main.py worker
+```
+
+This foreground process runs until SIGINT (Ctrl-C) or SIGTERM. It loads `.env`
+through the normal entry point and uses `SUTO_DB_PATH` (default `data/suto.db`),
+the same provider configuration and persisted runtime limits as before. Start
+the CLI separately with `venv/bin/python main.py`; both processes must use the
+same database path. The worker needs no user identity, conversation, chat input,
+or Dashboard. It owns scheduling, job claims, AgentRuntime execution, retries,
+recovery and durable results/notifications. Opening or closing a CLI session
+does not start or stop the worker. Keep the worker's terminal/service running
+after closing the CLI; exiting the worker's own terminal can still stop it.
+
+Submit jobs, saved automations and schedules using the existing `/run`,
+`/automation run` and `/schedule` commands in the CLI. Submissions, cancellations,
+resumes and approval decisions commit through application services to SQLite;
+the separate worker observes changes on its next poll (at most one second
+while idle). No in-process wake or interactive session is required. Jobs remain
+queued and schedules remain durable while the worker is stopped. Job availability
+messages use the existing running heartbeat freshness check; they describe
+recent worker availability, not a guarantee of execution. A duplicate worker
+fails with `WORKER_UNAVAILABLE` before recovering or claiming another owner's
+jobs, while additional CLI sessions remain usable.
+
+Notifications are created atomically with job transitions even when every CLI
+is closed. `SUTO_NOTIFY_CLI=1` still controls presentation/acknowledgement by a
+CLI session; the standalone worker leaves inbox items unread for later delivery.
+Personal reminders retain their existing CLI delivery lifecycle.
+
 CLI conversations remain in the existing `conversations` and `messages` tables.
 Each CLI launch starts a new conversation for the same local user and interface;
 earlier conversations and run history remain stored but are not used as chat
@@ -220,10 +252,15 @@ atomically so restart cannot create a second logical job for the same
 occurrence. A retry requeues the same logical job and records another
 trigger-history row; the next worker claim creates a new durable attempt.
 
-Exit, Ctrl-C and SIGTERM stop job admission, cancel active execution, kill command
-process trees and persist interrupted jobs. On a hard crash, the next owning
-worker marks abandoned running jobs `interrupted`; the resume path checks
-workspace hashes before continuing. Interrupted/blocked jobs retain checkpoints.
+Ctrl-C and SIGTERM directed at the worker stop job admission, cancel active
+execution, kill command process trees and persist interrupted jobs, then release
+the worker lock. CLI `/exit`, EOF and Ctrl-C affect only that CLI session. On a
+hard crash, the next owning worker marks abandoned running jobs `interrupted`;
+the resume path checks
+workspace hashes before continuing. Use `/resume <job_id>` to explicitly resume
+interrupted work; restart does not automatically replay it. Queued jobs, due
+schedules and eligible schedule retries continue on worker startup using the
+existing missed-run/retry policies. Interrupted/blocked jobs retain checkpoints.
 Each worker claim atomically assigns a durable `attempt_id` and increments the
 job's attempt count. Attempt status and start/end times survive restart; a new
 claim after resumption receives a new ID while retaining the job ID. Internal
@@ -250,8 +287,9 @@ passes the existing permission, approval, and sandbox checks.
 ```
 
 `/run` persists a queued one-time job and reports its ID, canonical workspace,
-permission ceilings, and whether the CLI worker is ready. A saved job waits for
-an available worker; submission does not mean execution has started. `/jobs`
+permission ceilings, and whether the independent worker has a fresh heartbeat.
+A saved job waits for an available worker; submission does not mean execution
+has started. `/jobs`
 lists recent jobs with their latest attempt IDs. `/status` reports the persisted
 attempt count and ID, timestamps, automation version reference or schedule
 trigger when present, result summary, and safe error. Cancellation is

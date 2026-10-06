@@ -44,6 +44,18 @@ python3 main.py setting
 python3 main.py api
 ```
 
+Run automation in a separate terminal or host-managed service:
+
+```bash
+venv/bin/python main.py worker
+```
+
+The worker runs jobs and schedules without a chat session. The CLI submits and
+manages work through the same `SUTO_DB_PATH`; closing the CLI leaves the worker
+running. Stop the worker with Ctrl-C or SIGTERM. Interrupted jobs can be resumed
+after restart. See [worker lifecycle](docs/operations.md#database-and-worker-lifecycle)
+for ownership, recovery and notification delivery.
+
 Suto keeps conversation history and uses the local user profile. Each CLI launch
 starts a fresh chat; prior chats remain stored but are not used as context.
 Saved memories remain available across launches. In the CLI,
@@ -117,7 +129,7 @@ requires approval still waits for a separate decision.
 result summary, and safe error. Cancel is repeatable for queued, running, or
 approval-waiting jobs. Resume applies to interrupted or blocked jobs after
 workspace checkpoint checks; it does not restart a completed or cancelled job.
-Jobs saved while the CLI worker is unavailable wait until a worker is ready.
+Jobs saved while the independent worker is unavailable wait until a worker is ready.
 
 Create a schedule with exactly one of `--at <ISO>`, `--every <seconds>`, or
 `--cron <five-field expression>`. Options precede the task. An `--at` value

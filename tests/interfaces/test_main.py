@@ -11,6 +11,7 @@ from main import _parse_args
         (["setting"], ("setting", "agent")),
         (["api"], ("api", "agent")),
         (["voice"], ("voice", "agent")),
+        (["worker"], ("worker", "agent")),
     ],
 )
 def test_parse_args_accepts_public_entrypoints(args, expected):
@@ -19,10 +20,10 @@ def test_parse_args_accepts_public_entrypoints(args, expected):
 
 @pytest.mark.parametrize(
     "args",
-    [["chat", "cli"], ["agent", "cli"], ["home"], ["settings"], ["web"], ["setting", "extra"]],
+    [["chat", "cli"], ["agent", "cli"], ["home"], ["settings"], ["web"], ["setting", "extra"], ["worker", "extra"]],
 )
 def test_parse_args_rejects_removed_entrypoints(args):
-    with pytest.raises(SystemExit, match=r"usage: python3 main.py \[setting\|api\|voice\]"):
+    with pytest.raises(SystemExit, match=r"usage: python3 main.py \[setting\|api\|voice\|worker\]"):
         _parse_args(args)
 
 
@@ -68,6 +69,17 @@ def test_main_dispatches_voice(monkeypatch):
     calls = []
     monkeypatch.setattr(main_module.sys, "argv", ["main.py", "voice"])
     monkeypatch.setattr(voice, "run", calls.append)
+    main_module.main()
+    assert calls == ["agent"]
+
+
+def test_main_dispatches_worker(monkeypatch):
+    from application import worker
+
+    calls = []
+    monkeypatch.setattr(main_module.sys, "argv", ["main.py", "worker"])
+    monkeypatch.setattr(worker, "run", calls.append)
+    monkeypatch.setenv("SUTO_MCP_CONFIG", "")
     main_module.main()
     assert calls == ["agent"]
 

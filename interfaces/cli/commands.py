@@ -570,7 +570,8 @@ def _automation(context: CommandContext, argument: str) -> CommandOutcome:
             print(f"Version: {version.version}")
             print(f"Job: {job.id}")
             print(f"Status: {job.status.value}")
-            print("Job queued." if context.worker is not None and context.worker.ready else "Job saved and waiting for worker.")
+            ready = JobService(context.store, context.worker).worker_ready
+            print("Job queued." if ready else "Job saved and waiting for worker.")
         elif action == "history" and len(args) == 1:
             history = service.history(args[0])
             if not history:

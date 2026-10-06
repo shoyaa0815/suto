@@ -52,8 +52,6 @@ from interfaces.cli.output import set_activity, write as print
 from interfaces.cli.progress import activity_text, print_progress
 from sessions import SessionService, SessionStore
 from skills import SkillSelection
-from workflows.runtime.runner import JobRunner
-from workflows.runtime.worker import AutomationWorker
 from workflows.storage.store import JobStore
 from workflows.storage.runs import SessionBusyError, TERMINAL
 
@@ -146,8 +144,6 @@ async def run_session(
         user.id, CLI_STORAGE_INTERFACE, thread_id
     )
     skills.bind(store, conversation.id)
-    worker = AutomationWorker(store, JobRunner(store))
-    worker_task = asyncio.create_task(worker.start())
     notification_task = (
         asyncio.create_task(notify_cli(store, after_id=0))
         if os.environ.get(
@@ -162,8 +158,6 @@ async def run_session(
         background_tasks.append(notification_task)
     try:
         await asyncio.sleep(0)
-        if worker_task.done():
-            worker_task.result()
         while True:
             try:
                 prompt = await read_prompt()
@@ -182,7 +176,6 @@ async def run_session(
                     store, user, conversation.id, mode, skills,
                     thread_id=thread_id,
                     reset_display=getattr(read_prompt, "reset_display", None),
-                    worker=worker,
                 ),
                 prompt,
             )
@@ -385,5 +378,3 @@ async def run_session(
             print(answer)
     finally:
         await _cancel_tasks(background_tasks)
-        await worker.stop()
-        await worker_task

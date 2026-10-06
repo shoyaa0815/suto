@@ -11,6 +11,7 @@ implement or restore them unless the user explicitly reopens that work.
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 venv/bin/python main.py
+venv/bin/python main.py worker
 venv/bin/python main.py settings
 venv/bin/pytest -q
 ```
@@ -20,6 +21,7 @@ Run focused tests while developing, then the full suite for shared changes.
 ## Repository map
 
 - `main.py`, `application/`: dispatch, modes, configuration, and language handling.
+  `application/worker.py` owns standalone automation process startup/shutdown.
 - `ai/`, `tools/`: provider calls, prompting, execution, and assistant tools.
   In `ai/`, `executor.py` is the stable lifecycle façade; `execution/` owns
   policy/context preparation, model/tool rounds, and limits; `tooling/` owns
@@ -61,7 +63,7 @@ flowchart LR
     AI <--> Provider
     AI --> Web
     AI --> Service <--> DB
-    CLI --> Worker
+    Main --> Worker
     Worker <--> DB
     DB --- Lock
     DB -. snapshot .-> Backup
@@ -71,8 +73,9 @@ flowchart LR
   `data/suto.db`.
 - SQLite, WAL, locks, and active backups belong on one durable host filesystem;
   they are not a multi-host coordination mechanism.
-- One advisory-lock owner runs automation for a database. The CLI owns local
-  automation and briefing delivery.
+- One advisory-lock owner runs automation for a database through `main.py worker`,
+  independently of CLI sessions. The CLI owns local notification presentation
+  and personal reminder delivery.
 - AI, search, fetch, and platform integrations cross a network trust boundary.
   See `docs/operations.md` for migration, recovery, backup, and worker semantics.
 

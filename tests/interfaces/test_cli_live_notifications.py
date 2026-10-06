@@ -307,18 +307,6 @@ async def test_cli_restart_delivers_multiple_offline_items_once_in_order(tmp_pat
     monkeypatch.setattr(operations, "print", capture)
     monkeypatch.setattr(JobStore, "acknowledge_notification", acknowledge)
 
-    class IdleWorker:
-        def __init__(self, *_args):
-            self.stopped = asyncio.Event()
-
-        async def start(self):
-            await self.stopped.wait()
-
-        async def stop(self):
-            self.stopped.set()
-
-    monkeypatch.setattr(backend, "AutomationWorker", IdleWorker)
-
     async def one_session(started, close):
         async def read_prompt():
             started.set()

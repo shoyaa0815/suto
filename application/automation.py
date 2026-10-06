@@ -21,7 +21,9 @@ class JobService:
 
     @property
     def worker_ready(self) -> bool:
-        return self.worker is not None and self.worker.ready
+        if self.worker is not None:
+            return self.worker.ready
+        return self.store.diagnostics()["ready"]
 
     def list_recent(self) -> list[Job]:
         return self.store.list_jobs()
