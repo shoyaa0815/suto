@@ -9,9 +9,18 @@ from workflows.storage.store import JobStore
 
 
 def checkpoint_failure(store: JobStore, job: Job, *, resuming: bool = False) -> WorkflowError | None:
+    pinned = Path(job.workspace)
+    try:
+        workspace = pinned.resolve()
+        if pinned.is_absolute() and workspace != pinned:
+            return WorkflowError(ErrorCode.SANDBOX_VIOLATION, "job workspace identity has changed")
+        if not workspace.is_dir():
+            return WorkflowError(ErrorCode.WORKSPACE_INVALID, "job workspace is unavailable")
+    except (OSError, RuntimeError) as error:
+        code = ErrorCode.WORKSPACE_PERMISSION_DENIED if isinstance(error, PermissionError) else ErrorCode.WORKSPACE_INVALID
+        return WorkflowError(code, "job workspace cannot be resolved")
     if job.attempt_count < (1 if resuming else 2):
         return None
-    workspace = Path(job.workspace).resolve()
     for change in store.latest_changes_by_path(job.id):
         target = (workspace / change.path).resolve()
         try:

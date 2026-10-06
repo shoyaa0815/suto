@@ -8,6 +8,8 @@ import ai
 import aiohttp
 import pytest
 
+from application.automation import AutomationService, JobService
+from workflows.errors import ErrorCode
 from interfaces.cli.commands import CommandContext, handle_command
 from tests.support.ai_helpers import FakeClientSession, patch_model_chat
 from workflows.models import ApprovalStatus, JobStatus
@@ -212,3 +214,65 @@ async def test_cli_default_read_only_blocks_runtime_write_tool(tmp_path, monkeyp
     assert persisted.get_job(job.id).status == JobStatus.BLOCKED
     assert persisted.latest_approval(job.id) is None
     assert not target.exists()
+
+
+@pytest.mark.parametrize("source", ["run", "automation", "schedule", "scheduled_automation"])
+async def test_queued_job_cannot_rebind_pinned_workspace_after_restart(tmp_path, source):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "private.txt").write_text("outside data")
+    store = JobStore(tmp_path / "jobs.db")
+    if source in {"automation", "scheduled_automation"}:
+        store.create_automation("inspect", "inspect files", workspace)
+    if source == "run":
+        job = JobService(store).submit("inspect files", workspace=workspace)
+    elif source == "automation":
+        job, _ = AutomationService(store).run("inspect", {})
+    else:
+        scheduler = Scheduler(store)
+        options = dict(kind="once", expression="2030-01-01T00:00:00+00:00",
+                       timezone="UTC", now=datetime(2029, 1, 1, tzinfo=UTC))
+        if source == "schedule":
+            scheduler.create(prompt="inspect files", workspace=workspace, **options)
+        else:
+            scheduler.create_automation(automation_name="inspect", parameters={}, **options)
+        assert scheduler.tick(datetime(2030, 1, 1, tzinfo=UTC)) == 1
+        job = store.list_jobs()[0]
+    workspace.rename(tmp_path / "original-workspace")
+    workspace.symlink_to(outside, target_is_directory=True)
+    calls = []
+
+    async def execute(*args, **kwargs):
+        calls.append(kwargs)
+        raise AssertionError("provider must not run in a rebound workspace")
+
+    reopened = JobStore(store.path)
+    await JobRunner(reopened, execute=execute).run(reopened.claim_next_job())
+    persisted = JobStore(store.path)
+    result = persisted.get_job_result(job.id)
+    assert result.status == JobStatus.BLOCKED
+    assert result.error_code == ErrorCode.SANDBOX_VIOLATION
+    assert persisted.get_job(job.id).workspace == str(workspace)
+    assert persisted.list_job_attempts(job.id)[0].error_code == ErrorCode.SANDBOX_VIOLATION
+    assert calls == []
+
+
+def test_resume_rejects_rebound_workspace_without_checkpoint_changes(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    store = JobStore(tmp_path / "jobs.db")
+    job = JobService(store).submit("inspect files", workspace=workspace)
+    claimed = store.claim_next_job()
+    store.interrupt_job(job.id, "restart")
+    workspace.rename(tmp_path / "original-workspace")
+    workspace.symlink_to(outside, target_is_directory=True)
+    reopened = JobStore(store.path)
+    with pytest.raises(ValueError) as caught:
+        JobService(reopened).resume(job.id)
+    assert caught.value.error_code == ErrorCode.SANDBOX_VIOLATION
+    assert reopened.get_job(job.id).status == JobStatus.INTERRUPTED
+    assert reopened.list_job_attempts(job.id)[0].id == claimed.attempt_id

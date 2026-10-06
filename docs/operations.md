@@ -274,6 +274,11 @@ expired approval retains `APPROVAL_EXPIRED` while waiting for the next claim;
 the job remains queued for a fresh approval. Quota rejection and unavailable
 worker ownership surface codes at admission/startup without failing waiting jobs.
 
+Execution and resume revalidate the canonical workspace pinned at submission.
+Replacing that path with a symlink to another directory blocks the job with
+`SANDBOX_VIOLATION` before provider or tool execution, including after restart.
+Older jobs with relative workspace paths retain their existing resolution policy.
+
 ```text
 /schedule create (--at <ISO> | --every <seconds> | --cron <expr>)
     [--timezone <zone>] [--workspace <path>] [--allow-write]

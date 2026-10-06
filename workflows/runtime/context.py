@@ -70,12 +70,15 @@ class ExecutionContext:
     sandbox: str = 'process'
     budget_check: object | None = None
     budget_seconds: object | None = None
+    workspace_is_pinned: bool = False
 
     def __post_init__(self) -> None:
         if self.sandbox not in {"process", "bwrap"}:
             raise WorkflowError(ErrorCode.INVALID_INPUT, "sandbox must be process or bwrap")
         try:
             resolved = self.workspace.expanduser().resolve()
+            if self.workspace_is_pinned and resolved != self.workspace:
+                raise WorkflowError(ErrorCode.SANDBOX_VIOLATION, "job workspace identity has changed")
             if not resolved.is_dir():
                 raise WorkflowError(ErrorCode.WORKSPACE_INVALID, f"workspace is not a directory: {resolved}")
         except PermissionError as error:

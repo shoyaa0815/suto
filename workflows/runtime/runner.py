@@ -194,6 +194,7 @@ class JobRunner:
             context = ExecutionContext(
                 job_id=job.id,
                 workspace=Path(job.workspace),
+                workspace_is_pinned=Path(job.workspace).is_absolute(),
                 allowed_tools=allowed_tools,
                 plan_store=self.store,
                 command_event_callback=save_command_event,
