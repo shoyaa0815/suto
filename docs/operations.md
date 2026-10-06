@@ -400,6 +400,12 @@ removes old progress/tool/command/change logs and notifications only for old
 completed, failed or cancelled jobs, plus expired operator logs. It preserves
 job summaries, plans, metrics, approvals, and all resumable-job checkpoints.
 SQLite may reuse freed pages without immediately shrinking the database file.
+Unread notifications remain available regardless of age; acknowledged
+notifications follow the selected retention window. Cleanup also previews and
+redacts expired rejected Skill proposal content while preserving its decision
+history and repeated-workflow deduplication hash. Pending proposals, approved
+proposals, and published Skills remain unchanged. Deleted proposals already
+contain only their status tombstone and deduplication hash.
 
 ## Project retrieval
 
@@ -632,12 +638,14 @@ job permissions, approval, and sandbox checks.
 
 `/skill-proposal reject <id>` and `/skill-proposal delete <id>` do not create or
 change a Skill. The state path is `pending` to `approved`, `rejected`, or
-`deleted`; reviewed proposals may then become `deleted`. Every transition has a
-durable event.
-Deletion clears the name, instructions, and source job IDs while retaining a
-status and timestamp tombstone. Drafts persist until explicitly deleted;
-rejected and approved drafts are retained until deletion too. Proposal cleanup
-is manual. Approval rechecks source job provenance and fails if stored
+`deleted`; reviewed proposals may then become `deleted`. Every decision
+transition has a durable event. Deletion clears the name, instructions, and
+source job IDs while retaining a status and timestamp tombstone. `/cleanup [days]`
+previews expired rejected proposal redaction and acknowledged
+notification removal; `--apply` performs both atomically. The worker uses the
+same retention window when `retention_days` is enabled. Pending proposals,
+approved proposals, decision history, and repeated-workflow deduplication hashes
+are preserved. Approval rechecks source job provenance and fails if stored
 provenance is invalid or the source jobs are no longer completed in one
 workspace. Detection never approves a proposal; every Skill publication still
 uses the explicit `/skill-proposal approve <id>` path.

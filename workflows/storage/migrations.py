@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .locking import ProcessLock
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 HARDENING = """
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -455,6 +455,36 @@ WHEN NOT (
 BEGIN SELECT RAISE(ABORT, 'invalid skill proposal transition'); END;
 """
 
+PROPOSAL_RETENTION = """
+ALTER TABLE skill_draft_proposals ADD COLUMN redacted INTEGER NOT NULL DEFAULT 0
+ CHECK(redacted IN (0,1));
+DROP TRIGGER skill_draft_proposals_transition;
+CREATE TRIGGER skill_draft_proposals_transition BEFORE UPDATE ON skill_draft_proposals
+WHEN NOT (
+ (OLD.status='pending' AND NEW.status IN ('approved','rejected','deleted')) OR
+ (OLD.status IN ('approved','rejected') AND NEW.status='deleted') OR
+ (OLD.status='rejected' AND NEW.status='rejected' AND OLD.redacted=0 AND
+  NEW.redacted=1 AND NEW.name='' AND NEW.instructions='' AND NEW.source_job_ids='[]')
+) OR NEW.id!=OLD.id OR NEW.created_at!=OLD.created_at OR
+ NEW.detection_key IS NOT OLD.detection_key OR
+ (OLD.redacted=1 AND NEW.redacted!=1) OR
+ (NEW.status!='deleted' AND NEW.redacted=0 AND (
+  NEW.name!=OLD.name OR NEW.instructions!=OLD.instructions OR
+  NEW.source_job_ids!=OLD.source_job_ids
+ )) OR (NEW.status='deleted' AND (
+  NEW.name!='' OR NEW.instructions!='' OR NEW.source_job_ids!='[]'
+ )) OR (NEW.redacted=1 AND (
+  NEW.name!='' OR NEW.instructions!='' OR NEW.source_job_ids!='[]' OR
+  NEW.status NOT IN ('rejected','deleted')
+ ))
+BEGIN SELECT RAISE(ABORT, 'invalid skill proposal transition'); END;
+DROP TRIGGER skill_draft_proposals_changed;
+CREATE TRIGGER skill_draft_proposals_changed AFTER UPDATE ON skill_draft_proposals
+WHEN OLD.status!=NEW.status
+BEGIN INSERT INTO skill_proposal_events(proposal_id,status,created_at)
+ VALUES(NEW.id,NEW.status,NEW.updated_at); END;
+"""
+
 
 def backup_database(source: Path, destination: Path) -> Path:
     source, destination = source.resolve(), destination.expanduser().absolute()
@@ -518,6 +548,7 @@ def initialize_database(store) -> None:
                 (19, JOB_RESULT_NOTIFICATIONS),
                 (20, SKILL_DRAFT_PROPOSALS),
                 (21, REPEATED_WORKFLOW_PROPOSALS),
+                (22, PROPOSAL_RETENTION),
             ):
                 if number > SCHEMA_VERSION:
                     break
@@ -652,6 +683,22 @@ def initialize_database(store) -> None:
                             migration_script = ''
                         elif 'detection_key' in columns or index:
                             raise RuntimeError('database has a partial repeated workflow proposal migration; restore a verified backup')
+                    if number == 22:
+                        columns = {row[1] for row in connection.execute(
+                            'PRAGMA table_info(skill_draft_proposals)')}
+                        transition = connection.execute(
+                            "SELECT sql FROM sqlite_master WHERE type='trigger' "
+                            "AND name='skill_draft_proposals_transition'"
+                        ).fetchone()
+                        changed = connection.execute(
+                            "SELECT sql FROM sqlite_master WHERE type='trigger' "
+                            "AND name='skill_draft_proposals_changed'"
+                        ).fetchone()
+                        if ('redacted' in columns and transition and 'OLD.redacted' in transition[0]
+                                and changed and 'OLD.status!=NEW.status' in changed[0]):
+                            migration_script = ''
+                        elif 'redacted' in columns:
+                            raise RuntimeError('database has a partial proposal retention migration; restore a verified backup')
                     connection.executescript('BEGIN IMMEDIATE;\n' + migration_script)
                     connection.execute('INSERT OR REPLACE INTO schema_migrations VALUES (?,?)',
                                        (number, datetime.now(UTC).isoformat()))

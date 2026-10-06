@@ -23,7 +23,6 @@ _RETENTION_QUERIES = {
         'tool_events',
         'command_events',
         'change_events',
-        'notifications',
     )
 }
 _RETENTION_QUERIES['structured_logs'] = (
@@ -119,6 +118,34 @@ class OperationsStore:
                 counts[table] = db.execute(count_query, (cutoff, cutoff)).fetchone()[0]
                 if not dry_run:
                     db.execute(delete_query, (cutoff, cutoff))
+            # Unread notifications are still actionable delivery state. Keep
+            # them regardless of age; acknowledged notifications can expire.
+            counts['notifications'] = db.execute(
+                "SELECT COUNT(*) FROM notifications WHERE read_at IS NOT NULL "
+                "AND created_at < ? AND job_id IN (SELECT id FROM jobs WHERE "
+                "status IN ('completed','failed','cancelled') AND finished_at < ?)",
+                (cutoff, cutoff),
+            ).fetchone()[0]
+            if not dry_run:
+                db.execute(
+                    "DELETE FROM notifications WHERE read_at IS NOT NULL "
+                    "AND created_at < ? AND job_id IN (SELECT id FROM jobs WHERE "
+                    "status IN ('completed','failed','cancelled') AND finished_at < ?)",
+                    (cutoff, cutoff),
+                )
+            # Rejected drafts can retain sensitive instructions and source job
+            # references. Redact those fields after retention while preserving
+            # the decision row, event history, and repeated-workflow hash.
+            counts['skill_proposals_rejected'] = db.execute(
+                "SELECT COUNT(*) FROM skill_draft_proposals WHERE status='rejected' "
+                "AND redacted=0 AND updated_at < ?", (cutoff,),
+            ).fetchone()[0]
+            if not dry_run:
+                db.execute(
+                    "UPDATE skill_draft_proposals SET name='', instructions='', "
+                    "source_job_ids='[]', redacted=1 WHERE status='rejected' "
+                    "AND redacted=0 AND updated_at < ?", (cutoff,),
+                )
             if not dry_run:
                 self._log(db, None, 'retention.cleanup', json.dumps({'days': days, 'deleted': counts}))
         return {'dry_run': dry_run, 'older_than_days': days, 'rows': counts}

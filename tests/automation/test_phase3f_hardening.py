@@ -47,9 +47,10 @@ def test_notifications_store_metadata_and_expire_at_retention_boundary(tmp_path)
         assert "private" not in stored
     reopened = JobStore(path)
     assert [event["id"] for event in reopened.notifications()] == [events[1]["id"]]
-    assert store.cleanup(days=1)["rows"]["notifications"] == 2
-    assert store.cleanup(days=1, dry_run=False)["rows"]["notifications"] == 2
-    assert reopened.notifications(unread_only=False) == []
+    assert store.cleanup(days=1)["rows"]["notifications"] == 1
+    assert store.cleanup(days=1, dry_run=False)["rows"]["notifications"] == 1
+    assert [event["id"] for event in reopened.notifications(unread_only=False)] == [events[1]["id"]]
+    assert reopened.acknowledge_notification(events[1]["id"])
     assert not reopened.acknowledge_notification(events[1]["id"])
 
 
@@ -59,7 +60,10 @@ def test_proposal_keeps_only_review_content_and_delete_scrubs_it(tmp_path):
         service.create("unsafe", "Use api_key=sk-secretvalue123", sources)
     draft = service.create("review", "Summarize the completed work.", sources)
     with sqlite3.connect(path) as db:
-        row = db.execute("SELECT * FROM skill_draft_proposals WHERE id=?", (draft.id,)).fetchone()
+        row = db.execute(
+            "SELECT id,name,instructions,status,source_job_ids,created_at,updated_at,detection_key "
+            "FROM skill_draft_proposals WHERE id=?", (draft.id,),
+        ).fetchone()
         assert len(row) == 8
         assert row[-1] is None
         stored = json.dumps(row)

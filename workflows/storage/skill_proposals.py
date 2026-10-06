@@ -42,8 +42,11 @@ def _proposal(row: sqlite3.Row | None) -> SkillDraftProposal | None:
         source_job_ids = json.loads(row["source_job_ids"])
     except (ValueError, TypeError):
         raise ValueError("invalid skill proposal data") from None
-    if status == SkillProposalStatus.DELETED:
+    redacted = bool(row["redacted"]) if "redacted" in row.keys() else False
+    if status == SkillProposalStatus.DELETED or redacted:
         if source_job_ids != [] or row["name"] != "" or row["instructions"] != "":
+            raise ValueError("invalid skill proposal data")
+        if redacted and status not in (SkillProposalStatus.REJECTED, SkillProposalStatus.DELETED):
             raise ValueError("invalid skill proposal data")
     elif (not isinstance(source_job_ids, list) or
           not 2 <= len(source_job_ids) <= 50 or
