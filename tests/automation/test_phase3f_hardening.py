@@ -167,6 +167,42 @@ def test_concurrent_approve_and_reject_commit_only_one_decision(tmp_path):
     assert len(reopened.list_skills()) == (winner == SkillProposalStatus.APPROVED)
 
 
+def test_creation_returns_pending_state_if_delete_follows_commit(tmp_path, monkeypatch):
+    service, sources, path = _draft(tmp_path)
+    committed = threading.Event()
+    resume = threading.Event()
+    original_connect = service.store._connect
+
+    @contextmanager
+    def pause_after_commit():
+        with original_connect() as connection:
+            yield connection
+        if not committed.is_set():
+            committed.set()
+            assert resume.wait(timeout=5)
+
+    monkeypatch.setattr(service.store, "_connect", pause_after_commit)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(service.create, "review", "Check the result.", sources)
+        try:
+            assert committed.wait(timeout=5)
+            other = SkillProposalService(JobStore(path))
+            persisted = other.list()[0]
+            other.delete(persisted.id)
+        finally:
+            resume.set()
+        created = future.result(timeout=5)
+    assert created.status == SkillProposalStatus.PENDING
+    assert created.source_job_ids == sources
+    assert created.name == "review"
+    reopened = JobStore(path)
+    assert reopened.get_skill_proposal(created.id).status == SkillProposalStatus.DELETED
+    assert [event.status for event in reopened.list_skill_proposal_events(created.id)] == [
+        SkillProposalStatus.PENDING, SkillProposalStatus.DELETED,
+    ]
+    assert reopened.list_skills() == []
+
+
 @pytest.mark.parametrize("decision", ["reject", "delete"])
 def test_reject_or_delete_audit_failure_rolls_back_content_and_status(tmp_path, decision):
     service, sources, path = _draft(tmp_path)

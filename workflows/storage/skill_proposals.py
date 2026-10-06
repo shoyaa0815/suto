@@ -126,9 +126,9 @@ class SkillProposalStore:
                 "VALUES (?,?,?,'pending',?,?,?)",
                 (proposal_id, name, instructions, json.dumps(source_job_ids), timestamp, timestamp),
             )
-        result = self.get_skill_proposal(proposal_id)
-        if result is None:
-            raise RuntimeError("failed to create skill proposal")
+            result = _proposal(connection.execute(
+                "SELECT * FROM skill_draft_proposals WHERE id=?", (proposal_id,),
+            ).fetchone())
         return result
 
     def get_skill_proposal(self, proposal_id: str) -> SkillDraftProposal | None:
