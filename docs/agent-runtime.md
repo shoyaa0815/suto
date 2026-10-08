@@ -1,7 +1,8 @@
 # Agent runtime migration map (Phases 0–2)
 
-The CLI remains the supported interface. Its request path is
-`interfaces/cli/backend.py` → `ai/executor.py` → `ai/execution/loop.py` →
+The CLI remains the supported interface. Its Job path is
+CLI command registry → Application Services → standalone Worker/JobRunner →
+`ai/executor.py` → `ai/execution/loop.py` →
 `agent/runtime.py`. The job worker uses the same `ai/executor.py` entry point.
 The executor remains the stable compatibility facade for callers and tests.
 
@@ -30,7 +31,8 @@ context, session and permission ports without changing the runtime loop.
 
 ## Phase 9 stabilization note
 
-The CLI and scheduled jobs both enter the same runtime through `execute_local_ai`.
+CLI-submitted and scheduled jobs both enter the same runtime through
+JobRunner and `execute_local_ai`.
 Provider errors that escape this path are returned as a localized generic failure;
 the public result and debug output contain only the exception type, never its
 message. Scheduled job tests cover a reopened database, provider tool-call
@@ -38,7 +40,7 @@ normalization, a workspace read, the tool observation, and committed job state.
 
 ## Phase 9.1 core hardening
 
-`AgentRuntime` denies tool execution by default. The CLI/job adapter supplies an
+`AgentRuntime` denies tool execution by default. The execution adapter supplies an
 explicit allow policy for the request-scoped registry; an ambiguous decision,
 missing policy, or non-boolean authorization response blocks execution. The
 tool executor requires a grant from that authorization path. A tool's own
@@ -54,7 +56,7 @@ contains only event type, counts, statuses, and registered tool names; prompts,
 arguments, observations, credentials, and environment values are excluded.
 
 The `messages` table retains old rows and now supports `system`, `user`,
-`assistant`, and `tool` roles. The CLI stores completed assistant tool calls
+`assistant`, and `tool` roles. The retained session API stores completed assistant tool calls
 and their observations together in one transaction. Session history reconstructs
 their model-facing fields after restart; compaction still keeps raw rows. Existing
-jobs continue to use their durable job checkpoint rather than CLI sessions.
+jobs continue to use their durable job checkpoint rather than legacy sessions.

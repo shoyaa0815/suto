@@ -27,16 +27,11 @@ def test_print_help_lists_exit_commands(capsys):
     assert "  /help  " in output
     assert "  /version  " in output
     assert "  /suto help  " not in output
-    assert "/clear" in output
-    assert "/new" not in output
-    assert "/setting" not in output
-    assert "/reminder" in output
-    assert "/reminder remove <name-or-id>" in output
-    assert "/task" in output
-    assert "/task complete" not in output
-    assert "/task remove <name-or-id>" in output
+    for command in ("/clear", "/reset", "/reminder", "/task", "  /skills ", "  /skill ", "/<skill-name>"):
+        assert command not in output
+    assert "python3 main.py settings" in output
     assert "/jobs" in output
-    assert "/notification" not in output
+    assert "/notifications [ack <event_id>]" in output
     assert "  /noti  " not in output
     assert "/daily" not in output
     assert "/brief" not in output

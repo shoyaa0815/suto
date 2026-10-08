@@ -1,8 +1,9 @@
 # Suto
 
-Suto is a local-first personal assistant for chatting with AI, running scheduled
-workflows, remembering useful context, and delivering notifications. Personal
-assistant integrations are under active development.
+Suto is a local-first AI automation runtime for durable Jobs, reusable
+Automations and Schedules. Submit and inspect work through the CLI or Runtime
+API; a standalone Worker executes it under workspace, permission and approval
+controls, with results and notifications persisted in SQLite.
 
 ## Installation
 
@@ -13,7 +14,7 @@ python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 ```
 
-Copy `config.example.yaml` to `config.yaml` and set the runtime and local profile:
+Copy `config.example.yaml` to `config.yaml` and set the runtime:
 
 ```yaml
 version: 1
@@ -23,10 +24,6 @@ runtime:
   base_url: http://localhost:11434
   timezone: Asia/Bangkok
   workspace: /absolute/path/to/project
-profile:
-  timezone: Asia/Bangkok
-  locale: th
-  display_name: Your name
 ```
 
 The CLI, API and Worker use this same runtime configuration without opening
@@ -54,7 +51,7 @@ Activate the virtual environment, then start Suto:
 ```bash
 source venv/bin/activate
 python3 main.py
-python3 main.py setting
+python3 main.py settings
 python3 main.py api
 ```
 
@@ -70,46 +67,26 @@ running. Stop the worker with Ctrl-C or SIGTERM. Interrupted jobs can be resumed
 after restart. See [worker lifecycle](docs/operations.md#database-and-worker-lifecycle)
 for ownership, recovery and notification delivery.
 
-Suto keeps conversation history and uses the local user profile. Each CLI launch
-starts a fresh chat; prior chats remain stored but are not used as context.
-Saved memories remain available across launches. In the CLI,
-personal tasks and reminders are managed with explicit slash commands; chat
-does not create or change them.
+The CLI opens an Automation command prompt with scrollable command output.
+Use `/help` for Jobs, Automations, Schedules, durable approvals and notifications.
+Submit free-form task descriptions with `/run <task>`; plain text does not start
+an interactive AI request. `/notifications` lists unread Job inbox items and
+`/notifications ack <event_id>` acknowledges one. Live presentation is optional
+with `SUTO_NOTIFY_CLI=1`; inbox items are persisted while the CLI is closed.
 
-The `cli` interface is a plain stdin/stdout session. It prints the active model
-and mode, accepts requests in a framed `>` prompt, and leaves each submitted
-user message in its frame. Assistant replies are printed without a name prefix.
-`api` starts the local agent API on `http://127.0.0.1:8766`. See
-[API operations](docs/operations.md#local-agent-api) for routes, examples,
-security boundaries, and run lifecycle.
+`api` starts the guarded local API on `http://127.0.0.1:8766`. Durable runtime
+routes and the existing `/runs` compatibility API remain available. See
+[API operations](docs/operations.md#local-agent-api) for routes and boundaries.
 
-`setting` opens the local-only web page in the default browser and prints
-a private sign-in link. Dashboard shows saved CLI conversations and their chat
-messages for reading. Settings edits `display_name`, `locale`, and `timezone`
-in `config.yaml`. AI chat remains in the CLI.
-Save validates changes in one step; restart Suto after saving. The CLI
-reads these values but cannot change them.
-Legacy `SUTO_TIMEZONE`, `SUTO_LOCALE`, and `SUTO_USER_NAME` environment values
-remain fallbacks when the corresponding YAML value is absent. Keep API keys and
-platform tokens in `.env`, never in `config.yaml`.
+`settings` (also accepted as `setting`) opens a local web editor and prints a
+private sign-in link. Edit validated `config.yaml` YAML, including runtime
+provider, model, timezone, workspace and limits. Save checks for concurrent edits
+and writes atomically; restart Suto processes afterward. Keep secrets in `.env`.
 
-Reminders are persisted and appear in the terminal when they become due. If
-Suto was closed at that time, it reports the missed reminder on the next start.
-
-`/reminder` lists pending reminders. Create one with an explicit duration or
-clock time, for example `/reminder อีกห้านาทีเตือนกินข้าว`,
-`/reminder อีก 5 นาที เตือนกินข้าว`, or
-`/reminder 00.05 เตือนให้เข้านอนหน่อย`. Clock times use the next occurrence in
-the profile timezone; `HH:MM` and `HH.MM` are accepted. `/task` lists open
-personal tasks, and `/task ทำอะไรต่างๆบลาๆ` creates one. The commands
-`/reminder remove <name-or-id>` and `/task remove <name-or-id>` delete a
-pending reminder or open task from the database. If a name matches more than
-one item, nothing is deleted and the matching IDs are shown. `/help`,
-`/version`, `/skills`, `/skill activate <name>`, `/skill deactivate <name>`,
-and `/exit` remain available. Put personal skills in
-`~/.suto/skills/<name>/SKILL.md`, restart Suto,
-then use `/<name> <message>` for one request. See [skills](docs/skills.md) for
-the file format and tool rules.
+Chat fallback, personal task/reminder commands, chat Skill activation, voice
+entry and the saved-chat dashboard are retired. Existing personal data and
+legacy storage remain intact. Versioned Automation Skills and `/skill-proposal`
+review remain available; see [Skills](docs/skills.md).
 
 Review saved draft automation Skills with `/skill-proposal list`,
 `/skill-proposal show <id>`, and `/skill-proposal history <id>`.
@@ -122,7 +99,7 @@ Use `/skill-proposal approve <id>`, `/skill-proposal reject <id>`, or
 `/skill-proposal delete <id>` to decide a draft. Approval saves a new versioned
 Skill without activating it.
 
-## Automation CLI (Phase 1)
+## Automation CLI
 
 Enter these commands at the Suto CLI prompt. `/run` saves a one-time job and
 returns its ID; a queued job has not necessarily started. The default workspace

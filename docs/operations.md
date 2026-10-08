@@ -1,38 +1,11 @@
 # Operations and advanced features
 
-## Voice interface
+## Supported interfaces
 
-Run `venv/bin/python main.py voice` for discrete, push-to-record turns. Voice
-uses its own local identity in the existing SQLite conversations and run tables;
-`/session`, `/new`, and `/resume <id>` select sessions, and `/skills` plus
-`/skill activate <name>` and `/skill deactivate <name>` persist selected Skill
-names. Missing Skills block the next run until deactivated. The same executor,
-tools, MCP restrictions, delegation, permission engine, and one-active-run
-session reservation apply. Voice does not start automation workers.
-
-Voice is disabled by default. Set `voice.stt_provider` and
-`voice.tts_provider` to `openai` in `config.yaml`, and put `OPENAI_API_KEY` in
-`.env` or the host environment. Recorded audio and the bounded spoken response
-are sent to OpenAI when this provider is selected. The configured audio source
-and sink can be `alsa` (using installed `arecord` and `aplay`) or `file` with
-absolute WAV `input_path` and `output_path`. ALSA capture lasts at most 30
-seconds; file input and generated audio are limited to 4 MiB. Startup prints
-provider names and audio availability without keys or device IDs. File mode can
-be used to inspect a generated WAV without speaker hardware. The executable
-check cannot confirm that an ALSA device will open; capture or playback reports
-a generic failure if the device is unavailable.
-
-Use `/listen` to record one turn. During a turn, `/cancel` cancels the executor
-task and any awaited child work and stops supported playback. An approval
-request prints its ID; `/approve <id>` permits that single call and `/deny <id>`
-denies it. Transcribed speech never submits approval. Requests expire through
-the existing broker, and pending approvals vanish on cancellation or restart.
-The text response remains available in the terminal. A short, simple, sanitized
-response may be spoken; long, code-heavy, or potentially sensitive content gets
-a fixed spoken notice instead. Failed runs speak a fixed error. A completed run
-stays completed in SQLite if only TTS or playback fails afterward. There is no
-wake word, always-listening process, voice authentication, or automatic crash
-continuation.
+The CLI is an Automation command interface. `main.py voice`, chat fallback,
+personal task/reminder commands, chat Skill routing and the saved-chat dashboard
+are retired. Legacy modules and stored personal data remain for compatibility;
+opening the CLI starts no personal delivery loop.
 
 ## Local agent API
 
@@ -170,14 +143,13 @@ curl -sS http://127.0.0.1:8766/jobs/job_RETURNED_ID/cancel \
 
 ## Host-managed settings
 
-Non-secret local profile and new-user defaults live in `config.yaml`; secrets
+Non-secret runtime settings and legacy profile defaults live in `config.yaml`; secrets
 remain in `.env`. Activate `venv` as shown in the README, then run
-`python3 main.py setting` to open the local web
+`python3 main.py settings` to open the local web
 editor. It prints a private sign-in link, validates edits before saving, and
 persists valid settings atomically. Restart Suto after saving so the CLI uses
 the new values.
-Existing reminder timestamps are not rewritten; newly created reminders use
-the user's stored timezone.
+Existing personal data and timestamps are not rewritten.
 
 YAML profile values take precedence over the legacy `SUTO_TIMEZONE`,
 `SUTO_LOCALE`, and `SUTO_USER_NAME` environment defaults. Unknown sections,
@@ -256,7 +228,7 @@ when building the provider. Base URLs must be HTTP(S) without embedded
 credentials, query strings or fragments. Secrets/unknown fields, unsupported
 providers, invalid timezones, non-mapping sections, incorrect YAML types,
 non-finite numbers and out-of-range options fail closed without echoing runtime
-values. Dashboard profile saves preserve the runtime section; legacy profile-only
+values. Legacy profile saves preserve the runtime section; legacy profile-only
 files remain valid and profile saves do not add a runtime section.
 
 SQLite `runtime_settings` remains the shared, durable source for concurrency,
@@ -341,32 +313,15 @@ jobs, while additional CLI sessions remain usable.
 Notifications are created atomically with job transitions even when every CLI
 is closed. `SUTO_NOTIFY_CLI=1` still controls presentation/acknowledgement by a
 CLI session; the standalone worker leaves inbox items unread for later delivery.
-Personal reminders retain their existing CLI delivery lifecycle.
+The public `/notifications` command lists unread inbox items without marking
+them read; `/notifications ack <event_id>` acknowledges one exact item. Live
+notification delivery remains optional with `SUTO_NOTIFY_CLI=1`.
 
-CLI conversations remain in the existing `conversations` and `messages` tables.
-Each CLI launch starts a new conversation for the same local user and interface;
-earlier conversations and run history remain stored but are not used as chat
-context after reopening. Saved memories still carry across launches. Before
-each prompt, the session service keeps up to 20 recent messages for model
-context and condenses older messages into a bounded session summary. The summary
-and its message cursor are stored together; the original messages remain
-available in SQLite. Active Skill selection starts fresh with each CLI launch.
-`/clear` deletes both messages and their summary for the current conversation,
-then resets the visible CLI history to its startup view. It does not delete
-saved memories, tasks, reminders, or other conversations;
-`/reset all` removes saved conversations. Model context uses a 32,000-character
-history budget and an 8,000-character summary budget. The deterministic summary
-keeps excerpts of older turns, so details outside that budget can be omitted.
-
-Explicitly saved user memories live separately from conversations in SQLite and
-are indexed by FTS5. Searches are scoped to the active user and return ranked
-matches; an empty query lists recent memories. Matching memories enter the
-model request through the context manager with a separate 4,000-character,
-five-result limit. Retrieved text is reference data, not instructions. Saving a
-memory requires the memory tool; conversation turns are not saved automatically.
-If the local memory index fails, the request reports that memory search is
-unavailable before calling the model; the CLI remains available for another
-request. It does not substitute unrelated recent memories.
+CLI launches do not create identities, conversations or interactive agent runs.
+Use `/run <task>` to queue work; `/clear`, `/reset`, `/task`, `/reminder` and
+chat Skill commands are unavailable. Existing identities, conversations,
+messages, summaries, memories, tasks, reminders and session Skills remain stored.
+The compatibility `/runs` API retains its session ownership and history behavior.
 
 The unversioned Phase 0–7 database is schema 0. Startup migrates to version 1
 (production controls) and version 2 (advanced features). Each version runs in a
@@ -734,7 +689,7 @@ and runtime are in scope for the approved command.
 
 ## Local web settings
 
-Run `python3 main.py setting` to open Suto Settings in the
+Run `python3 main.py settings` to open Suto Settings in the
 default browser. It binds only to `127.0.0.1:8765`.
 The browser opens after the port is listening. If launching the browser fails,
 use the private link printed in the terminal. Ctrl-C or SIGTERM closes the server.
@@ -746,18 +701,14 @@ APIs require that cookie; writes also require an exact local Origin and JSON
 request header. Host validation rejects alternate hostnames. No remote binding,
 public deployment or reverse-proxy mode is provided.
 
-The Dashboard tab lists saved CLI conversations for the local CLI identity from
-`SUTO_DB_PATH` (default `data/suto.db`), including conversations with no chat
-messages. Open a conversation to read its saved
-user and assistant messages in order; long lists and threads load in pages.
-Internal tool messages are hidden. The viewer is read-only, requires the same
-sign-in cookie, and does not create a database when none exists. `/clear` removes
-messages but leaves the empty conversation listed; `/reset all` removes the
-conversations from this view.
+The Settings page edits validated `config.yaml` YAML, including runtime provider,
+model, timezone, workspace and execution limits. `setting` remains an alias for
+`settings`. There is no dashboard or saved-conversation endpoint. Opening the
+editor does not access or create a user database.
 
-The Settings tab edits the supported `config.yaml` profile fields. Save becomes available
-when a field changes and validates before writing. Unknown fields, invalid timezones, malformed
-YAML and files over 32 KiB are rejected. Secrets remain in `.env`.
+Save becomes available when YAML changes and validates before writing. Unknown
+fields, invalid timezones, malformed YAML and files over 32 KiB are rejected.
+Secrets remain in `.env`.
 The editor normalizes formatting and removes comments; a byte-level revision
 check detects changes since load, including external edits. Failed validation or
 conflicts preserve the draft and file; Reload requires confirmation for unsaved
@@ -765,7 +716,7 @@ edits. Persistence reuses the existing atomic settings writer. Restart relevant
 Suto processes to apply saved settings; the editor never restarts them.
 
 Opening the web page does not start AI, automation, or delivery workers.
-AI chat and reminder delivery remain in the CLI.
+Job notifications remain in the CLI; personal reminders are not delivered.
 
 ## Local notifications and verification
 

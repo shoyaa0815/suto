@@ -10,7 +10,7 @@ from main import _parse_args
         ([], ("cli", "agent")),
         (["setting"], ("setting", "agent")),
         (["api"], ("api", "agent")),
-        (["voice"], ("voice", "agent")),
+        (["settings"], ("setting", "agent")),
         (["worker"], ("worker", "agent")),
     ],
 )
@@ -20,14 +20,14 @@ def test_parse_args_accepts_public_entrypoints(args, expected):
 
 @pytest.mark.parametrize(
     "args",
-    [["chat", "cli"], ["agent", "cli"], ["home"], ["settings"], ["web"], ["setting", "extra"], ["worker", "extra"]],
+    [["chat", "cli"], ["agent", "cli"], ["home"], ["voice"], ["web"], ["setting", "extra"], ["worker", "extra"]],
 )
 def test_parse_args_rejects_removed_entrypoints(args):
-    with pytest.raises(SystemExit, match=r"usage: python3 main.py \[setting\|api\|voice\|worker\]"):
+    with pytest.raises(SystemExit, match=r"usage: python3 main.py \[settings\|setting\|api\|worker\]"):
         _parse_args(args)
 
 
-def test_main_starts_the_cli_in_personal_assistant_mode(monkeypatch):
+def test_main_starts_the_automation_cli_in_agent_mode(monkeypatch):
     import interfaces.cli as cli
 
     calls = []
@@ -39,11 +39,12 @@ def test_main_starts_the_cli_in_personal_assistant_mode(monkeypatch):
     assert calls == ["agent"]
 
 
-def test_main_dispatches_settings_interface(monkeypatch):
+@pytest.mark.parametrize("entry", ["settings", "setting"])
+def test_main_dispatches_settings_interface(monkeypatch, entry):
     import interfaces.web as web
 
     calls = []
-    monkeypatch.setattr(main_module.sys, "argv", ["main.py", "setting"])
+    monkeypatch.setattr(main_module.sys, "argv", ["main.py", entry])
     monkeypatch.setattr(web, "run", calls.append)
 
     main_module.main()
@@ -60,16 +61,6 @@ def test_main_dispatches_api(monkeypatch):
 
     main_module.main()
 
-    assert calls == ["agent"]
-
-
-def test_main_dispatches_voice(monkeypatch):
-    import interfaces.voice as voice
-
-    calls = []
-    monkeypatch.setattr(main_module.sys, "argv", ["main.py", "voice"])
-    monkeypatch.setattr(voice, "run", calls.append)
-    main_module.main()
     assert calls == ["agent"]
 
 

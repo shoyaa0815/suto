@@ -37,8 +37,8 @@ DOT_FRAMES = (".", "..", "...", "")
 
 
 def _write_welcome(reader: "PromptReader") -> None:
-    reader.write(f"Suto · {config.AI_MODEL} · agent\n")
-    reader.write("Type /help for commands. Wheel/PageUp/PageDown: history · End: latest\n\n")
+    reader.write(f"Suto · {config.AI_MODEL} · agent · Automation\n")
+    reader.write("Type /help for commands. Wheel/PageUp/PageDown: output · End: latest\n\n")
 
 
 def _build_prompt_application(
@@ -50,7 +50,7 @@ def _build_prompt_application(
     on_scroll_history: Callable[[], None] | None = None,
     on_follow_history: Callable[[], None] | None = None,
 ) -> Application[str | None]:
-    """Build a full-screen chat viewport with input anchored at its bottom."""
+    """Build a full-screen command viewport with input anchored at its bottom."""
     history = TextArea(
         read_only=True,
         focusable=True,
@@ -78,7 +78,7 @@ def _build_prompt_application(
     )
     field.control.input_processors.append(
         ConditionalProcessor(
-            AfterInput("Ask super suto", style="class:placeholder"),
+            AfterInput("/run <task> or /help", style="class:placeholder"),
             filter=Condition(lambda: not field.text),
         )
     )
@@ -205,7 +205,7 @@ class PromptReader:
         self._following_history = True
 
     def write(self, value: object) -> None:
-        """Append CLI output to the scrollable chat history."""
+        """Append CLI output to the scrollable command output."""
         if self._application is None:
             return
         history = getattr(self._application, "suto_history_field", None)
@@ -220,19 +220,6 @@ class PromptReader:
             Document(text, cursor_position), bypass_readonly=True
         )
         self._invalidate()
-
-    def reset_display(self) -> None:
-        """Start a fresh visible chat after its stored context was cleared."""
-        if self._application is None:
-            return
-        history = getattr(self._application, "suto_history_field", None)
-        if history is None:
-            return
-        history.buffer.set_document(Document("", 0), bypass_readonly=True)
-        self._following_history = True
-        if isinstance(history.window, HistoryWindow):
-            history.window.follow_latest()
-        _write_welcome(self)
 
     def _interrupt(self) -> None:
         if self._activity is None:

@@ -6,15 +6,13 @@ DEFAULT_MODE = "agent"
 
 
 def _parse_args(args: list[str]) -> tuple[str, str]:
-    usage = "usage: python3 main.py [setting|api|voice|worker]"
+    usage = "usage: python3 main.py [settings|setting|api|worker]"
     if not args:
         return "cli", DEFAULT_MODE
-    if args == ["setting"]:
+    if args in (["settings"], ["setting"]):
         return "setting", DEFAULT_MODE
     if args == ["api"]:
         return "api", DEFAULT_MODE
-    if args == ["voice"]:
-        return "voice", DEFAULT_MODE
     if args == ["worker"]:
         return "worker", DEFAULT_MODE
     raise SystemExit(usage)
@@ -33,8 +31,6 @@ def main():
         from interfaces.cli import run
     elif name == "setting":
         from interfaces.web import run
-    elif name == "voice":
-        from interfaces.voice import run
     elif name == "worker":
         from application.worker import run
     else:
