@@ -247,6 +247,12 @@ approval and sandbox test, establishes those guarantees. This is a current
 capability/contract gap relative to `spec.md`, not evidence of a reachable
 default-Job permission bypass. No permission was broadened to close it.
 
+2026-10-08 implementation gate review: [Job MCP contract](job-mcp-contract.md)
+traces the current enforcement points and specifies conditional authorization,
+approval and confinement requirements. It stops before implementation pending
+server eligibility, startup confinement and mutation/recovery decisions. The
+default Job denial and the missing positive production evidence remain unchanged.
+
 ## Follow-up closure: native tools and operational helpers
 
 Jobs use the context-bound `capabilities/developer` tools. The generic domain
