@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from ..library.definitions import reject_detectable_secrets
 from ..models import MissedRunPolicy, Schedule, ScheduleKind
 from ..storage.store import JobStore
+from ..errors import ErrorCode, WorkflowError
 
 
 def _utc(value: datetime) -> datetime:
@@ -185,6 +186,7 @@ class Scheduler:
         retry_limit: int = 0,
         retry_delay_seconds: int = 60,
         now: datetime | None = None,
+        options: dict | None = None,
     ) -> Schedule:
         if not prompt.strip():
             raise ValueError("schedule requires a task")
@@ -207,6 +209,7 @@ class Scheduler:
             retry_limit=retry_limit,
             retry_delay_seconds=retry_delay_seconds,
             next_run_at=first,
+            options=options,
         )
 
     def create_automation(
@@ -252,12 +255,20 @@ class Scheduler:
                 following = next_occurrence(schedule, current)
             else:
                 following = next_occurrence(schedule, scheduled_for)
-            trigger = self.store.fire_schedule(
-                schedule.id,
-                schedule.next_run_at,
-                following.isoformat() if following is not None else None,
-                skip_detail=skip_detail,
-            )
+            next_run_at = following.isoformat() if following is not None else None
+            try:
+                trigger = self.store.fire_schedule(
+                    schedule.id, schedule.next_run_at, next_run_at, skip_detail=skip_detail,
+                )
+            except WorkflowError as error:
+                if error.error_code != ErrorCode.PERMISSION_DENIED:
+                    raise
+                # The materialization transaction rolled back. Persist a denied
+                # occurrence without a Job and keep unrelated worker work alive.
+                trigger = self.store.fire_schedule(
+                    schedule.id, schedule.next_run_at, next_run_at,
+                    skip_detail="MCP selection denied by current operator policy",
+                )
             if trigger is not None and trigger.job_id is not None:
                 created += 1
         return created

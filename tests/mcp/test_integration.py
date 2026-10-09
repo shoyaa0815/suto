@@ -285,7 +285,7 @@ def test_skill_tool_names_restrict_and_recommend_mcp_without_special_handling():
     assert eligible_mcp_config(MCPConfig((server(),)), None, ("no-tools",), skills).servers == ()
 
 
-def test_job_allowlist_must_also_name_the_mcp_tool(tmp_path):
+def test_job_mcp_remains_disabled_even_with_a_context_allowlist(tmp_path):
     tool = adapt_tool("one", {"name": "echo", "inputSchema": SCHEMA}, FakeClient(server()))
     denied_job = ExecutionContext("job", tmp_path)
     denied = prepare_request("hello", "agent", None, None, "", None, None, denied_job,
@@ -295,8 +295,8 @@ def test_job_allowlist_must_also_name_the_mcp_tool(tmp_path):
     allowed_job = ExecutionContext("job", tmp_path, allowed_tools=frozenset({tool.name}))
     allowed = prepare_request("hello", "agent", None, None, "", None, None, allowed_job,
                               mcp_tools={tool.name: tool})
-    assert allowed.allowed_tools == frozenset({tool.name})
-    assert len(eligible_mcp_config(MCPConfig((server(),)), allowed_job, (), None).servers) == 1
+    assert tool.name not in allowed.allowed_tools
+    assert eligible_mcp_config(MCPConfig((server(),)), allowed_job, (), None).servers == ()
 
 
 def test_active_native_name_cannot_be_silently_replaced_by_mcp(monkeypatch):

@@ -74,6 +74,7 @@ class AutomationVersion:
     allow_write: bool
     allow_command: bool
     created_at: str
+    options: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -301,6 +302,7 @@ class Schedule:
     created_at: str
     updated_at: str
     automation: ScheduledAutomationSnapshot | None = None
+    options: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

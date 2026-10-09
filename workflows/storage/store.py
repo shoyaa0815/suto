@@ -42,7 +42,8 @@ from .redaction import redact_text, redact_value
 from .runs import RunStore
 from .migrations import initialize_database
 from .operations import OperationsStore
-from ..runtime.options import validate_options
+from ..runtime.options import validate_options, validate_selection_options
+from mcp_integration.job_policy import revalidate_selection
 from .subtasks import SubtaskStore
 from .knowledge import KnowledgeStore
 from .skill_proposals import SkillProposalStore
@@ -455,6 +456,7 @@ class JobStore(
             description=row["description"],
             prompt_template=row["prompt_template"],
             parameter_schema=json.loads(row["parameter_schema"]),
+            options=json.loads(row["options"]) if "options" in row.keys() else {},
             workspace=row["workspace"],
             allow_write=bool(row["allow_write"]),
             allow_command=bool(row["allow_command"]),
@@ -633,6 +635,7 @@ class JobStore(
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             automation=snapshot,
+            options=json.loads(row["options"]) if "options" in row.keys() else {},
         )
 
     @staticmethod
@@ -671,6 +674,7 @@ class JobStore(
         except ValueError as error:
             raise tag_error(error, ErrorCode.INVALID_INPUT)
         options.setdefault("sandbox", "process")
+        revalidate_selection(options, workspace)
         job_id = f"job_{uuid4().hex[:8]}"
         created_at = _now()
         with self._connect() as connection:
@@ -1941,7 +1945,10 @@ class JobStore(
         retry_limit: int = 0,
         retry_delay_seconds: int = 60,
         next_run_at: str,
+        options: dict | None = None,
     ) -> Schedule:
+        options = validate_selection_options(options)
+        revalidate_selection(options, workspace)
         schedule_id = f"sch_{uuid4().hex[:8]}"
         timestamp = _now()
         schedule_kind = ScheduleKind(kind)
@@ -1957,8 +1964,8 @@ class JobStore(
                     id, kind, expression, timezone, prompt, workspace,
                     allow_write, allow_command, enabled, missed_run_policy,
                     retry_limit, retry_delay_seconds, next_run_at,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+                    created_at, updated_at, options
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     schedule_id,
@@ -1975,6 +1982,7 @@ class JobStore(
                     next_run_at,
                     timestamp,
                     timestamp,
+                    json.dumps(options, sort_keys=True),
                 ),
             )
         schedule = self.get_schedule(schedule_id)
@@ -2068,12 +2076,13 @@ class JobStore(
         ).fetchall()
         if any(item["existing_skill"] is None for item in skill_rows):
             raise WorkflowError(ErrorCode.SKILL_NOT_FOUND, "automation skill reference is invalid")
+        revalidate_selection(version.options, workspace)
         return (
             row["automation_name"], version.id, version.version,
             json.dumps(values, ensure_ascii=False, sort_keys=True, allow_nan=False),
             json.dumps([item["skill_version_id"] for item in skill_rows]),
             workspace, int(version.allow_write), int(version.allow_command),
-            json.dumps({"sandbox": "process"}),
+            json.dumps({"sandbox": "process", **version.options}, sort_keys=True),
         )
 
     @staticmethod
@@ -2168,6 +2177,8 @@ class JobStore(
         connection: sqlite3.Connection,
         schedule: sqlite3.Row,
     ) -> str:
+        options = validate_options(json.loads(schedule["options"]))
+        revalidate_selection(options, schedule["workspace"])
         job_id = f"job_{uuid4().hex[:8]}"
         schedule_id = (
             schedule["schedule_row_id"]
@@ -2178,8 +2189,8 @@ class JobStore(
             """
             INSERT INTO jobs (
                 id, prompt, mode, status, source, source_ref, workspace,
-                allow_write, allow_command, created_at
-            ) VALUES (?, ?, 'agent', ?, 'schedule', ?, ?, ?, ?, ?)
+                allow_write, allow_command, created_at, options
+            ) VALUES (?, ?, 'agent', ?, 'schedule', ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
@@ -2190,6 +2201,7 @@ class JobStore(
                 schedule["allow_write"],
                 schedule["allow_command"],
                 _now(),
+                json.dumps(options, sort_keys=True),
             ),
         )
         return job_id
@@ -2284,8 +2296,9 @@ class JobStore(
                                 or snapshot["allow_write"] != int(version.allow_write)
                                 or snapshot["allow_command"] != int(version.allow_command)):
                             raise ValueError("scheduled automation execution ceiling changed")
-                        if json.loads(snapshot["options"]) != {"sandbox": "process"}:
+                        if json.loads(snapshot["options"]) != {"sandbox": "process", **version.options}:
                             raise ValueError("scheduled automation sandbox is invalid")
+                        revalidate_selection(json.loads(snapshot["options"]), snapshot["workspace"])
                         job_id = f"job_{uuid4().hex[:8]}"
                         prompt = render_prompt(version.prompt_template, version.parameter_schema, values)
                         connection.execute(
@@ -2580,6 +2593,7 @@ class JobStore(
         allow_write: bool = False,
         allow_command: bool = False,
         skill_names: list[str] | None = None,
+        options: dict | None = None,
     ) -> Automation:
         reject_detectable_secrets({"description": description, "prompt_template": prompt_template}, field="definition")
         if isinstance(parameter_schema, dict):
@@ -2593,6 +2607,8 @@ class JobStore(
         workspace = validate_workspace(workspace)
         automation_id = f"auto_{uuid4().hex[:8]}"
         version_id = f"av_{uuid4().hex[:8]}"
+        options = validate_selection_options(options)
+        revalidate_selection(options, workspace)
         timestamp = _now()
         try:
             with self._connect() as connection:
@@ -2616,6 +2632,7 @@ class JobStore(
                     allow_command,
                     skill_ids,
                     timestamp,
+                    options,
                 )
         except sqlite3.IntegrityError as error:
             raise ValueError(f"automation already exists: {name}") from error
@@ -2634,6 +2651,7 @@ class JobStore(
         allow_write: bool = False,
         allow_command: bool = False,
         skill_names: list[str] | None = None,
+        options: dict | None = None,
     ) -> AutomationVersion:
         reject_detectable_secrets({"description": description, "prompt_template": prompt_template}, field="definition")
         if isinstance(parameter_schema, dict):
@@ -2645,6 +2663,8 @@ class JobStore(
         schema = validate_parameter_schema(parameter_schema)
         template = validate_prompt_template(prompt_template, schema)
         workspace = validate_workspace(workspace)
+        options = validate_selection_options(options)
+        revalidate_selection(options, workspace)
         timestamp = _now()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -2669,6 +2689,7 @@ class JobStore(
                 allow_command,
                 skill_ids,
                 timestamp,
+                options,
             )
             connection.execute(
                 "UPDATE automations SET current_version = ?, updated_at = ? "
@@ -2717,13 +2738,14 @@ class JobStore(
         allow_command: bool,
         skill_version_ids: list[str],
         timestamp: str,
+        options: dict,
     ) -> None:
         connection.execute(
             """
             INSERT INTO automation_versions (
                 id, automation_id, version, description, prompt_template,
-                parameter_schema, workspace, allow_write, allow_command, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                parameter_schema, workspace, allow_write, allow_command, created_at, options
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 version_id,
@@ -2736,6 +2758,7 @@ class JobStore(
                 int(allow_write),
                 int(allow_command),
                 timestamp,
+                json.dumps(options, sort_keys=True),
             ),
         )
         connection.executemany(
@@ -2869,6 +2892,7 @@ class JobStore(
                 raise WorkflowError(ErrorCode.SKILL_NOT_FOUND, "automation skill reference is invalid")
             if type(version.allow_write) is not bool or type(version.allow_command) is not bool:
                 raise ValueError("invalid permission ceiling")
+            revalidate_selection(version.options, workspace)
             prompt = render_prompt(version.prompt_template, version.parameter_schema, values)
             timestamp = _now()
             connection.execute(
@@ -2877,7 +2901,7 @@ class JobStore(
                    VALUES (?, ?, 'agent', ?, 'automation', ?, ?, ?, ?, ?, ?)""",
                 (job_id, redact_text(prompt), JobStatus.QUEUED, version.id,
                  workspace, int(version.allow_write), int(version.allow_command),
-                 timestamp, json.dumps({"sandbox": "process"})),
+                 timestamp, json.dumps({"sandbox": "process", **version.options}, sort_keys=True)),
             )
             connection.execute(
                 "INSERT INTO automation_run_parameters VALUES (?, ?, ?)",

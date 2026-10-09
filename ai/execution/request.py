@@ -37,15 +37,15 @@ def eligible_mcp_config(
     skill_registry: SkillRegistry | None,
 ) -> MCPConfig:
     """Start only servers with tools allowed for this request."""
+    # Durable Job selections are metadata only until confinement, effect review,
+    # and durable call audit/recovery gates are implemented. Even a forged
+    # context allowlist or a Skill cannot enable the host stdio launcher.
+    if execution_context is not None:
+        return MCPConfig()
     skills = (skill_registry or builtin_registry()).active(active_skills)
     selected = []
     for server in config.servers:
         allowed = set(server.allow_tools)
-        if execution_context is not None:
-            allowed = {
-                name for name in allowed
-                if f"mcp.{server.name}.{name}" in execution_context.allowed_tools
-            }
         for skill in skills:
             if skill.allowed_tools is not None:
                 allowed = {
@@ -171,7 +171,7 @@ def prepare_request(
     )
     permitted_mcp = frozenset(mcp_tools or {})
     if execution_context is not None:
-        permitted_mcp &= execution_context.allowed_tools
+        permitted_mcp = frozenset()
     if native_tools & permitted_mcp:
         raise ValueError("MCP tool name collides with a native tool")
     allowed_tools = native_tools | permitted_mcp

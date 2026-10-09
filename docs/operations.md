@@ -63,6 +63,12 @@ Trace delivery retains the database's existing durability and backup behavior.
 
 ## Runtime API
 
+Jobs accept optional `mcp_tools` selection metadata through the service/API;
+Automation definitions accept the same field. Operator policy defaults to empty
+and is configured separately with `SUTO_JOB_MCP_POLICY`. Selected Jobs remain
+blocked before execution. See [selection, pinning and revocation](job-mcp-selection.md)
+for the policy format, snapshot/migration behavior and remaining execution gates.
+
 The same local server also exposes durable Jobs, Automations, and Schedules.
 These routes call `JobService`, `AutomationService`, and `ScheduleService`;
 they do not execute jobs in the API process. Start

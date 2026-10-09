@@ -21,6 +21,7 @@ from ..models import Job, JobStatus, StepStatus
 from ..errors import ErrorCode, SAFE_MESSAGES, normalize_error_code, error_code_for_exception, safe_error_message
 from ..storage.store import JobStore
 from .options import job_limits
+from mcp_integration.job_policy import revalidate_selection
 from .checkpoints import checkpoint_error, checkpoint_failure
 from tools.advanced import RETRIEVAL_TOOLS, SUBTASK_TOOLS
 
@@ -168,6 +169,26 @@ class JobRunner:
             return True
 
         try:
+            current = self.store.get_job(job.id)
+            if current is None or current.status == JobStatus.CANCELLED:
+                return
+            if current.options != job.options:
+                self.store.block_job(job.id, "job options changed after claim",
+                                     base_prompt_tokens, base_output_tokens,
+                                     error_code=ErrorCode.PERMISSION_DENIED)
+                return
+            try:
+                revalidate_selection(job.options, job.workspace, child=bool(job.parent_id))
+            except ValueError as error:
+                self.store.block_job(job.id, str(error), base_prompt_tokens, base_output_tokens,
+                                     error_code=ErrorCode.PERMISSION_DENIED)
+                return
+            if "mcp_selection" in job.options:
+                self.store.block_job(
+                    job.id, "Job MCP execution is disabled pending confinement and audit gates",
+                    base_prompt_tokens, base_output_tokens, error_code=ErrorCode.PERMISSION_DENIED,
+                )
+                return
             if failure := checkpoint_failure(self.store, job):
                 self.store.block_job(
                     job.id,

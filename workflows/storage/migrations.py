@@ -9,7 +9,25 @@ from uuid import uuid4
 from .locking import ProcessLock
 from ..errors import ErrorCode, SAFE_MESSAGES
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
+
+# Jobs/scheduled automation snapshots already have JSON options. Definitions and
+# prompt schedules have no equivalent storage; do not hide grants in prompt data.
+JOB_MCP_SELECTION = """
+ALTER TABLE automation_versions ADD COLUMN options TEXT NOT NULL DEFAULT '{}'
+ CHECK(json_valid(options) AND json_type(options)='object');
+ALTER TABLE schedules ADD COLUMN options TEXT NOT NULL DEFAULT '{}'
+ CHECK(json_valid(options) AND json_type(options)='object');
+CREATE TRIGGER automation_options_immutable BEFORE UPDATE OF options ON automation_versions
+WHEN NEW.options != OLD.options
+BEGIN SELECT RAISE(ABORT, 'automation options are immutable'); END;
+CREATE TRIGGER schedule_options_immutable BEFORE UPDATE OF options ON schedules
+WHEN NEW.options != OLD.options
+BEGIN SELECT RAISE(ABORT, 'schedule options are immutable'); END;
+CREATE TRIGGER job_mcp_selection_immutable BEFORE UPDATE OF options ON jobs
+WHEN json_extract(NEW.options, '$.mcp_selection') IS NOT json_extract(OLD.options, '$.mcp_selection')
+BEGIN SELECT RAISE(ABORT, 'job MCP selection is immutable'); END;
+"""
 
 _SAFE_ATTEMPT_ERROR = "CASE NEW.error_code " + " ".join(
     "WHEN '{code}' THEN '{message}'".format(code=code.value, message=message.replace("'", "''"))
@@ -572,6 +590,7 @@ def initialize_database(store) -> None:
                 (21, REPEATED_WORKFLOW_PROPOSALS),
                 (22, PROPOSAL_RETENTION),
                 (23, STRUCTURED_JOB_ERRORS),
+                (24, JOB_MCP_SELECTION),
             ):
                 if number > SCHEMA_VERSION:
                     break
@@ -581,6 +600,20 @@ def initialize_database(store) -> None:
                     # A restored database can have the column while its version
                     # marker still reflects an earlier snapshot.
                     migration_script = script
+                    if number == 24:
+                        markers = [
+                            'options' in {row[1] for row in connection.execute(f'PRAGMA table_info({table})')}
+                            for table in ('automation_versions', 'schedules')
+                        ] + [connection.execute(
+                            "SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?", (name,)
+                        ).fetchone() is not None for name in (
+                            'automation_options_immutable', 'schedule_options_immutable',
+                            'job_mcp_selection_immutable',
+                        )]
+                        if all(markers):
+                            migration_script = ''
+                        elif any(markers):
+                            raise RuntimeError('database has a partial Job MCP selection migration; restore a verified backup')
                     if number == 12 and any(
                         row[1] == 'compacted_through_message_id'
                         for row in connection.execute('PRAGMA table_info(session_summaries)')

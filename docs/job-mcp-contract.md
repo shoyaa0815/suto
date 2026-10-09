@@ -6,17 +6,24 @@ The initial worktree was clean. Read alongside [spec.md](../spec.md) and the
 This review preserves Personal Assistant features, existing security controls,
 and the completed Automation design.
 
-**Decision: initial Job MCP support is read-only. Implementation remains blocked.**
+**Decision: initial Job MCP support is read-only. Execution remains blocked.**
 Only explicitly named, independently verified read-only server/tool pairs may
 become eligible under the policy below. Mutation and unknown effects are denied,
 even when a Job has native write/command permission or an approval. The initial
 subset is local stdio, offline and without credentials; children inherit no MCP
 grant. No actual server/tool pair is approved or enabled by this document. The
 current effective set remains empty. This is an implementation and test contract,
-not an implemented configuration format or authorization grant. Adding names to
+not approval of any runtime configuration or an authorization grant. Adding names to
 the Runner allowlist alone would bypass its gates.
 
-## Current production flow and enforcement
+Implementation update: [selection metadata and operator policy](job-mcp-selection.md)
+now exist, with service validation, pinned snapshots and current-policy denial.
+These are authorization preparation only. Job MCP execution is unconditionally
+disabled at Runner and request boundaries; every confinement, live identity,
+effect/audit/recovery and production evidence gate below still applies. The
+production-flow table below records the original review baseline where noted.
+
+## Reviewed baseline production flow and enforcement
 
 | Boundary | Execution and enforcement | MCP consequence |
 | --- | --- | --- |
@@ -48,7 +55,8 @@ configuration**, supported discovered **tool schemas**, and any **Skill
 restrictions**. Each entry must identify exactly `mcp.<server>.<tool>`; no
 wildcards, implicit selection of every configured server, or grants from model
 output, tool annotations, descriptions or Skill text. The current effective set
-is empty because the Job policy/selection do not exist.
+is empty because execution gates remain closed; selection metadata alone cannot
+authorize startup or calls.
 
 The operator owns the reviewed policy and eligible identities. An authorized Job
 submitter may select only a subset through a future validated service boundary;
@@ -176,7 +184,7 @@ behavior; this contract applies to prospective durable Job support only.
 | Blocker | Required closure |
 | --- | --- |
 | Reviewed eligible identities | No actual server/tool set, immutable runtime identity, read-only review or permitted mount manifest is supplied. Name and review each exact pair; default remains empty. |
-| Job grant and validation boundary | Public submission/options do not accept MCP selection. Add validated subset selection and pinned Job/Automation/schedule identities, revocation checks and per-call Job permission/workspace enforcement before exposure. |
+| Job grant and validation boundary | Selection/policy metadata, subset validation, snapshot pins and revocation denial are implemented; see [selection behavior](job-mcp-selection.md). Per-call Job permission/workspace enforcement and live identity validation remain required before execution exposure. |
 | Confined launcher and supported deployment | Current stdio startup is a host process. Implement startup/discovery/calls/descendant confinement using the Job sandbox without additional server-requested mounts. If an eligible server cannot start safely with permitted mounts, it stays blocked. Real Bubblewrap tests were skipped because this host denies namespace creation; actual confinement must be proven on a supported host with no fallback. |
 | Effect metadata and durable audit/recovery | Current adapter retains schema/name but no read-only effect classification; result metadata names only server/tool. Add reviewed metadata validation and the required durable intent/outcome/cleanup records, including unknown outcomes and audit failure handling. |
 | Production-boundary evidence | Positive authorized queued/scheduled execution, read-only eligibility denials, real confinement, cancellation/restart and audit/privacy assertions below are missing. Contextless SDK success is insufficient. |
@@ -185,9 +193,10 @@ These are implementation/deployment/evidence blockers under a chosen read-only
 policy, not permission to relax it. This documentation update enables no Job MCP
 path and changes no native or non-Job MCP behavior.
 
-Existing JSON Job options and version snapshots may accommodate a future bounded
-selection without schema changes, but they currently reject MCP options. No
-schema/migration change is justified or made here. If durable effect tracking
+Existing JSON Job options and scheduled automation snapshots hold bounded
+selection metadata. Inspection found no options storage on Automation versions
+or prompt schedules; additive migration 24 supplies these two fields with legacy
+empty defaults, immutability checks and migration tests. If durable effect tracking
 requires new storage later, explain that requirement and add migration tests
 before enabling effects.
 

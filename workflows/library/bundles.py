@@ -41,6 +41,8 @@ def export_bundle(store: JobStore, name: str) -> dict[str, Any]:
             "allow_write": version.allow_write,
             "allow_command": version.allow_command,
             "skills": [skill_name for skill_name, _ in skill_versions],
+            **({"mcp_tools": version.options["mcp_selection"]["tools"]}
+               if "mcp_selection" in version.options else {}),
         },
         "skills": [
             {"name": skill_name, "instructions": redact_text(item.instructions)}
@@ -91,6 +93,10 @@ def import_bundle(store: JobStore, path: str | Path) -> tuple[str, int]:
     if len(set(skill_names)) != len(skill_names):
         raise ValueError("bundle cannot contain the same skill twice")
     options = automation_options(automation_data)
+    # Imported data cannot carry an operator grant. Selection is validated only
+    # through the Application Service, never through Skill/bundle content.
+    if "mcp_tools" in options:
+        raise ValueError("MCP selections must be submitted through AutomationService")
     options["name"] = validate_name(options["name"], "automation name")
     options["parameter_schema"] = validate_parameter_schema(
         options["parameter_schema"]

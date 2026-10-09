@@ -86,7 +86,7 @@ def add_runtime_routes(
         return job
 
     async def submit_job(request):
-        body = await _body(request, {"prompt", "workspace", "allow_write", "allow_command"})
+        body = await _body(request, {"prompt", "workspace", "allow_write", "allow_command", "mcp_tools"})
         prompt = body.get("prompt")
         workspace = body.get("workspace")
         if (
@@ -100,6 +100,7 @@ def add_runtime_routes(
             prompt, workspace=workspace,
             allow_write=body.get("allow_write", False),
             allow_command=body.get("allow_command", False), source="api",
+            mcp_tools=body.get("mcp_tools", []),
         )
         return web.json_response(_job_json(job), status=202)
 

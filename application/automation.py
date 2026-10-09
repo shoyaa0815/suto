@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from application.runtime_configuration import RuntimeSettings, load_runtime_settings
+from mcp_integration.job_policy import pin_selection, revalidate_selection
 
 from workflows.library.definitions import automation_options, load_definition_file, reject_detectable_secrets, validate_name, validate_workspace
 from workflows.models import ApprovalRequest, Automation, AutomationVersion, Job, JobResult, JobStatus, MissedRunPolicy, Schedule, ScheduleKind, TriggerEvent
@@ -14,6 +15,18 @@ from workflows.storage.store import JobStore
 
 if TYPE_CHECKING:
     from workflows.runtime.worker import AutomationWorker
+
+
+def _selection_options(mcp_tools: object, workspace: str) -> dict:
+    pin = pin_selection(mcp_tools, workspace)
+    return {"mcp_selection": pin} if pin is not None else {}
+
+
+def _definition_options(definition_file: str | Path, default_name: str | None = None) -> dict:
+    options = automation_options(load_definition_file(definition_file), default_name=default_name)
+    selection = options.pop("mcp_tools", [])
+    options["options"] = _selection_options(selection, validate_workspace(options["workspace"]))
+    return options
 
 
 class JobService:
@@ -52,6 +65,7 @@ class JobService:
         self, prompt: str, *, workspace: str | Path | None = None,
         allow_write: bool = False, allow_command: bool = False,
         source: str = "cli",
+        mcp_tools: object = (),
     ) -> Job:
         if not isinstance(prompt, str) or not prompt.strip():
             raise WorkflowError(ErrorCode.INVALID_INPUT, "/run requires a task")
@@ -63,6 +77,7 @@ class JobService:
         job = self.store.create_job(
             prompt.strip(), source=source, workspace=str(path),
             allow_write=allow_write, allow_command=allow_command,
+            options=_selection_options(mcp_tools, str(path)),
         )
         if self.worker is not None:
             self.worker.wake()
@@ -87,6 +102,7 @@ class JobService:
             raise ValueError(f"job cannot be resumed from {job.status.value}")
         if error := checkpoint_failure(self.store, job, resuming=True):
             raise error
+        revalidate_selection(job.options, job.workspace, child=bool(job.parent_id))
         if self.worker is not None:
             resumed = self.worker.resume(job_id)
         else:
@@ -146,7 +162,9 @@ class ScheduleService:
         allow_write: bool = False, allow_command: bool = False,
         missed_run_policy: MissedRunPolicy = MissedRunPolicy.RUN_ONCE,
         retry_limit: int = 0, retry_delay_seconds: int = 60,
+        mcp_tools: object = (),
     ) -> Schedule:
+        workspace = validate_workspace(self.runtime.workspace if workspace is None else workspace)
         schedule = Scheduler(self.store).create(
             kind=kind, expression=expression, prompt=prompt,
             timezone=self.runtime.timezone if timezone is None else timezone,
@@ -154,6 +172,7 @@ class ScheduleService:
             allow_write=allow_write, allow_command=allow_command,
             missed_run_policy=missed_run_policy, retry_limit=retry_limit,
             retry_delay_seconds=retry_delay_seconds,
+            options=_selection_options(mcp_tools, workspace),
         )
         if self.worker is not None:
             self.worker.wake()
@@ -224,7 +243,7 @@ class AutomationService:
 
     def create(self, definition_file: str | Path) -> Automation:
         try:
-            return self.store.create_automation(**automation_options(load_definition_file(definition_file)))
+            return self.store.create_automation(**_definition_options(definition_file))
         except ValueError as error:
             if not hasattr(error, "error_code"):
                 tag_error(error, ErrorCode.INVALID_INPUT)
@@ -233,7 +252,7 @@ class AutomationService:
     def update(self, name: str, definition_file: str | Path) -> AutomationVersion:
         try:
             name = validate_name(name, "automation name")
-            options = automation_options(load_definition_file(definition_file), default_name=name)
+            options = _definition_options(definition_file, default_name=name)
             if validate_name(options.pop("name"), "automation name") != name:
                 raise WorkflowError(ErrorCode.INVALID_INPUT, "definition name does not match automation name")
             return self.store.revise_automation(name, **options)

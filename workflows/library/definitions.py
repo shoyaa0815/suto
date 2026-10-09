@@ -214,6 +214,7 @@ def automation_options(data: dict[str, Any], default_name: str | None = None) ->
         "allow_write",
         "allow_command",
         "skills",
+        "mcp_tools",
     }
     unknown = set(data) - allowed
     if unknown:
@@ -240,6 +241,7 @@ def automation_options(data: dict[str, Any], default_name: str | None = None) ->
         "allow_write": data.get("allow_write", False) is True,
         "allow_command": data.get("allow_command", False) is True,
         "skill_names": skills,
+        **({"mcp_tools": data["mcp_tools"]} if "mcp_tools" in data else {}),
     }
 def validate_parameters(
     schema: dict[str, Any], parameters: dict[str, Any] | None
