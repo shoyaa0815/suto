@@ -1,5 +1,61 @@
 # Runtime dependency audit
 
+## Personal Memory separation update — 2026-10-09
+
+Implemented from clean `main` at `8058463`. The dependency tables and test
+counts below are historical audit evidence; this update supersedes their
+Personal Memory runtime edges and the statement that nothing was removed.
+
+- `JobStore` now composes
+  [`SessionSummaryStore`](../assistant/conversations/summaries.py), with its
+  model in `assistant.conversations.models`. The original summary CRUD SQL,
+  `/runs` ownership/history and `SessionStore.compact` transaction are preserved.
+  `assistant.memory.models.SessionSummary` re-exports the same class.
+- Personal memory CRUD is detached from `JobStore`. Memory tool schemas,
+  handlers, aliases and guidance are absent from mode/tool registration and
+  request assembly. Request preparation no longer calls `MemoryRetriever` or
+  injects personal memory records, even for legacy `AssistantContext` requests.
+  The memory-specific executor failure branch is consequently removed.
+- `ContextManager`, `Retriever`, `RetrievalResult`, `RetrievalError`, attachment
+  retrieval and workspace `KnowledgeStore`/index/search are retained. The
+  retrieval facade lazily supports the legacy `MemoryRetriever` import without
+  loading personal memory on the runtime startup path.
+- `MemoryStore` and explicit legacy service/tool/retriever imports remain for
+  compatibility, outside runtime composition/registration. Its mixed
+  `clear_user_memories` behavior is unchanged and unavailable on `JobStore`.
+  No tables, FTS triggers, schema versions, migrations or user data are removed.
+  Private extensions and persisted external tool references have not been
+  inventoried; this is no claim that dormant legacy modules can now be deleted.
+- Personal tasks/reminders, Job/Automation/Schedule semantics, permissions,
+  approvals, sandbox and MCP policy are outside this change. Jobs still receive
+  no MCP tools.
+
+Regression evidence is in
+[`test_memory_separation.py`](../tests/automation/test_memory_separation.py)
+(cold imports, absent CRUD/registration, all eight memory names rejected by the
+real JobRunner/executor, successful workspace indexing/search and unchanged
+legacy rows), [`test_sessions.py`](../tests/assistant/test_sessions.py)
+(compaction/restart and old-schema memory/FTS preservation),
+[`test_api.py`](../tests/interfaces/test_api.py)
+(`/runs` summary continuation, persisted result/SSE and restart), and
+[`test_ai_core.py`](../tests/ai/test_ai_core.py)
+(a broken legacy memory index cannot block session execution).
+
+Validation used temporary SQLite databases and deterministic model fakes:
+
+| Check | Result |
+| --- | --- |
+| Focused memory/session/AI/mode/workspace/worker/API/run-persistence/CLI tests (`venv/bin/pytest -q -rs --tb=short` with explicit paths) | **150 passed in 13.75s**, no skips |
+| Full suite (`venv/bin/pytest -q -rs`) | **835 passed, 2 skipped in 50.44s** |
+| Diff review and `git diff --check` | Passed; no schema/migration, permission or sandbox edits |
+
+The local API socket probe was denied inside the command sandbox; focused and
+full integration checks ran outside it. Both full-suite skips are the existing
+real Bubblewrap tests at `tests/tools/test_sandbox.py:62` and `:104`: host policy
+prevents namespace creation. Real namespace isolation remains unverified here.
+
+## Historical audit baseline
+
 Job authorization/tool/helper follow-up audited on 2026-10-08 against latest
 commit `2bccb9a865ecfd9731795c9690ebf93f74ef60b1` (`docs: clarify shared runtime
 dependencies and MCP audit gaps`), with a clean initial `git status --short`.

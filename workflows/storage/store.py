@@ -8,8 +8,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from assistant.conversations.store import ConversationStore
+from assistant.conversations.summaries import SessionSummaryStore
 from assistant.identity.store import IdentityStore
-from assistant.memory.store import MemoryStore
 from assistant.tasks.store import TaskStore
 from ..models import (
     ActionType,
@@ -85,7 +85,7 @@ class JobStore(
     SkillProposalStore,
     IdentityStore,
     ConversationStore,
-    MemoryStore,
+    SessionSummaryStore,
     TaskStore,
 ):
     def __init__(self, path: str | Path = "data/suto.db") -> None:

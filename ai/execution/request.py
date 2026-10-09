@@ -7,11 +7,8 @@ from typing import TYPE_CHECKING
 from application.language import ReplyLanguage, choose_reply_language
 from application.modes import get_mode_policy
 from assistant.context import AssistantContext
-from assistant.memory.service import PersistentMemory
-from assistant.memory.tools import MEMORY_TOOL_NAMES
 from context import ContextManager
 from mcp_integration.config import MCPConfig
-from retrieval.memory import MemoryRetriever
 from skills import SkillRegistry, builtin_registry
 from tools import (
     ADVANCED_TOOL_NAMES,
@@ -80,7 +77,7 @@ def _allowed_tools(
     if not attachments:
         allowed_tools = allowed_tools - config.ATTACHMENT_TOOL_NAMES
     if assistant_context is None:
-        allowed_tools = allowed_tools - TASK_TOOL_NAMES - MEMORY_TOOL_NAMES
+        allowed_tools = allowed_tools - TASK_TOOL_NAMES
     elif not assistant_context.allow_personal_tools:
         allowed_tools = allowed_tools - TASK_TOOL_NAMES
     job_scoped_tools = (
@@ -193,11 +190,6 @@ def prepare_request(
         }
         for name in sorted(permitted_mcp & allowed_tools)
     )
-    retrieved = []
-    if assistant_context is not None and prompt.strip():
-        retrieved = MemoryRetriever(
-            PersistentMemory(assistant_context.store, assistant_context.user_id)
-        ).search_sync(prompt, limit=5)
     if assistant_context is not None and not assistant_context.allow_personal_tools:
         tool_guidance += (
             "\n- Personal tasks and reminders in this CLI are managed only by "
@@ -213,7 +205,6 @@ def prepare_request(
         ),
         prompt,
         conversation_history,
-        retrieved,
         active_skills=skills,
         available_tools=allowed_tools,
         legacy_skill_instructions=skill_instructions,

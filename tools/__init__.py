@@ -17,11 +17,6 @@ from assistant.tasks.tools import build_task_tools
 from assistant.tasks.tools import PROMPT as TASK_PROMPT
 from assistant.tasks.tools import SCHEMAS as TASK_SCHEMAS
 from assistant.tasks.tools import TOOL_NAMES as TASK_TOOL_NAMES
-from assistant.memory.tools import (
-    MEMORY_PROMPT,
-    MEMORY_SCHEMAS,
-    MEMORY_TOOL_NAMES,
-)
 from .advanced import SCHEMAS as ADVANCED_SCHEMAS, TOOL_NAMES as ADVANCED_TOOL_NAMES
 from .advanced import PROMPT as ADVANCED_PROMPT, build_advanced_tools
 from .datetime_tool import PROMPT as DATETIME_PROMPT
@@ -103,7 +98,6 @@ def _assistant_unavailable(**kwargs) -> str:
 ALL_TOOLS = {
     **{name: _workspace_unavailable for name in ADVANCED_TOOL_NAMES},
     **{name: _assistant_unavailable for name in TASK_TOOL_NAMES},
-    **{name: _assistant_unavailable for name in MEMORY_TOOL_NAMES},
     **TERMINAL_TOOLS,
     **FILESYSTEM_TOOLS,
     **GIT_TOOLS,
@@ -134,7 +128,6 @@ ALL_TOOL_SCHEMAS = {
     for schema in [
         *ADVANCED_SCHEMAS,
         *TASK_SCHEMAS,
-        *MEMORY_SCHEMAS,
         *TERMINAL_SCHEMAS,
         *FILESYSTEM_SCHEMAS,
         *GIT_SCHEMAS,
@@ -163,7 +156,6 @@ ALL_TOOL_SCHEMAS = {
 ALL_TOOL_GUIDANCE = {
     **{name: ADVANCED_PROMPT for name in ADVANCED_TOOL_NAMES},
     **{name: TASK_PROMPT for name in TASK_TOOL_NAMES},
-    **{name: MEMORY_PROMPT for name in MEMORY_TOOL_NAMES},
     **{name: TERMINAL_PROMPT for name in TERMINAL_TOOLS},
     **{name: FILESYSTEM_PROMPT for name in FILESYSTEM_TOOLS},
     **{name: GIT_PROMPT for name in GIT_TOOLS},

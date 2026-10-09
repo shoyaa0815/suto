@@ -1,15 +1,9 @@
-"""Data models for 3-tier memory system."""
+"""Legacy personal-memory model and shared summary import compatibility."""
 
 from dataclasses import dataclass
 
-
-@dataclass(frozen=True)
-class SessionSummary:
-    conversation_id: str
-    user_id: str
-    summary: str
-    updated_at: str
-    compacted_through_message_id: int = 0
+# Preserve the legacy model import and class identity.
+from assistant.conversations.models import SessionSummary
 
 
 @dataclass(frozen=True)

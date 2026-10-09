@@ -85,7 +85,10 @@ and writes atomically; restart Suto processes afterward. Keep secrets in `.env`.
 
 Chat fallback, personal task/reminder commands, chat Skill activation, voice
 entry and the saved-chat dashboard are retired. Existing personal data and
-legacy storage remain intact. Versioned Automation Skills and `/skill-proposal`
+legacy storage remain intact. Personal Memory CRUD tools and automatic memory
+retrieval into prompts are also retired, including in `/runs`. Session summaries
+and opt-in Job workspace index/search remain available.
+Versioned Automation Skills and `/skill-proposal`
 review remain available; see [Skills](docs/skills.md).
 
 Review saved draft automation Skills with `/skill-proposal list`,

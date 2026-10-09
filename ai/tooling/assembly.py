@@ -1,7 +1,6 @@
 """Assemble request-scoped tool handlers without widening mode policy."""
 
 from assistant.context import AssistantContext
-from assistant.memory.tools import build_memory_tools
 from tools import (
     build_advanced_tools,
     build_attachment_tools,
@@ -52,7 +51,6 @@ def build_runtime_tools(
     handlers = build_attachment_tools(attachments, complete_document_part)
     if assistant_context is not None:
         handlers.update(build_task_tools(assistant_context))
-        handlers.update(build_memory_tools(assistant_context))
         user = assistant_context.store.get_user(assistant_context.user_id)
         if user is not None:
             # "today" must be evaluated in the same timezone used when the

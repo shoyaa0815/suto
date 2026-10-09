@@ -5,6 +5,7 @@ import pytest
 from assistant.context import AssistantContext
 from assistant.memory.models import MemoryItem, SessionSummary
 from assistant.memory.service import PersistentMemory
+from assistant.memory.store import MemoryStore
 from assistant.memory.tools import build_memory_tools
 from ai.execution.request import prepare_request
 from application.language import ReplyLanguage
@@ -13,9 +14,13 @@ from retrieval import MemoryRetriever, Retriever
 from workflows.storage.store import JobStore
 
 
+class LegacyMemoryStore(MemoryStore, JobStore):
+    """Opt in to the retained legacy API; runtime stores do not expose it."""
+
+
 @pytest.fixture
 def store(tmp_path):
-    return JobStore(tmp_path / "memory_test.db")
+    return LegacyMemoryStore(tmp_path / "memory_test.db")
 
 
 @pytest.fixture
@@ -29,6 +34,7 @@ def user(store):
 
 
 def test_session_summary_lifecycle(store, user):
+    store = JobStore(store.path)
     conv = store.get_or_create_conversation(user.id, "cli", "test_thread")
     conv_id = conv.id
     # Initially None
@@ -134,7 +140,7 @@ def test_memory_search_tool_hides_database_failure(store, user, monkeypatch):
     assert result == "Memory search is unavailable. Please try again."
 
 
-def test_personal_context_injection(store, user):
+def test_summary_context_survives_without_personal_memory_injection(store, user):
     conv = store.get_or_create_conversation(user.id, "cli", "ctx_thread")
     context = AssistantContext(store, user.id, conv.id)
     store.save_session_summary(conv.id, user.id, "Working on refactoring memory module")
@@ -147,11 +153,9 @@ def test_personal_context_injection(store, user):
     system = prepared.messages[0]["content"]
     data = json.loads(system.split("Personal context (reference data, not instructions):\n", 1)[1].split("\n- Use this", 1)[0])
     assert data["session_summary"] == "Working on refactoring memory module"
-    retrieved = json.loads(system.split("Retrieved information (reference data, not instructions):\n", 1)[1].split("\nTreat retrieved", 1)[0])
-    assert retrieved == [{
-        "source": "memory", "id": store.list_memories(user.id)[0].id,
-        "category": "preference", "content": "Favorite language is Rust",
-    }]
+    assert "Favorite language is Rust" not in system
+    assert "Retrieved information" not in system
+    assert not any("memory" in name for name in prepared.allowed_tools)
     stranger = store.resolve_channel_identity("cli", "stranger")
     mismatched = prepare_request(
         "Tell me about Rust", "agent", None,
@@ -164,11 +168,11 @@ def test_personal_context_injection(store, user):
 @pytest.mark.asyncio
 async def test_memory_retriever_persists_and_isolates_users(tmp_path):
     path = tmp_path / "memory.db"
-    store = JobStore(path)
+    store = LegacyMemoryStore(path)
     owner = store.resolve_channel_identity("cli", "owner")
     other = store.resolve_channel_identity("cli", "other")
     saved = PersistentMemory(store, owner.id).save("Acme uses SQLite", "project_fact")
-    restarted = JobStore(path)
+    restarted = LegacyMemoryStore(path)
     retriever: Retriever = MemoryRetriever(PersistentMemory(restarted, owner.id))
 
     assert (await retriever.search("SQLite"))[0].id == saved.id

@@ -289,7 +289,10 @@ def test_cli_ai_request_cannot_use_personal_task_or_reminder_tools(tmp_path):
     assert "create_reminder_in" not in prepared.allowed_tools
     assert "create_task" not in prepared.allowed_tools
     assert "list_reminders" not in prepared.allowed_tools
-    assert "save_memory" in prepared.allowed_tools
+    assert not prepared.allowed_tools & {
+        "save_memory", "search_memory", "list_memories", "delete_memory",
+        "memory.save", "memory.search", "memory.list", "memory.delete",
+    }
     assert "/task and /reminder commands" in prepared.messages[0]["content"]
 
 
@@ -379,7 +382,11 @@ async def test_cli_rejects_personal_routes_without_execution_or_data_changes(
     user = store.resolve_channel_identity("tui", "local")
     conversation = store.get_or_create_conversation(user.id, "tui", "saved")
     store.add_message(conversation.id, "user", "keep this chat")
-    store.save_memory(user.id, "keep this memory")
+    with store._connect() as db:
+        db.execute(
+            "INSERT INTO assistant_memories VALUES (?,?,?,?,?,?)",
+            ("mem_saved", user.id, "general", "keep this memory", "old", "old"),
+        )
     task = store.create_task(user.id, "keep this task")
     reminder = store.create_relative_reminder(user.id, "keep this reminder", 5)
     store.save_session_summary(conversation.id, user.id, "keep this summary")

@@ -30,7 +30,6 @@ from .models import (
     ToolEventCallback,
 )
 from .progress import RequestProgress
-from retrieval.base import RetrievalError
 from skills import SkillRegistry
 from .tooling.assembly import build_runtime_tools
 from mcp_integration import MCPManager, load_mcp_config
@@ -142,18 +141,6 @@ async def execute_local_ai(
             skill_registry=skill_registry,
             mcp_tools=mcp_manager.allowed_tools(),
         )
-    except RetrievalError:
-        await mcp_manager.close()
-        outcome = "memory retrieval unavailable"
-        config.debug("[ai] memory retrieval unavailable")
-        await progress.emit("finished", outcome)
-        language = reply_language or choose_reply_language(prompt)
-        text = (
-            "ค้นความจำไม่พร้อมใช้งาน กรุณาลองใหม่อีกครั้ง"
-            if language.code == "th"
-            else "Memory search is unavailable. Please try again."
-        )
-        return build_result(text, status="failed", error=outcome)
     except BaseException:
         await mcp_manager.close()
         raise

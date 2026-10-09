@@ -170,6 +170,10 @@ def test_existing_summary_migrates_with_unprocessed_cursor(tmp_path):
     session = store.get_or_create_conversation(user.id, "tui", "local")
     store.save_session_summary(session.id, user.id, "previous note")
     with sqlite3.connect(path) as db:
+        db.execute(
+            "INSERT INTO assistant_memories VALUES (?,?,?,?,?,?)",
+            ("mem_old", user.id, "preference", "legacy personal fact", "old", "old"),
+        )
         db.execute("ALTER TABLE session_summaries DROP COLUMN compacted_through_message_id")
         db.execute("PRAGMA user_version=11")
 
@@ -177,6 +181,13 @@ def test_existing_summary_migrates_with_unprocessed_cursor(tmp_path):
     summary = migrated.get_session_summary(session.id)
     assert summary.summary == "previous note"
     assert summary.compacted_through_message_id == 0
+    with migrated._connect() as db:
+        assert tuple(db.execute("SELECT * FROM assistant_memories").fetchone()) == (
+            "mem_old", user.id, "preference", "legacy personal fact", "old", "old",
+        )
+        assert db.execute(
+            "SELECT memory_id FROM assistant_memories_fts WHERE assistant_memories_fts MATCH 'legacy'"
+        ).fetchone()[0] == "mem_old"
 
 
 def test_version_12_messages_migrate_without_losing_history(tmp_path, monkeypatch):

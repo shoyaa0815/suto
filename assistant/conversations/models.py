@@ -19,3 +19,12 @@ class Message:
     content: str
     created_at: str
     metadata: str = "{}"
+
+
+@dataclass(frozen=True)
+class SessionSummary:
+    conversation_id: str
+    user_id: str
+    summary: str
+    updated_at: str
+    compacted_through_message_id: int = 0

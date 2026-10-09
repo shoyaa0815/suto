@@ -11,6 +11,7 @@ from ai.execution import loop
 from interfaces.api.server import HOST, STATE, create_app
 from llm.types import ModelResponse, ToolCall
 from mcp_integration.config import MCPConfig
+from application.modes import ASSISTANT_MEMORY_TOOLS
 from workflows.storage.store import JobStore
 
 
@@ -51,6 +52,69 @@ async def finished(app, run_id):
     run = app[STATE]["runs"][run_id]
     await run.task
     return run
+
+
+async def test_runs_resume_compacted_summary_and_trace_without_personal_memory(
+    tmp_path, monkeypatch,
+):
+    model = Model(ModelResponse("Continued from summary"), ModelResponse("Continued after restart"))
+    app, store = setup(tmp_path, monkeypatch, lambda: model)
+    user = app[STATE]["user"]
+    session = store.get_or_create_conversation(user.id, "api", "legacy")
+    store.save_session_summary(session.id, user.id, "Existing session summary")
+    messages = [
+        store.add_message(session.id, "user", f"historic message {number}")
+        for number in range(25)
+    ]
+    with store._connect() as db:
+        db.execute(
+            "INSERT INTO assistant_memories VALUES (?,?,?,?,?,?)",
+            ("mem_legacy", user.id, "preference", "SQLite PRIVATE_MEMORY_FACT", "old", "old"),
+        )
+
+    async with TestClient(TestServer(app)) as client:
+        response, first = await start(client, "Please answer in English about SQLite", session_id=session.id)
+        assert response.status == 202
+        await finished(app, first["run_id"])
+        assert store.get_agent_run(first["run_id"])["status"] == "completed"
+
+    summary = store.get_session_summary(session.id)
+    assert "Existing session summary" in summary.summary
+    assert "historic message 0" in summary.summary
+    assert summary.compacted_through_message_id == messages[4].id
+    first_prompt = model.requests[0].messages[0]["content"]
+    assert "Existing session summary" in first_prompt
+    assert "historic message 0" in first_prompt
+    assert "PRIVATE_MEMORY_FACT" not in first_prompt
+    assert not ASSISTANT_MEMORY_TOOLS & {
+        tool["function"]["name"] for tool in model.requests[0].available_tools
+    }
+
+    reopened = JobStore(store.path)
+    restarted = create_app(store=reopened)
+    async with TestClient(TestServer(restarted)) as client:
+        response = await client.get(f"/runs/{first['run_id']}")
+        assert response.status == 200
+        result = await response.json()
+        assert result["status"] == "completed"
+        assert result["result"]["final_text"] == "Continued from summary"
+        events = await (await client.get(f"/runs/{first['run_id']}/events")).text()
+        assert "agent.completed" in events
+        response, second = await start(client, session_id=session.id)
+        assert response.status == 202
+        await finished(restarted, second["run_id"])
+        assert reopened.get_agent_run(second["run_id"])["status"] == "completed"
+    assert "Existing session summary" in model.requests[1].messages[0]["content"]
+    assert "PRIVATE_MEMORY_FACT" not in str(model.requests[1].messages)
+    assert len(reopened.list_messages(session.id, 100)) == 29
+    assert reopened.get_session_summary(session.id).compacted_through_message_id > summary.compacted_through_message_id
+    with reopened._connect() as db:
+        assert tuple(db.execute("SELECT * FROM assistant_memories").fetchone()) == (
+            "mem_legacy", user.id, "preference", "SQLite PRIVATE_MEMORY_FACT", "old", "old",
+        )
+        assert db.execute(
+            "SELECT memory_id FROM assistant_memories_fts WHERE assistant_memories_fts MATCH 'SQLite'"
+        ).fetchone()[0] == "mem_legacy"
 
 
 async def test_health_direct_response_session_continuation_and_trace(tmp_path, monkeypatch):

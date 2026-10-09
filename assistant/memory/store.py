@@ -1,4 +1,4 @@
-"""SQLite and FTS5 storage mixin for 3-tier memory."""
+"""Legacy personal-memory mixin, retained for explicit compatibility callers."""
 
 import re
 from datetime import UTC, datetime
@@ -6,65 +6,21 @@ from uuid import uuid4
 
 from workflows.storage.redaction import redact_text
 
-from .models import MemoryItem, SessionSummary
+from assistant.conversations.summaries import SessionSummaryStore
+
+from .models import MemoryItem
 
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-class MemoryStore:
-    """Store mixin providing session summaries and long-term memory via SQLite & FTS5."""
-
-    @staticmethod
-    def _to_session_summary(row) -> SessionSummary | None:
-        return SessionSummary(**dict(row)) if row is not None else None
+class MemoryStore(SessionSummaryStore):
+    """Legacy CRUD and summary API; not composed into the runtime JobStore."""
 
     @staticmethod
     def _to_memory_item(row) -> MemoryItem | None:
         return MemoryItem(**dict(row)) if row is not None else None
-
-    # Tier 2: Session Memory (Working Summary)
-    def save_session_summary(
-        self,
-        conversation_id: str,
-        user_id: str,
-        summary: str,
-    ) -> SessionSummary:
-        summary = redact_text(summary).strip()
-        now = _now()
-        with self._connect() as db:
-            db.execute(
-                """
-                INSERT INTO session_summaries(conversation_id, user_id, summary, updated_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(conversation_id) DO UPDATE SET
-                    summary = excluded.summary,
-                    updated_at = excluded.updated_at
-                """,
-                (conversation_id, user_id, summary, now),
-            )
-            row = db.execute(
-                "SELECT * FROM session_summaries WHERE conversation_id = ?",
-                (conversation_id,),
-            ).fetchone()
-        return self._to_session_summary(row)
-
-    def get_session_summary(self, conversation_id: str) -> SessionSummary | None:
-        with self._connect() as db:
-            row = db.execute(
-                "SELECT * FROM session_summaries WHERE conversation_id = ?",
-                (conversation_id,),
-            ).fetchone()
-        return self._to_session_summary(row)
-
-    def delete_session_summary(self, conversation_id: str) -> bool:
-        with self._connect() as db:
-            cursor = db.execute(
-                "DELETE FROM session_summaries WHERE conversation_id = ?",
-                (conversation_id,),
-            )
-        return cursor.rowcount > 0
 
     # Tier 3: Long-term Memory (FTS5 Knowledge Store)
     def save_memory(

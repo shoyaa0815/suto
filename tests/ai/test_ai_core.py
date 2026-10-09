@@ -40,14 +40,13 @@ async def test_agent_lifecycle_uses_configured_provider_model(monkeypatch):
     assert seen[0][2] > 0
 
 
-async def test_memory_index_failure_returns_safe_result_without_model_call(
+async def test_personal_memory_failure_cannot_block_legacy_session_execution(
     tmp_path, monkeypatch
 ):
     store = JobStore(tmp_path / "suto.db")
     user = store.resolve_channel_identity("cli", "local")
     conversation = store.get_or_create_conversation(user.id, "cli", "local")
     context = AssistantContext(store, user.id, conversation.id)
-    original_search = store.search_memories
     calls = []
     updates = []
 
@@ -58,31 +57,22 @@ async def test_memory_index_failure_returns_safe_result_without_model_call(
         calls.append("model")
         return {"message": {"content": "model answer"}}
 
-    monkeypatch.setattr(store, "search_memories", broken_search)
+    # Even a legacy extension's broken memory index must never be consulted.
+    monkeypatch.setattr(store, "search_memories", broken_search, raising=False)
     monkeypatch.setattr(ai.client.aiohttp, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(ai.client, "chat", fake_chat)
+    monkeypatch.setattr(ai.response, "detect_language_code", lambda _text: "en")
     patch_model_chat(monkeypatch)
 
-    failed = await ai.execute_local_ai(
+    result = await ai.execute_local_ai(
         "remember SQLite", assistant_context=context,
         reply_language=ReplyLanguage("en", "English", "test"),
         progress_callback=updates.append,
     )
-    assert failed.status == "failed"
-    assert failed.error == "memory retrieval unavailable"
-    assert failed.text == "Memory search is unavailable. Please try again."
-    assert "private database detail" not in failed.text + failed.error
+    assert result.status == "completed"
+    assert result.error is None
+    assert result.text == "model answer"
     assert updates[-1]["activity"] == "finished"
-    assert calls == []
-
-    monkeypatch.setattr(store, "search_memories", original_search)
-    monkeypatch.setattr(ai.response, "detect_language_code", lambda _text: "en")
-    recovered = await ai.execute_local_ai(
-        "continue", assistant_context=context,
-        reply_language=ReplyLanguage("en", "English", "test"),
-    )
-    assert recovered.status == "completed"
-    assert recovered.text == "model answer"
     assert calls == ["model"]
 
 

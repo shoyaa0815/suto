@@ -33,6 +33,7 @@ PERSONAL_TASK_TOOLS = frozenset(
     }
 )
 
+# Legacy names for import compatibility only; no mode exposes these tools.
 ASSISTANT_MEMORY_TOOLS = frozenset(
     {
         "save_memory",
@@ -68,7 +69,6 @@ MODE_POLICIES = {
         allowed_tools=(
             ASSISTANT_TOOLS
             | PERSONAL_TASK_TOOLS
-            | ASSISTANT_MEMORY_TOOLS
             | frozenset({"research"})
             | frozenset({"agent.delegate"})
         ),

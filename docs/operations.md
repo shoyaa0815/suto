@@ -323,6 +323,26 @@ chat Skill commands are unavailable. Existing identities, conversations,
 messages, summaries, memories, tasks, reminders and session Skills remain stored.
 The compatibility `/runs` API retains its session ownership and history behavior.
 
+Personal Memory tools (`memory.save/search/list/delete` and their aliases) are
+no longer registered or assembled, and the executor no longer searches personal
+memories for prompt context. `JobStore` exposes shared session-summary methods
+through `SessionSummaryStore`, without personal memory CRUD. `SessionStore.compact`
+still commits the summary and compaction cursor atomically without deleting raw
+messages; `/runs` continues using those summaries after restart. No schema or
+data migration accompanies this separation: existing personal memory rows, FTS
+index/triggers, session summaries and run records remain intact.
+
+The explicit `assistant.memory` models/store/service/tools and `MemoryRetriever`
+imports remain legacy compatibility APIs, outside runtime registration.
+`MemoryStore` still offers its original CRUD (including the legacy
+`clear_user_memories` behavior that also clears summaries) only to callers that
+explicitly compose it; `JobStore` no longer inherits it. `retrieval` loads
+`MemoryRetriever` only on explicit access, so shared retrieval contracts and
+`ContextManager` do not import personal memory. Installed/private extensions
+have not been inventoried; callers of `JobStore` personal CRUD must adapt.
+Job `options.retrieval` still selects the existing workspace-scoped index/search
+tools with the same path, symlink, redaction, quota and staleness checks.
+
 The unversioned Phase 0–7 database is schema 0. Startup migrates to version 1
 (production controls) and version 2 (advanced features). Each version runs in a
 transaction, is recorded in `schema_migrations`, and updates `PRAGMA user_version`.
