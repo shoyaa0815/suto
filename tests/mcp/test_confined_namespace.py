@@ -6,6 +6,7 @@ import json
 import os
 import socket
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -16,12 +17,28 @@ from tests.mcp.test_confined_launcher import make_launcher
 
 
 @pytest.fixture
-def namespace(tmp_path):
+def namespace(tmp_path, monkeypatch):
     capability = Sandbox(SandboxPolicy("bwrap", tmp_path)).capability()
     if capability.status != "available":
         if os.environ.get("SUTO_REQUIRE_MCP_NAMESPACE") == "1":
             pytest.fail("required real namespace proof unavailable: " + capability.reason)
         pytest.skip("real namespace proof unavailable: " + capability.reason)
+    # Capture only the controlled test fixture's launcher diagnostics. Production
+    # servers still discard stderr; no real server/private content is logged.
+    spawn = asyncio.create_subprocess_exec
+    with tempfile.TemporaryFile() as diagnostics:
+        async def capture_spawn(*args, **kwargs):
+            if args and args[0] == "/usr/bin/prlimit":
+                kwargs["stderr"] = diagnostics
+            return await spawn(*args, **kwargs)
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", capture_spawn)
+        try:
+            yield
+        finally:
+            diagnostics.seek(0)
+            output = diagnostics.read(8192).decode("utf-8", errors="replace")
+            if output:
+                print("Controlled MCP fixture launcher stderr (first 8 KiB):\n" + output)
 
 
 def runtime_files():
