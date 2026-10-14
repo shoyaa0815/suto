@@ -122,6 +122,8 @@ async def test_cancel_during_spawn_still_awaits_and_cleans_process(tmp_path, mon
             self.returncode = -9
             waited.set()
     async def spawn(*args, **kwargs):
+        assert "--unshare-user" in args and "--disable-userns" in args
+        assert args.index("--unshare-user") < args.index("--disable-userns")
         entered.set()
         await release.wait()
         return Process()

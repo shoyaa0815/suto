@@ -90,3 +90,19 @@ namespace-unavailable skips, not passing isolation evidence. The required
 **6 setup errors**, each reporting that host policy prevents namespace creation.
 No confinement success is claimed. Supported CI execution is still pending;
 the workflow has been prepared but not run or pushed from this checkout.
+
+### CI probe follow-up
+
+The first CI diagnostic failed with `execvp /usr/bin/true: No such file or directory`.
+The old capability probe mounted only `/usr`, omitting the dynamic loader paths;
+its generic host-policy message was not evidence that namespaces were forbidden.
+The probe now uses the existing native read-only runtime roots, and a failed
+probe reports `namespace probe failed` without inferring its cause. Temporary
+workflow diagnostics have been removed; required namespace assertions remain.
+
+Real launcher startup also requires explicit `--unshare-user` before
+`--disable-userns`; `--unshare-all` alone did not satisfy Bubblewrap 0.11.1.
+Local control commands can now create namespaces, but adding the unchanged
+64-process per-UID limit fails with `Resource temporarily unavailable` on this
+host. This is not passing launcher evidence. Do not raise limits or suppress
+assertions to obtain a passing result; supported CI verification remains pending.

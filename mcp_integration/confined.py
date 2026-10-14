@@ -166,7 +166,7 @@ class ConfinedMCPLauncher:
             # prlimit limits the trusted launcher before any untrusted code runs.
             argv = ["/usr/bin/prlimit", "--as=1073741824", "--cpu=30",
                     "--nproc=64", "--nofile=1024", "--fsize=16777216", "--",
-                    "/usr/bin/bwrap", "--unshare-all", "--disable-userns",
+                    "/usr/bin/bwrap", "--unshare-all", "--unshare-user", "--disable-userns",
                     "--new-session", "--die-with-parent", "--cap-drop", "ALL", "--clearenv"]
             # Create private filesystem topology before binding any files. A
             # workspace under /tmp must not be hidden by a later scratch mount,

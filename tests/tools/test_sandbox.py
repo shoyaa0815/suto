@@ -35,6 +35,28 @@ def test_capability_reports_policy_missing_and_host_denial(tmp_path, monkeypatch
     assert Sandbox(SandboxPolicy('bwrap', Path('/'))).capability().status == 'misconfigured'
 
 
+@pytest.mark.parametrize('runtime_roots', [('/usr', '/bin', '/lib', '/lib64'),
+                                          ('/usr', '/bin', '/lib')])
+def test_namespace_probe_includes_dynamic_loader_runtime(tmp_path, monkeypatch, runtime_roots):
+    monkeypatch.setattr(sys, 'platform', 'linux')
+    monkeypatch.setattr(shutil, 'which', lambda name, **kwargs: f'/usr/bin/{name}')
+    monkeypatch.setattr(Path, 'exists', lambda path: str(path) in runtime_roots)
+    calls = []
+
+    def probe(argv, **kwargs):
+        calls.append(argv)
+        assert kwargs == {'capture_output': True, 'timeout': 5, 'check': False}
+        assert argv[1:4] == ['--unshare-all', '--new-session', '--die-with-parent']
+        assert argv[-2:] == ['--', '/usr/bin/true']
+        mounts = argv[4:-2]
+        assert mounts == [value for root in runtime_roots for value in ('--ro-bind', root, root)]
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr('sandbox.runtime.subprocess.run', probe)
+    assert Sandbox(SandboxPolicy('bwrap', tmp_path)).capability().status == 'available'
+    assert len(calls) == 1
+
+
 def test_sandbox_mode_is_persisted_and_invalid_mode_fails_before_execution(tmp_path):
     from workflows.storage.store import JobStore
 

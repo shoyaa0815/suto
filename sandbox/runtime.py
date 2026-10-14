@@ -39,16 +39,22 @@ class Sandbox:
             Path("/usr"), Path("/etc"), Path("/proc"), Path("/dev")
         ):
             return SandboxCapability("misconfigured", "sandbox workspace is a system root")
+        # Include the dynamic loader and libraries needed by /usr/bin/true.
+        # Use the same read-only runtime roots as native command execution.
+        argv = [bwrap, "--unshare-all", "--new-session", "--die-with-parent"]
+        for root in ("/usr", "/bin", "/lib", "/lib64"):
+            if Path(root).exists():
+                argv += ["--ro-bind", root, root]
+        argv += ["--", "/usr/bin/true"]
         try:
             probe = subprocess.run(
-                [bwrap, "--unshare-all", "--new-session", "--die-with-parent",
-                 "--ro-bind", "/usr", "/usr", "--", "/usr/bin/true"],
+                argv,
                 capture_output=True, timeout=5, check=False,
             )
         except (OSError, subprocess.TimeoutExpired):
             return SandboxCapability("unavailable", "namespace probe could not run")
         if probe.returncode != 0:
-            return SandboxCapability("unavailable", "host policy prevents namespace creation")
+            return SandboxCapability("unavailable", "namespace probe failed")
         return SandboxCapability("available", "Bubblewrap isolation is available")
 
     def command(self, command: list[str], temp_dir: str, timeout: int) -> list[str]:

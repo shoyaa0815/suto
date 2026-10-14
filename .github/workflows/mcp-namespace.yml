@@ -30,9 +30,6 @@ jobs:
           meson setup /tmp/bubblewrap-build /tmp/bubblewrap-0.11.1 --prefix=/usr
           meson compile -C /tmp/bubblewrap-build
           sudo meson install -C /tmp/bubblewrap-build
-      - name: Diagnose namespace probe
-        run: |
-          /usr/bin/bwrap --unshare-all --new-session --die-with-parent --ro-bind /usr /usr -- /usr/bin/true
       - name: Require actual namespaces and all assertions
         env:
           SUTO_REQUIRE_MCP_NAMESPACE: '1'
