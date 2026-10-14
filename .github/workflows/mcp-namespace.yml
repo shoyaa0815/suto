@@ -1,0 +1,36 @@
+name: MCP namespace proof
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-namespace:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install trusted host test prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build pkg-config libcap-dev libglib2.0-dev bash-completion python3 python3-venv
+          python -m pip install -r requirements.txt pytest pytest-asyncio
+      - name: Install checksum-pinned Bubblewrap on namespace-capable host
+        run: |
+          curl --fail --location --output /tmp/bubblewrap.tar.xz https://github.com/containers/bubblewrap/releases/download/v0.11.1/bubblewrap-0.11.1.tar.xz
+          echo 'c1b7455a1283b1295879a46d5f001dfd088c0bb0f238abb5e128b3583a246f71 /tmp/bubblewrap.tar.xz' | sha256sum --check
+          tar -xf /tmp/bubblewrap.tar.xz -C /tmp
+          meson setup /tmp/bubblewrap-build /tmp/bubblewrap-0.11.1 --prefix=/usr
+          meson compile -C /tmp/bubblewrap-build
+          sudo meson install -C /tmp/bubblewrap-build
+      - name: Require actual namespaces and all assertions
+        env:
+          SUTO_REQUIRE_MCP_NAMESPACE: '1'
+        run: python -m pytest -q -rs tests/mcp/test_confined_launcher.py tests/mcp/test_confined_namespace.py

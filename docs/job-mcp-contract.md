@@ -23,6 +23,12 @@ disabled at Runner and request boundaries; every confinement, live identity,
 effect/audit/recovery and production evidence gate below still applies. The
 production-flow table below records the original review baseline where noted.
 
+An internal [confined launcher primitive and required namespace CI proof](job-mcp-launcher.md)
+now exist, disconnected from Job execution. This is partial implementation,
+not a closed confinement/deployment gate: skipped namespace tests and an unrun
+CI workflow supply no positive proof. Live identity, effects, durable audit and
+production Job execution gates remain required.
+
 ## Reviewed baseline production flow and enforcement
 
 | Boundary | Execution and enforcement | MCP consequence |
